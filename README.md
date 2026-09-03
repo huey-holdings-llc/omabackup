@@ -15,11 +15,17 @@ arrays; no shell strings are ever built in QML, and no backup logic lives here.
 
 - **Vitals**: last snapshot age, next timer run (with a pause/resume toggle),
   push state, pending repo edits.
-- **Drift triage in place**: each `NEW` row has Allow (append to
-  `allowlist.txt`) and Ignore (dated entry in `drift-ignore.txt`, optional
-  one-line reason). `GONE` rows offer Remove and Mark-optional. Every write is
-  validated against the current drift report, taken under the snapshot flock,
-  and rolled back if `lint-lists.sh` rejects it.
+- **Drift triage in place, built to bang through**: `NEW` files are grouped
+  by folder (biggest first), so one click can Allow or Ignore a whole
+  directory (`path/**`, folder prefixes validated against the drift report
+  and refused at depth 1); the caret expands a folder to pick single files.
+  Handled rows vanish immediately with a running "handled this session"
+  count; Snapshot applies the decisions and re-scans. Notes are optional: a
+  pencil toggle (or `n`) turns on ask-for-a-reason mode, otherwise Ignore
+  records a dated default instantly. `GONE` rows offer Remove and
+  Mark-optional. Every write is validated against the current drift report,
+  taken under the snapshot flock, and rolled back if `lint-lists.sh`
+  rejects it.
 - **Dynamic push button**: plain push when commits are waiting; when the
   repo's own scripts/lists are dirty it shows exactly which files would be
   committed and asks first. It stages exactly those paths, never `-A`.
@@ -34,6 +40,7 @@ arrays; no shell strings are ever built in QML, and no backup logic lives here.
 | `s` | Snapshot now |
 | `p` | Push / open the commit confirmation |
 | `t` | Full triage in a terminal |
+| `n` | Toggle ask-for-notes on Ignore |
 | `r` | Refresh |
 | `Esc` | Close |
 

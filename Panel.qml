@@ -13,6 +13,10 @@ import "ui"
 // with the engine (self-test groups 50/51). This file renders that JSON and
 // shells back into helper subcommands; it never decides anything about
 // backups itself, and it never builds shell strings (argv only).
+//
+// Triage is meant to feel like clearing a todo list: drifting files are
+// grouped by folder so one click can take a whole directory, handled rows
+// disappear immediately, and notes are optional (a toggle, off by default).
 Panel {
   id: root
   moduleName: "io.github.coreytyhurst.backup-status"
@@ -35,12 +39,18 @@ Panel {
   property string actionError: ""
   property bool busy: false
   property bool confirmOpen: false
-  // path -> "allowlisted" | "ignored" | "resolved": decisions taken in this
-  // session, so handled rows dim instead of re-offering their buttons (the
-  // drift report itself only changes on the next snapshot).
-  property var handled: ({})
-  // How many drift rows the popup lists before folding into "and N more".
-  readonly property int driftShown: 10
+  // Off by default: Ignore acts immediately with a dated default reason.
+  // On: the shared note field opens first so a reason can be recorded.
+  property bool askNotes: false
+  // {path: ...} while the note field waits for a reason for that ignore.
+  property var pendingNote: null
+
+  // Decisions taken this session. The drift report itself only changes on the
+  // next snapshot, so handled entries are filtered out locally: rows vanish
+  // as they are dealt with. handledRev bumps to recompute the bindings.
+  property var handledPaths: ({})
+  property var handledPrefixes: []
+  property int handledRev: 0
 
   readonly property string sysState: helperError ? "fault" : (st && st.state ? st.state : "unknown")
   readonly property var drift: st && st.drift ? st.drift : []
@@ -50,6 +60,50 @@ Panel {
   readonly property int unpushed: st && st.unpushed ? st.unpushed : 0
   readonly property bool timerKnown: !!(st && st.timers_checked)
   readonly property bool timerArmed: !!(st && st.timer_enabled && st.timer_active)
+
+  // Folder bucket for a drift path: per-app under the XDG-ish roots, the
+  // top-level folder otherwise, null for a file that has no useful bucket.
+  function groupKey(path) {
+    var p = String(path).replace(/^~\//, "").replace(/\/$/, "")
+    var segs = p.split("/")
+    var take = 1
+    if (segs[0] === ".config" || segs[0] === ".cache") take = 2
+    else if (segs[0] === ".local" && segs.length > 1 && (segs[1] === "share" || segs[1] === "state" || segs[1] === "bin")) take = 3
+    if (segs.length <= take) return null
+    return "~/" + segs.slice(0, take).join("/") + "/"
+  }
+
+  function isHandled(path) {
+    if (handledPaths[path]) return true
+    for (var i = 0; i < handledPrefixes.length; i++)
+      if (path.indexOf(handledPrefixes[i]) === 0) return true
+    return false
+  }
+
+  // The triage model: NEW files bucketed into folder groups (biggest first),
+  // everything else (and single-file buckets) as plain rows, handled entries
+  // dropped entirely.
+  readonly property var driftView: {
+    var _ = handledRev
+    var files = [], groups = {}, order = [], handledN = 0
+    for (var i = 0; i < drift.length; i++) {
+      var e = drift[i]
+      if (isHandled(e.path)) { handledN++; continue }
+      var k = e.type === "NEW" ? groupKey(e.path) : null
+      if (!k) { files.push(e); continue }
+      if (!(k in groups)) { groups[k] = []; order.push(k) }
+      groups[k].push(e)
+    }
+    var glist = []
+    for (var j = 0; j < order.length; j++) {
+      if (groups[order[j]].length === 1) files.push(groups[order[j]][0])
+      else glist.push({ path: order[j], entries: groups[order[j]] })
+    }
+    glist.sort(function(a, b) { return b.entries.length - a.entries.length })
+    return { groups: glist, files: files, handledN: handledN }
+  }
+  readonly property int remainingDrift: Math.max(0, driftCount - driftView.handledN)
+  readonly property int shownFiles: 250
 
   function ageText() {
     if (!st || !st.last_run) return "never"
@@ -62,13 +116,16 @@ Panel {
   readonly property string stateText: helperError ? helperError
     : !st ? "Checking…"
     : sysState === "fault" ? (problems.length ? problems[0] : "Needs attention")
-    : sysState === "attention" ? (driftCount > 0 ? driftCount + " path(s) to triage" : "Repo edits pending commit")
+    : sysState === "attention" ? (
+        remainingDrift > 0 ? remainingDrift + " path(s) to triage"
+        : driftCount > 0 ? "All triaged · Snapshot applies it"
+        : "Repo edits pending commit")
     : "Healthy · snapshot " + ageText()
 
   // Quiet glyph when healthy, a count while there is drift to triage, and the
   // alert triangle in the urgent colour for anything fail-closed would flag.
   readonly property string barGlyph: sysState === "fault" ? "󰀦" : "󰆓"
-  readonly property string barLabel: sysState === "attention" && driftCount > 0 && !vertical ? " " + driftCount : ""
+  readonly property string barLabel: sysState === "attention" && remainingDrift > 0 && !vertical ? " " + remainingDrift : ""
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -82,27 +139,32 @@ Panel {
     var p = actionComponent.createObject(root, { command: [helper].concat(args), callback: onDone || null })
     p.running = true
   }
-  function allowPath(path) {
-    act(["allow", path], function(rep) { if (rep && rep.ok) root.markHandled(path, "allowlisted") })
+  function markHandled(path) {
+    if (path.charAt(path.length - 1) === "/") handledPrefixes.push(path)
+    else handledPaths[path] = true
+    handledRev++
   }
-  function ignorePath(path, reason) {
+  function allowPath(path) {
+    act(["allow", path], function(rep) { if (rep && rep.ok) root.markHandled(path) })
+  }
+  // The ignore entry point every button uses. With notes on, park the path
+  // and let the shared note field collect a reason first.
+  function ignorePath(path) {
+    if (askNotes) { pendingNote = { path: path }; Qt.callLater(function() { noteField.forceActiveFocus() }); return }
+    commitIgnore(path, "")
+  }
+  function commitIgnore(path, reason) {
+    pendingNote = null
     var args = reason && reason.length ? ["ignore", path, reason] : ["ignore", path]
-    act(args, function(rep) { if (rep && rep.ok) root.markHandled(path, "ignored") })
+    act(args, function(rep) { if (rep && rep.ok) root.markHandled(path) })
   }
   function resolveGone(path, verb) {
-    act(["resolve-gone", path, verb], function(rep) { if (rep && rep.ok) root.markHandled(path, "resolved") })
-  }
-  function markHandled(path, verdict) {
-    var h = {}
-    for (var k in handled) h[k] = handled[k]
-    h[path] = verdict
-    handled = h
+    act(["resolve-gone", path, verb], function(rep) { if (rep && rep.ok) root.markHandled(path) })
   }
   function runSnapshot() {
     act(["snapshot"])
-    // The scan rewrites drift.txt over the next minute or so; re-poll when it
-    // has had a chance to finish instead of showing a mid-write report.
-    handled = {}
+    // The next report is ground truth for what the decisions actually silenced.
+    handledPaths = {}; handledPrefixes = []; handledRev++
     snapshotSettle.restart()
   }
   function pushOrConfirm() {
@@ -117,6 +179,7 @@ Panel {
 
   onOpenedChanged: if (opened) {
     confirmOpen = false
+    pendingNote = null
     refresh()
     if (panelFlick) panelFlick.contentY = 0
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -199,12 +262,12 @@ Panel {
     open: root.opened
     focusTarget: keyCatcher
     contentWidth: panel.fittedContentWidth(Style.space(400))
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(600))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: driftColumn.editing
+      blocked: noteField.activeFocus
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
@@ -212,6 +275,7 @@ Panel {
         else if (t === "s" || t === "S") root.runSnapshot()
         else if (t === "p" || t === "P") root.pushOrConfirm()
         else if (t === "t" || t === "T") root.openTriage()
+        else if (t === "n" || t === "N") root.askNotes = !root.askNotes
       }
 
       Flickable {
@@ -366,16 +430,70 @@ Panel {
 
           PanelSeparator { width: parent.width; foreground: root.foreground }
 
-          PanelSectionHeader {
-            text: root.driftCount > 0 ? "DRIFT · " + root.driftCount : "DRIFT"
-            foreground: root.foreground
-            fontFamily: root.fontFamily
+          // Zone 2: triage. Header carries the notes toggle; folder groups
+          // first (biggest wins), then loose files; handled rows are gone.
+          Item {
+            width: parent.width
+            implicitHeight: driftHeader.implicitHeight
+            PanelSectionHeader {
+              id: driftHeader
+              anchors.left: parent.left
+              anchors.right: notesToggle.left
+              text: root.remainingDrift > 0 ? "DRIFT · " + root.remainingDrift + " to go" : "DRIFT"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+            }
+            AccessibleActionButton {
+              id: notesToggle
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              iconText: "󰏫"
+              tooltipText: root.askNotes ? "Notes on: each Ignore asks for a reason (n)" : "Notes off: Ignore acts instantly with a dated default (n)"
+              foreground: root.askNotes ? Color.accent : root.dim
+              fontFamily: root.fontFamily
+              onClicked: root.askNotes = !root.askNotes
+            }
           }
 
           Text {
-            visible: root.driftCount === 0 && root.st !== null
+            visible: root.driftView.handledN > 0
             width: parent.width
-            text: "Nothing unbacked. Every allowlisted path is captured."
+            text: "󰄬 " + root.driftView.handledN + " handled this session · Snapshot applies the decisions (s)"
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+          }
+
+          // The shared note field (notes mode): one ignore is parked here
+          // until a reason is typed. Enter records it, Esc cancels.
+          Column {
+            visible: root.pendingNote !== null
+            width: parent.width
+            spacing: Style.spacing.xxs
+            Text {
+              width: parent.width
+              text: "Note for " + (root.pendingNote ? root.pendingNote.path : "")
+              textFormat: Text.PlainText
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideMiddle
+            }
+            TextField {
+              id: noteField
+              width: parent.width
+              placeholderText: "why this is not worth backing up · Enter records it, Esc skips the note"
+              foreground: root.foreground
+              font.family: root.fontFamily
+              onAccepted: { var pn = root.pendingNote; if (pn) root.commitIgnore(pn.path, text.trim()); text = ""; keyCatcher.forceActiveFocus() }
+              Keys.onEscapePressed: { var pn = root.pendingNote; root.pendingNote = null; text = ""; if (pn) root.commitIgnore(pn.path, ""); keyCatcher.forceActiveFocus() }
+            }
+          }
+
+          Text {
+            visible: root.remainingDrift === 0 && root.st !== null
+            width: parent.width
+            text: root.driftCount > 0 ? "All triaged. Run Snapshot to apply and re-scan." : "Nothing unbacked. Every allowlisted path is captured."
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -385,38 +503,47 @@ Panel {
             id: driftColumn
             width: parent.width
             spacing: Style.spacing.xxs
-            // Reason fields grab the keyboard; the key catcher must let them.
-            readonly property bool editing: {
-              for (var i = 0; i < driftRepeater.count; i++) {
-                var it = driftRepeater.itemAt(i)
-                if (it && it.reasonOpen) return true
-              }
-              return false
-            }
             Repeater {
-              id: driftRepeater
-              model: root.drift.slice(0, root.driftShown)
-              delegate: DriftRow {
+              model: root.driftView.groups
+              delegate: DriftGroupRow {
                 required property var modelData
                 width: driftColumn.width
-                entry: modelData
-                verdict: root.handled[modelData.path] || ""
+                path: modelData.path
+                entries: modelData.entries
                 busy: root.busy
                 foreground: root.foreground
                 dimColor: root.dim
                 urgent: root.urgent
                 fontFamily: root.fontFamily
                 onAllowRequested: function(path) { root.allowPath(path) }
-                onIgnoreRequested: function(path, reason) { root.ignorePath(path, reason) }
+                onIgnoreRequested: function(path) { root.ignorePath(path) }
+                onGoneRequested: function(path, verb) { root.resolveGone(path, verb) }
+              }
+            }
+            Repeater {
+              model: root.driftView.files.slice(0, root.shownFiles)
+              delegate: DriftRow {
+                required property var modelData
+                width: driftColumn.width
+                entry: modelData
+                busy: root.busy
+                foreground: root.foreground
+                dimColor: root.dim
+                urgent: root.urgent
+                fontFamily: root.fontFamily
+                onAllowRequested: function(path) { root.allowPath(path) }
+                onIgnoreRequested: function(path) { root.ignorePath(path) }
                 onGoneRequested: function(path, verb) { root.resolveGone(path, verb) }
               }
             }
           }
 
           Text {
-            visible: root.driftCount > root.driftShown
+            visible: root.driftView.files.length > root.shownFiles || (root.st && root.st.drift_truncated)
             width: parent.width
-            text: "… and " + (root.driftCount - root.driftShown) + " more · Full triage handles the rest (t)"
+            text: root.driftView.files.length > root.shownFiles
+              ? "… and " + (root.driftView.files.length - root.shownFiles) + " more loose files · handle some and they appear"
+              : "… report truncated at " + root.drift.length + " entries"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
@@ -459,7 +586,7 @@ Panel {
           Text {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
-            text: "s snapshot · p push · t triage · r refresh · Esc close"
+            text: "s snapshot · p push · t triage · n notes · r refresh · Esc close"
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
