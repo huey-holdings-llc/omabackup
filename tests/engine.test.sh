@@ -1129,5 +1129,32 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
   eq "open: launches the terminal cd'd into the data repo" "$(cat "$T/open.cwd" 2>/dev/null)" "$FR"
 fi
 
+if group 60 "setup creates a data repo, seeds, marker, config"; then
+  T="$ROOT/g60"; FH="$T/home"; mkdir -p "$FH" "$T/state"
+  export OMABACKUP_CONFIG="$T/cfg.json" OMABACKUP_STATE_DIR="$T/state" OMABACKUP_STOCK_DIR="$STOCK_SRC" OMABACKUP_NET=0 OMABACKUP_NOTIFY=0 OMABACKUP_SKIP_ETC=1
+  check "unattended setup, local only, no timers" env HOME="$FH" "$CLI" setup --data-repo "$T/data" --no-timers --yes
+  [[ -f "$T/data/.omabackup" ]] && ok "marker written" || bad "no marker"
+  [[ -f "$T/data/allowlist.txt" && -f "$T/data/drift-ignore.txt" && -f "$T/data/.gitleaks.toml" ]] && ok "seeds copied" || bad "seeds missing"
+  eq "config dataRepo set" "$(jq -r .dataRepo "$OMABACKUP_CONFIG")" "$T/data"
+  eq "config is 0600" "$(stat -c %a "$OMABACKUP_CONFIG")" "600"
+  eq "phase recorded as done" "$(jq -r .setupPhase "$OMABACKUP_CONFIG")" "done"
+  check "setup check passes" env HOME="$FH" "$CLI" setup check
+  check "setup is idempotent" env HOME="$FH" "$CLI" setup --data-repo "$T/data" --no-timers --yes
+fi
+
+if group 61 "setup --import adopts an existing engine repo"; then
+  mk_fixture g61; seed_home; rm "$FR/.omabackup"
+  check "import writes the marker" env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
+  eq "marker format 1" "$(jq -r .format "$FR/.omabackup")" "1"
+  mkdir -p "$T/notarepo"; fails "import refuses a directory without the lists" env HOME="$FH" "$CLI" setup --import "$T/notarepo" --no-timers --yes
+fi
+
+if group 62 "setup --remove leaves the data repo alone"; then
+  mk_fixture g62; seed_home
+  check "remove" env HOME="$FH" "$CLI" setup --remove --yes
+  [[ ! -f "$OMABACKUP_CONFIG" ]] && ok "config removed" || bad "config still there"
+  [[ -f "$FR/allowlist.txt" ]] && ok "data repo untouched" || bad "data repo damaged"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
