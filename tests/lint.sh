@@ -38,7 +38,7 @@ qml_process_bad=0
 while IFS=: read -r qf qln _; do
   bad "a process launches something other than omabackup: $qf:$qln"
   qml_process_bad=1
-done < <(grep -nE 'command:|execDetached\(' -- *.qml ui/*.qml | grep -vE 'omabackup|svc\.cli|Service\.cli|root\.cli|omarchy-launch-floating-terminal-with-presentation')
+done < <(grep -nE 'command:|execDetached\(' -- *.qml ui/*.qml | grep -vE 'omabackup|svc\.cli|Service\.cli|root\.cli|omarchy-launch-floating-terminal-with-presentation|wl-copy')
 [[ $qml_process_bad == 0 ]] && ok "all processes route through omabackup"
 
 step "copy"

@@ -6,21 +6,22 @@ import qs.Commons
 import qs.Ui
 import "ui"
 
-// Backup Status bar widget: a glanceable badge for the hp-laptop-config backup
-// engine, and a popup that renders `bin/widget-helper.sh status` verbatim.
+// OmaBackup bar widget: a glanceable badge for the config-backup engine, and
+// a popup that renders Service.qml's status.json.
 //
-// ALL judgment lives in the helper -- it is versioned, linted and self-tested
-// with the engine (self-test groups 50/51). This file renders that JSON and
-// shells back into helper subcommands; it never decides anything about
-// backups itself, and it never builds shell strings (argv only).
+// ALL judgment lives in bin/omabackup and lib/*.sh -- versioned, linted and
+// self-tested with the engine. This file is a view over the Service
+// singleton: it renders svc.st and calls svc functions, which run CLI verbs
+// as argv (never a shell string) and never decide anything about backups
+// themselves.
 //
 // Triage is meant to feel like clearing a todo list: drifting files are
 // grouped by folder so one click can take a whole directory, handled rows
 // disappear immediately, and notes are optional (a toggle, off by default).
 Panel {
   id: root
-  moduleName: "io.github.coreytyhurst.backup-status"
-  ipcTarget: "io.github.coreytyhurst.backup-status"
+  moduleName: "io.github.huey-holdings-llc.omabackup"
+  ipcTarget: "io.github.huey-holdings-llc.omabackup"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -29,15 +30,19 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool vertical: bar ? bar.vertical : false
 
-  readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string repoDir: String(setting("repoDir", "~/projects/hp-laptop-config")).replace(/^~/, home)
-  readonly property string helper: repoDir + "/bin/widget-helper.sh"
+  // The Service.qml singleton, handed over by the shell host the same way
+  // omarecorder's Panel.qml pulls its own service (there is no QML module
+  // import for it -- Service.qml is loaded and registered by the shell,
+  // keyed by plugin id, and shared across every panel/widget instance).
+  readonly property var svc: bar && bar.shell && bar.shell.serviceFor ? bar.shell.serviceFor(moduleName) : null
+  readonly property bool svcReady: svc !== null
 
-  // Last parsed status JSON; null until the first poll answers.
-  property var st: null
-  property string helperError: ""
+  // Last parsed status JSON; null until the service's first read answers.
+  readonly property var st: svcReady ? svc.st : null
+  readonly property string helperError: svcReady ? svc.cliError : "OmaBackup service unavailable"
   property string actionError: ""
-  property bool busy: false
+  readonly property bool busy: svcReady ? svc.busy : false
+  readonly property string setupState: svcReady ? svc.setup : "not-configured"
   property bool confirmOpen: false
   // Off by default: Ignore acts immediately with a dated default reason.
   // On: the shared note field opens first so a reason can be recorded.
@@ -130,14 +135,18 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  function refresh() { if (!statusProc.running) statusProc.running = true }
+  function refresh() { if (root.svc) root.svc.refresh() }
 
-  // ---- actions: every button is one helper subcommand, argv only ----
+  // ---- actions: every call runs one CLI verb through the service, argv
+  // only. actionError mirrors the JSON contract's {ok, error} shape (Task
+  // 17's act comment) so a failed action still says why, same as before.
   function act(args, onDone) {
-    if (busy) return
-    busy = true
-    var p = actionComponent.createObject(root, { command: [helper].concat(args), callback: onDone || null })
-    p.running = true
+    if (!root.svc) return
+    root.svc.act(args, function(rep, code) {
+      root.actionError = (rep && rep.ok === true) ? ""
+        : (rep && rep.error ? rep.error : "omabackup action failed (exit " + code + ")")
+      if (onDone) onDone(rep, code)
+    })
   }
   function markHandled(path) {
     if (path.charAt(path.length - 1) === "/") handledPrefixes.push(path)
@@ -145,7 +154,11 @@ Panel {
     handledRev++
   }
   function allowPath(path) {
-    act(["allow", path], function(rep) { if (rep && rep.ok) root.markHandled(path) })
+    if (!root.svc) return
+    root.svc.allow(path, function(rep) {
+      root.actionError = (rep && rep.ok === true) ? "" : (rep && rep.error ? rep.error : "allow failed")
+      if (rep && rep.ok) root.markHandled(path)
+    })
   }
   // The ignore entry point every button uses. With notes on, park the path
   // and let the shared note field collect a reason first.
@@ -155,27 +168,46 @@ Panel {
   }
   function commitIgnore(path, reason) {
     pendingNote = null
-    var args = reason && reason.length ? ["ignore", path, reason] : ["ignore", path]
-    act(args, function(rep) { if (rep && rep.ok) root.markHandled(path) })
+    if (!root.svc) return
+    root.svc.ignore(path, reason, function(rep) {
+      root.actionError = (rep && rep.ok === true) ? "" : (rep && rep.error ? rep.error : "ignore failed")
+      if (rep && rep.ok) root.markHandled(path)
+    })
   }
   function resolveGone(path, verb) {
-    act(["resolve-gone", path, verb], function(rep) { if (rep && rep.ok) root.markHandled(path) })
+    if (!root.svc) return
+    root.svc.resolveGone(path, verb, function(rep) {
+      root.actionError = (rep && rep.ok === true) ? "" : (rep && rep.error ? rep.error : "resolve failed")
+      if (rep && rep.ok) root.markHandled(path)
+    })
   }
   function runSnapshot() {
-    act(["snapshot"])
+    if (root.svc) root.svc.snapshotNow()
     // The next report is ground truth for what the decisions actually silenced.
     handledPaths = {}; handledPrefixes = []; handledRev++
     snapshotSettle.restart()
   }
   function pushOrConfirm() {
     if (root.uncommitted.length > 0) { confirmOpen = !confirmOpen; return }
-    if (root.unpushed > 0) act(["push"])
+    if (!root.svc) return
+    if (root.unpushed > 0) root.svc.pushOrConfirm(false, function(rep) {
+      root.actionError = (rep && rep.ok === true) ? "" : (rep && rep.error ? rep.error : "push failed")
+    })
   }
   function confirmPush() {
     confirmOpen = false
-    act(["push", "--confirm"])
+    if (!root.svc) return
+    root.svc.pushOrConfirm(true, function(rep) {
+      root.actionError = (rep && rep.ok === true) ? "" : (rep && rep.error ? rep.error : "push failed")
+    })
   }
-  function openTriage() { root.close(); act(["triage-terminal"]) }
+  function openTriage() { root.close(); if (root.svc) root.svc.openTerminal() }
+  function setupAction() {
+    if (!root.svc) return
+    if (root.setupState === "not-configured") root.svc.runSetup()
+    else if (root.setupState === "gitleaks-missing") Quickshell.execDetached(["wl-copy", "sudo pacman -S gitleaks"])
+    else if (root.setupState === "remote-unverified") Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", root.svc.cli, "setup", "--trust-remote", "--yes"])
+  }
 
   onOpenedChanged: if (opened) {
     confirmOpen = false
@@ -186,43 +218,10 @@ Panel {
   }
   Component.onCompleted: refresh()
 
-  Process {
-    id: statusProc
-    command: [root.helper, "status"]
-    stdout: StdioCollector { id: statusOut; waitForEnd: true }
-    stderr: StdioCollector { waitForEnd: true }
-    onExited: function(code) {
-      try {
-        root.st = JSON.parse(statusOut.text)
-        root.helperError = ""
-      } catch (e) {
-        root.st = null
-        root.helperError = "Backup helper unreachable (" + root.helper + ")"
-      }
-    }
-  }
-
-  property Component actionComponent: Component {
-    Process {
-      id: p
-      property var callback: null
-      stdout: StdioCollector { id: aOut; waitForEnd: true }
-      stderr: StdioCollector { waitForEnd: true }
-      onExited: function(code) {
-        var rep = null
-        try { rep = JSON.parse(aOut.text) } catch (e) {}
-        root.actionError = (rep && rep.ok === true) ? ""
-          : (rep && rep.problems && rep.problems.length ? rep.problems[0] : "helper action failed (exit " + code + ")")
-        if (callback) callback(rep)
-        root.busy = false
-        root.refresh()
-        p.destroy()
-      }
-    }
-  }
-
   // The badge stays honest while the panel is closed: same 10-minute cadence
-  // the config-sync ecosystem uses, cheap read-only git + file reads.
+  // the config-sync ecosystem uses, cheap read-only git + file reads. The
+  // service's FileView already reacts to status.json changing on disk; this
+  // is what actually re-triggers a `status` write between snapshots.
   Timer {
     interval: 600000; repeat: true; running: true
     onTriggered: root.refresh()
@@ -429,6 +428,19 @@ Panel {
           }
 
           PanelSeparator { width: parent.width; foreground: root.foreground }
+
+          // Not-ready setup states get one card with a single fix-it action;
+          // "ready" and "fault" hide it ("fault" is already covered by the
+          // problems list above).
+          SetupCard {
+            visible: root.setupState !== "ready" && root.setupState !== "fault"
+            width: parent.width
+            mode: root.setupState
+            foreground: root.foreground
+            urgent: root.urgent
+            fontFamily: root.fontFamily
+            onAction: root.setupAction()
+          }
 
           // Zone 2: triage. Header carries the notes toggle; folder groups
           // first (biggest wins), then loose files; handled rows are gone.

@@ -1,4 +1,3 @@
-pragma Singleton
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -11,8 +10,14 @@ import Quickshell.Io
 //     written by the engine via atomic rename after every verb)
 //   * exposes actions that run CLI verbs as argv, never a shell string
 //
-// Task 18 rewires Panel.qml onto this; nothing here renders UI.
-Singleton {
+// Mounted once by the shell (kind "service", keepLoaded); Panel instances
+// (one per monitor) read from it via bar.shell.serviceFor(pluginId) -- the
+// shell's own service cache is what makes this a singleton, not a QML
+// `pragma Singleton` (the shell loads it via Qt.createComponent + createObject,
+// not a module import, so a pragma-Singleton root just produces a duplicate-
+// registration warning; QtObject is the same root the sibling omarecorder
+// plugin's Service.qml uses for the identical loading path).
+QtObject {
   id: svc
 
   // decodeURIComponent: a plugin dir under a home directory with a space in
@@ -30,8 +35,10 @@ Singleton {
   readonly property string sysState: cliError ? "fault" : (st && st.state ? st.state : "unknown")
 
   // The engine writes status.json by atomic rename; watch the directory so a
-  // replaced file is picked up, then re-read.
-  FileView {
+  // replaced file is picked up, then re-read. QtObject has no default
+  // property (unlike Item/Singleton), so this has to be an explicit property
+  // rather than an anonymous child -- same as omarecorder's stateView.
+  property FileView statusFile: FileView {
     id: statusFile
     path: svc.statusPath
     watchChanges: true
