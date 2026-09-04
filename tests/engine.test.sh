@@ -22,6 +22,11 @@ fails() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$d" "unexpecte
 eq()   { [[ "$2" == "$3" ]] && ok "$1" || bad "$1" "got '$2' expected '$3'"; }
 has()  { grep -q -- "$3" <<<"$2" && ok "$1" || bad "$1" "missing '$3'"; }
 rand_body() { head -c 300 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c "$1"; }
+# fake_curl CODE [EXIT]: a curl stand-in printing CODE for -w %{http_code}, put on
+# $T/fakebin so callers can prepend it to PATH. Call after mk_fixture (needs $T).
+fake_curl() {
+  mkdir -p "$T/fakebin"; printf '#!/bin/sh\nprintf %%s "%s"\nexit %s\n' "$1" "${2:-0}" > "$T/fakebin/curl"; chmod +x "$T/fakebin/curl"
+}
 
 # ---- fixture ----------------------------------------------------------------
 # mk_fixture NAME: fresh home + stock + data repo + bare remote + config under $ROOT/NAME.
@@ -113,6 +118,16 @@ if group 07 "drift detection"; then
   ! grep -q 'bindings.lua' <<<"$out" && ok "allowlisted file not reported" || bad "allowlisted file reported"
   eq "json items carry type and path" "$(obj drift | jq -r '.items[] | select(.path=="~/.config/mytool") | .type')" "NEW"
 fi
+if group 10 "offline visibility probe (curl prints 000 AND exits non-zero) does not abort the backup"; then
+  # curl -w PRINTS 000 on a connection failure *and* exits non-zero; a naive
+  # `code=$(curl ... ) || code=000` concatenates the two into "000000" and
+  # falls through to the die branch -- every offline run would abort.
+  mk_fixture g10; seed_home
+  git -C "$FR" remote set-url origin git@github.com:someone/omabackup-data.git
+  fake_curl 000 7
+  check "snapshot commits despite curl failing offline" env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_NET=1 "$CLI" snapshot
+  git -C "$FR" log --oneline | grep -q 'snapshot:' && ok "commit landed locally" || bad "no local commit made"
+fi
 if group 11 "drift scan completion sentinel"; then
   mk_fixture g11; seed_home
   has "report ends with the sentinel" "$(ob drift | tail -1)" "# drift-scan-complete"
@@ -139,6 +154,25 @@ if group 22 "partial coverage is DERIVED, not declared"; then
   has "the uncovered sibling is reported" "$out" "NEW        ~/.config/partial/drop"
   # shellcheck disable=SC2088 # matching drift's literal "~/" report prefix, not a path to expand
   ! grep -q '~/.config/partial$' <<<"$out" && ok "the parent is not reported as a whole" || bad "parent reported wholesale"
+fi
+if group 25 "an unverifiable repo visibility (403) does not abort the backup"; then
+  # Only HTTP 200 proves a repo is public. 403 (unauthenticated rate limit),
+  # 429 and 5xx prove nothing and must not hard-fail the whole snapshot.
+  mk_fixture g25; seed_home
+  git -C "$FR" remote set-url origin git@github.com:someone/omabackup-data.git
+  fake_curl 403
+  check "snapshot commits despite an unverifiable 403" env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_NET=1 "$CLI" snapshot
+  git -C "$FR" log --oneline | grep -q 'snapshot:' && ok "commit landed locally" || bad "no local commit made"
+fi
+if group 27 "unverified visibility must NOT push"; then
+  mk_fixture g27; seed_home
+  git -C "$FR" remote set-url origin "$BARE"; jq '.remote.trusted=false' "$OMABACKUP_CONFIG" > "$T/c2" && mv "$T/c2" "$OMABACKUP_CONFIG"
+  check "snapshot commits" env HOME="$FH" "$CLI" snapshot
+  eq "nothing reached the remote" "$(git -C "$BARE" rev-list --count main 2>/dev/null || echo 0)" "0"
+  eq "status says push not verifiable" "$(obj status | jq -r .push_verifiable)" "false"
+  jq '.remote.trusted=true' "$OMABACKUP_CONFIG" > "$T/c2" && mv "$T/c2" "$OMABACKUP_CONFIG"
+  check "trusted remote pushes" env HOME="$FH" "$CLI" snapshot
+  [[ $(git -C "$BARE" rev-list --count main) -ge 1 ]] && ok "pushed once trusted" || bad "not pushed"
 fi
 if group 33 "drift reports each path exactly once"; then
   mk_fixture g33; seed_home
@@ -204,6 +238,13 @@ if group 42 "a disabled drift scanner is surfaced, not silent"; then
     "$(OMABACKUP_STOCK_DIR=/nonexistent obj drift | jq -r '.items[] | select(.type=="ERROR") | .path' | head -1 | grep -c '^# ERROR')" "0"
   [[ -n "$(OMABACKUP_STOCK_DIR=/nonexistent obj drift | jq -r '.items[] | select(.type=="ERROR") | .path' | head -1)" ]] \
     && ok "the ERROR item's message text is not empty" || bad "the ERROR item's message text is empty"
+fi
+if group 45 "a PUBLIC repo aborts the run (HTTP 200 is the only proof of public)"; then
+  mk_fixture g45; seed_home
+  git -C "$FR" remote set-url origin git@github.com:someone/omabackup-data.git
+  fake_curl 200
+  fails "snapshot dies on 200" env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_NET=1 "$CLI" snapshot
+  has "reason says public" "$(PATH="$T/fakebin:$PATH" OMABACKUP_NET=1 ob snapshot; true)" "public"
 fi
 if group 46 "hand-authored /etc drop-ins are reported"; then
   mk_fixture g46; seed_home
