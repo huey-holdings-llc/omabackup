@@ -162,7 +162,11 @@ health_status_json() {
   local -a probs_j=()
   local p
   for p in "${H_PROBLEMS[@]}"; do probs_j+=("$(jstr "$p")"); done
-  jq -cn \
+  # H_DRIFT_JSON can hold thousands of long paths -- passing it as an
+  # --argjson exceeds the exec ARG_MAX (Argument list too long) on a real
+  # home, so it goes in on stdin instead (a here-string, not argv) and
+  # everything else stays a small --arg/--argjson.
+  jq -c \
     --arg state "$state" \
     --arg setup "$H_SETUP" \
     --arg repo "$DATA_REPO" \
@@ -172,7 +176,6 @@ health_status_json() {
     --argjson scan_complete "$H_SCAN_COMPLETE" \
     --argjson drift_count "$H_DRIFT_COUNT" \
     --argjson drift_truncated "$H_DRIFT_TRUNCATED" \
-    --argjson drift "$H_DRIFT_JSON" \
     --argjson unpushed "$H_UNPUSHED" \
     --argjson diverged "$H_DIVERGED" \
     --argjson push_verifiable "$H_PUSH_VERIFIABLE" \
@@ -184,7 +187,7 @@ health_status_json() {
     --argjson selftest_enabled "$H_SELFTEST_ENABLED" \
     --argjson selftest_active "$H_SELFTEST_ACTIVE" \
     --argjson problems "[$(jjoin ${probs_j[@]+"${probs_j[@]}"})]" \
-    '{state:$state, setup:$setup, repo:$repo, generated:$generated,
+    '. as $drift | {state:$state, setup:$setup, repo:$repo, generated:$generated,
       last_run:$last_run, last_run_age_days:$age,
       drift_scan_complete:$scan_complete, drift_count:$drift_count,
       drift_truncated:$drift_truncated, drift:$drift,
@@ -192,7 +195,7 @@ health_status_json() {
       uncommitted:$uncommitted,
       timers_checked:$timers_checked, timer_enabled:$timer_enabled, timer_active:$timer_active,
       timer_next:$timer_next, selftest_enabled:$selftest_enabled, selftest_active:$selftest_active,
-      problems:$problems}'
+      problems:$problems}' <<<"$H_DRIFT_JSON"
 }
 
 # health_write_status: collect fresh and persist, for callers (snapshot_result)

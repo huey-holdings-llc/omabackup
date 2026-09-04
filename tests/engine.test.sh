@@ -1204,5 +1204,40 @@ if group 62 "setup --remove leaves the data repo alone"; then
   [[ -f "$FR/allowlist.txt" ]] && ok "data repo untouched" || bad "data repo damaged"
 fi
 
+if group 63 "a huge drift report does not blow the jq ARG_MAX"; then
+  # 2000 NEW paths of ~120 chars each is well over jq's single-argument
+  # limit (MAX_ARG_STRLEN, 128 KiB) even after the WIDGET_DRIFT_LIMIT=2000
+  # truncation -- health_status_json must feed the drift array to jq on
+  # stdin, never as --argjson, or `status` dies with "Argument list too
+  # long" and status.json ends up empty (Task 18's finding, live on a real
+  # ~6900-path home).
+  mk_fixture g63; seed_home; commit_baseline
+  filler=$(printf 'x%.0s' $(seq 1 100))
+  { i=1
+    while [ "$i" -le 2000 ]; do
+      # shellcheck disable=SC2088 # expected literal string, not a path to expand
+      printf 'NEW %s/%04d-%s\n' "~/.config/drift-h1" "$i" "$filler"
+      i=$((i+1))
+    done
+    printf '# drift-scan-complete\n'
+  } > "$FR/manifests/drift.txt"
+  date +%s > "$FR/manifests/.last-run"
+  bytes=$(wc -c < "$FR/manifests/drift.txt")
+  [[ "$bytes" -gt 131072 ]] && ok "fixture drift report itself exceeds 128 KiB (${bytes} bytes)" \
+    || bad "fixture too small to reproduce ARG_MAX" "only ${bytes} bytes"
+
+  s=$(obj status); rc63=$?
+  eq "status exits 0 on a huge drift report" "$rc63" "0"
+  eq "status emits valid JSON" "$(jq -e . <<<"$s" >/dev/null 2>&1 && echo ok || echo bad)" "ok"
+  eq "drift array holds all 2000 entries" "$(jq -r '.drift | length' <<<"$s")" "2000"
+  eq "drift_count matches" "$(jq -r .drift_count <<<"$s")" "2000"
+  eq "not truncated: 2000 is exactly the limit, not over it" "$(jq -r .drift_truncated <<<"$s")" "false"
+
+  eq "status.json on disk parses" \
+    "$(jq -e . "$OMABACKUP_STATE_DIR/status.json" >/dev/null 2>&1 && echo ok || echo bad)" "ok"
+  eq "status.json on disk has the same drift length" \
+    "$(jq -r '.drift | length' "$OMABACKUP_STATE_DIR/status.json")" "2000"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
