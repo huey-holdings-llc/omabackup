@@ -118,7 +118,13 @@ Panel {
     return Math.floor(s / 86400) + "d ago"
   }
 
+  // Not-ready setup states get their own short phrase before any of the
+  // health branches below run: with no config, health_not_configured_json
+  // reports state "attention" with everything else empty, which would
+  // otherwise read as "Repo edits pending commit" -- true of the JSON, not
+  // of reality.
   readonly property string stateText: helperError ? helperError
+    : root.setupState !== "ready" ? (root.setupState === "not-configured" ? "Setup needed" : "Push is off")
     : !st ? "Checking…"
     : sysState === "fault" ? (problems.length ? problems[0] : "Needs attention")
     : sysState === "attention" ? (
@@ -137,17 +143,18 @@ Panel {
 
   function refresh() { if (root.svc) root.svc.refresh() }
 
-  // ---- actions: every call runs one CLI verb through the service, argv
-  // only. actionError mirrors the JSON contract's {ok, error} shape (Task
-  // 17's act comment) so a failed action still says why, same as before.
-  function act(args, onDone) {
-    if (!root.svc) return
-    root.svc.act(args, function(rep, code) {
-      root.actionError = (rep && rep.ok === true) ? ""
-        : (rep && rep.error ? rep.error : "omabackup action failed (exit " + code + ")")
-      if (onDone) onDone(rep, code)
-    })
+  // The engine's refusal shape for every write verb is {ok:false,
+  // problems:[...]} (lib/widget.sh's widget_reply_fail and the lint-gate
+  // rollback); only die/usage_die emit {ok:false, error}. problems[0] wins
+  // when present so "already allowlisted", "lint rejected the edit (rolled
+  // back)" etc. surface instead of the generic fallback.
+  function actionErrorText(rep, fallback) {
+    return (rep && rep.problems && rep.problems.length) ? rep.problems[0]
+      : (rep && rep.error) ? rep.error
+      : fallback
   }
+
+  // ---- actions: every call runs one CLI verb through the service, argv only.
   function markHandled(path) {
     if (path.charAt(path.length - 1) === "/") handledPrefixes.push(path)
     else handledPaths[path] = true
@@ -156,7 +163,7 @@ Panel {
   function allowPath(path) {
     if (!root.svc) return
     root.svc.allow(path, function(rep) {
-      root.actionError = (rep && rep.ok === true) ? "" : (rep && rep.error ? rep.error : "allow failed")
+      root.actionError = (rep && rep.ok === true) ? "" : root.actionErrorText(rep, "allow failed")
       if (rep && rep.ok) root.markHandled(path)
     })
   }
@@ -170,14 +177,14 @@ Panel {
     pendingNote = null
     if (!root.svc) return
     root.svc.ignore(path, reason, function(rep) {
-      root.actionError = (rep && rep.ok === true) ? "" : (rep && rep.error ? rep.error : "ignore failed")
+      root.actionError = (rep && rep.ok === true) ? "" : root.actionErrorText(rep, "ignore failed")
       if (rep && rep.ok) root.markHandled(path)
     })
   }
   function resolveGone(path, verb) {
     if (!root.svc) return
     root.svc.resolveGone(path, verb, function(rep) {
-      root.actionError = (rep && rep.ok === true) ? "" : (rep && rep.error ? rep.error : "resolve failed")
+      root.actionError = (rep && rep.ok === true) ? "" : root.actionErrorText(rep, "resolve failed")
       if (rep && rep.ok) root.markHandled(path)
     })
   }
@@ -191,14 +198,14 @@ Panel {
     if (root.uncommitted.length > 0) { confirmOpen = !confirmOpen; return }
     if (!root.svc) return
     if (root.unpushed > 0) root.svc.pushOrConfirm(false, function(rep) {
-      root.actionError = (rep && rep.ok === true) ? "" : (rep && rep.error ? rep.error : "push failed")
+      root.actionError = (rep && rep.ok === true) ? "" : root.actionErrorText(rep, "push failed")
     })
   }
   function confirmPush() {
     confirmOpen = false
     if (!root.svc) return
     root.svc.pushOrConfirm(true, function(rep) {
-      root.actionError = (rep && rep.ok === true) ? "" : (rep && rep.error ? rep.error : "push failed")
+      root.actionError = (rep && rep.ok === true) ? "" : root.actionErrorText(rep, "push failed")
     })
   }
   function openTriage() { root.close(); if (root.svc) root.svc.openTerminal() }
@@ -368,7 +375,7 @@ Panel {
                 tooltipText: root.timerArmed ? "Pause the daily snapshot timer" : "Resume the daily snapshot timer"
                 foreground: root.timerArmed ? root.foreground : root.urgent
                 fontFamily: root.fontFamily
-                onClicked: root.act(["timer", root.timerArmed ? "pause" : "resume"])
+                onClicked: if (root.svc) root.svc.timer(root.timerArmed ? "pause" : "resume")
               }
             }
             InfoRow {
@@ -431,9 +438,12 @@ Panel {
 
           // Not-ready setup states get one card with a single fix-it action;
           // "ready" and "fault" hide it ("fault" is already covered by the
-          // problems list above).
+          // problems list above). Also gated on svc.st !== null: setupState
+          // defaults to "not-configured" for the one frame before the
+          // service's first status.json read lands, which would otherwise
+          // flash the card open on an already-configured machine too.
           SetupCard {
-            visible: root.setupState !== "ready" && root.setupState !== "fault"
+            visible: root.svc && root.svc.st !== null && root.setupState !== "ready" && root.setupState !== "fault"
             width: parent.width
             mode: root.setupState
             foreground: root.foreground
@@ -503,7 +513,7 @@ Panel {
           }
 
           Text {
-            visible: root.remainingDrift === 0 && root.st !== null
+            visible: root.remainingDrift === 0 && root.st !== null && root.setupState === "ready"
             width: parent.width
             text: root.driftCount > 0 ? "All triaged. Run Snapshot to apply and re-scan." : "Nothing unbacked. Every allowlisted path is captured."
             color: root.dim

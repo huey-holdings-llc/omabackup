@@ -42,7 +42,7 @@ done < <(grep -nE 'command:|execDetached\(' -- *.qml ui/*.qml | grep -vE 'omabac
 [[ $qml_process_bad == 0 ]] && ok "all processes route through omabackup"
 
 step "copy"
-if grep -rn -- $'\xe2\x80\x94' README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md bin/omabackup share/units 2>/dev/null; then bad "em dash in user-facing text"; else ok "no em dashes"; fi
+if grep -rn -- $'\xe2\x80\x94' README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md bin/omabackup share/units *.qml ui/*.qml 2>/dev/null; then bad "em dash in user-facing text"; else ok "no em dashes"; fi
 if grep -nE '\beval\b' bin/omabackup lib/*.sh; then bad "eval in the engine"; else ok "no eval"; fi
 
 step "docs"

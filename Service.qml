@@ -76,7 +76,12 @@ QtObject {
         try { obj = JSON.parse(aOut.text) } catch (e) {
           svc.cliError = String(aErr.text || aOut.text || ("omabackup returned no JSON (exit " + code + ")")).trim()
         }
-        if (obj && obj.error) svc.cliError = obj.error
+        // The engine's refusal shape for a write verb is {ok:false,
+        // problems:[...]}; only die/usage_die emit {ok:false, error}.
+        // problems[0] wins when present, and must not be cleared by the
+        // absence of `error` on the same reply.
+        if (obj && obj.problems && obj.problems.length) svc.cliError = obj.problems[0]
+        else if (obj && obj.error) svc.cliError = obj.error
         else if (obj) svc.cliError = ""
         if (p.callback) p.callback(obj, code)
         p.destroy()
