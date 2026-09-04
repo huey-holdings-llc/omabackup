@@ -11,6 +11,10 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 CLI="$HERE/../bin/omabackup"
 ROOT="${OMABACKUP_TEST_TMP:-$HERE/tmp}/$$"; mkdir -p "$ROOT"
 trap 'rm -rf "$ROOT"' EXIT
+# Marks a suite as already running, so a self-test verb exercised BY the
+# suite (group 00's misuse/recursion assertions) refuses instead of forking
+# the whole suite again -- see lib/selftest.sh.
+export OMABACKUP_IN_SUITE=1
 STOCK_SRC="$HERE/fixtures/stock"
 MANIFEST_VERSION=$(jq -r .version "$HERE/../manifest.json")
 
@@ -102,6 +106,16 @@ if group 00 "baseline: version, help, config validation"; then
   # and report "not-configured" instead of dying, so this die()-refusal probe
   # uses a verb that still requires config unconditionally.
   eq "missing config refused with setup hint" "$(OMABACKUP_CONFIG=/nonexistent ob drift; true)" "$(printf '\033[1;31m[FAIL]\033[0m no config at /nonexistent. Run: omabackup setup')"
+
+  # self-test: an unknown flag is a usage error (exit 2), same as every other
+  # verb, and self-test refuses to run recursively from inside a suite that
+  # is already running (this suite exports OMABACKUP_IN_SUITE=1 at its own
+  # top) rather than forking the whole suite again.
+  fails "self-test: unknown flag is refused" env HOME="$FH" "$CLI" self-test --help
+  [[ $(env HOME="$FH" "$CLI" self-test --help >/dev/null 2>&1; echo $?) == 2 ]] \
+    && ok "self-test: unknown flag exits 2" || bad "self-test: unknown flag exit code"
+  eq "self-test: refuses to run from inside a running suite" "$(obj self-test | jq -r .ok)" "false"
+  has "the refusal names the guard" "$(obj self-test)" "recursively"
 fi
 
 # Later tasks append groups here, in numeric order, each starting with mk_fixture.
@@ -257,6 +271,10 @@ if group 06 "restore --configs: dry run touches nothing, --apply backs up and ne
     && ok "trailing-space filename keeps its mode" || bad "trailing-space filename lost its mode"
   [ -z "$(find "$RH" -name .gitkeep -print -quit 2>/dev/null)" ] \
     && ok "no .gitkeep placeholders restored into \$HOME" || bad ".gitkeep litter restored into \$HOME"
+  # verify's own restore-and-compare must agree the modes round-tripped too.
+  check "verify passes against a freshly restored \$HOME (permissions round-trip)" env HOME="$RH" "$CLI" verify
+  eq "verify json: no mismatches after a clean restore" \
+    "$(env HOME="$RH" "$CLI" verify --json 2>/dev/null | jq '.mismatched|length')" "0"
   chmod 700 "$FR/home/.config/appb"
 
   # --- /etc is diff-only: never writes, even under --apply ---
@@ -506,6 +524,29 @@ if group 30 "a symlinked directory inside the backup is refused"; then
   [[ $rc -ne 0 ]] && ok "relative symlinked subdirectory is refused" \
     || bad "relative symlinked subdir silently dropped its contents (rc=$rc)"
   has "the refusal names the symlinked directory" "$out" "symlinked directory inside the backup"
+fi
+if group 31 "restore fidelity"; then
+  mk_fixture g31; seed_home; commit_baseline
+  check "verify passes on a fresh snapshot" env HOME="$FH" "$CLI" verify
+  eq "json mismatched is empty" "$(obj verify | jq '.mismatched|length')" "0"
+  # A file changed since the last run legitimately differs from the backup --
+  # a fast test (and a slow real one) both rewrite configs after the run
+  # finishes. "Since" is the last-run stamp's MTIME (see lib/verify.sh's
+  # header), which is why this backdates it with touch -d rather than editing
+  # its content.
+  printf 'changed\n' > "$FH/.bashrc"
+  touch -d '1 hour ago' "$FR/manifests/.last-run"
+  git -C "$FR" commit -qam x 2>/dev/null || true
+  eq "a file changed since the last run is skipped, not failed" "$(obj verify | jq -r .ok)" "true"
+  # Now the mismatch predates the last-run stamp: it must be reported, not
+  # silently swallowed by the same exception.
+  touch -d '1 hour ago' "$FH/.bashrc"
+  touch "$FR/manifests/.last-run"
+  fails "a mismatch older than the last run fails verify" env HOME="$FH" "$CLI" verify
+fi
+if [[ "${OMABACKUP_REAL_REPO:-0}" == 1 ]] && group 31R "restore fidelity against the REAL backup"; then
+  unset OMABACKUP_CONFIG OMABACKUP_STATE_DIR OMABACKUP_STOCK_DIR OMABACKUP_SKIP_ETC
+  check "real backup verifies" "$CLI" verify
 fi
 if group 32 "a .gitignore-excluded file is committed into the drift report"; then
   # The EXCLUDED lines were appended AFTER `git add`, so they were never
