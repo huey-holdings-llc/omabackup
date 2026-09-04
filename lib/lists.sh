@@ -4,13 +4,16 @@
 # semantics out the hard way: read the comments before changing the matching.
 # shellcheck shell=bash
 
-shopt -s nullglob
-
 # lists_load: fill COVERED (from allowlist.txt) and IGNORED (from
-# drift-ignore.txt), expanding allowlist globs against $HOME.
+# drift-ignore.txt), expanding allowlist globs against $HOME. nullglob is
+# turned on only around that glob loop, then put back the way it was found,
+# so sourcing this library does not change glob behavior for the rest of the
+# process (bin/omabackup sources every lib/*.sh once, at startup).
 lists_load() {
   COVERED=()
-  local e p _oldifs
+  local e p _oldifs _nullglob_was_on
+  shopt -q nullglob && _nullglob_was_on=1 || _nullglob_was_on=0
+  shopt -s nullglob
   while IFS= read -r e; do
     [ -z "$e" ] && continue
     # Strip the '?' optional marker used by snapshot.sh, or these entries look
@@ -21,6 +24,7 @@ lists_load() {
     IFS=$_oldifs
     COVERED+=("$e")
   done < <(read_list "$DATA_REPO/allowlist.txt")
+  [ "$_nullglob_was_on" = 1 ] || shopt -u nullglob
 
   IGNORED=()
   while IFS= read -r e; do [ -n "$e" ] && IGNORED+=("$e"); done < <(read_list "$DATA_REPO/drift-ignore.txt")
