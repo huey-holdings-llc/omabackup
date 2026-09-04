@@ -1132,6 +1132,7 @@ fi
 if group 60 "setup creates a data repo, seeds, marker, config"; then
   T="$ROOT/g60"; FH="$T/home"; mkdir -p "$FH" "$T/state"
   export OMABACKUP_CONFIG="$T/cfg.json" OMABACKUP_STATE_DIR="$T/state" OMABACKUP_STOCK_DIR="$STOCK_SRC" OMABACKUP_NET=0 OMABACKUP_NOTIFY=0 OMABACKUP_SKIP_ETC=1 OMABACKUP_SKIP_TIMERS=1
+  export OMABACKUP_MIN_FILES=1 OMABACKUP_MIN_ALLOWLIST=1
 
   fails "setup: --data-repo with no value is usage (exit 2)" env HOME="$FH" "$CLI" setup --data-repo
   [[ $(env HOME="$FH" "$CLI" setup --data-repo >/dev/null 2>&1; echo $?) == 2 ]] \
@@ -1151,6 +1152,28 @@ if group 60 "setup creates a data repo, seeds, marker, config"; then
   check "setup is idempotent" env HOME="$FH" "$CLI" setup --data-repo "$T/data" --no-timers --yes
   eq "a rerun preserves an unrelated config edit (merge, not replace)" "$(jq -r .timer.calendar "$OMABACKUP_CONFIG")" "hourly"
   eq "phase still done after rerun" "$(jq -r .setupPhase "$OMABACKUP_CONFIG")" "done"
+
+  # A --no-timers run stamps setupPhase=done without ever running the first
+  # snapshot; a LATER rerun without --no-timers must still run it (whether
+  # the first snapshot ran is decided by manifests/.last-run, never by
+  # phase rank, since "done" is always the phase at the end of ANY run).
+  [[ ! -f "$T/data/manifests/.last-run" ]] && ok "no snapshot has run yet" || bad ".last-run already present before the timers-on rerun"
+  # Restore the default calendar (the earlier merge check above set it to
+  # "hourly" on purpose) so this check has a known value to grep for.
+  jq '.timer.calendar="daily"' "$OMABACKUP_CONFIG" > "$T/cfg.tmp" && mv "$T/cfg.tmp" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  check "setup rerun with timers on runs the first snapshot" env HOME="$FH" OMABACKUP_SKIP_TIMERS=1 "$CLI" setup --data-repo "$T/data" --yes
+  [[ -f "$T/data/manifests/.last-run" ]] && ok "the first snapshot ran (manifests/.last-run exists)" || bad "manifests/.last-run missing: first snapshot never ran"
+  [[ -f "$FH/.config/systemd/user/omabackup-snapshot.timer" ]] && ok "unit files landed under ~/.config/systemd/user" || bad "unit files missing"
+  grep -q '^OnCalendar=daily$' "$FH/.config/systemd/user/omabackup-snapshot.timer" \
+    && ok "the snapshot timer has @CALENDAR@ substituted" || bad "OnCalendar=daily not found in the snapshot timer"
+
+  # A config that exists but is not valid JSON must not crash the wizard
+  # under set -e: it must refuse cleanly, one JSON object, exit 1. Placed
+  # last since it leaves the config broken.
+  printf 'not json' > "$OMABACKUP_CONFIG"
+  out60=$(env HOME="$FH" "$CLI" setup --data-repo "$T/data" --no-timers --yes --json 2>/dev/null); rc60=$?
+  eq "an unparsable existing config refuses instead of crashing (exit 1)" "$rc60" "1"
+  eq "the refusal is exactly one JSON object with ok false" "$(jq -c '[.ok]' <<<"$out60" 2>/dev/null)" "[false]"
 fi
 
 if group 61 "setup --import adopts an existing engine repo; unattended trust stays opt-in"; then

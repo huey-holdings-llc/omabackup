@@ -27,10 +27,13 @@ cmd_setup() {
   [[ -n "$import" && -n "$data" ]] && usage_die "setup: --import and --data-repo are exclusive"
 
   # Read the phase a PRIOR run reached before anything below touches config,
-  # so a rerun can skip the two steps expensive enough to be worth skipping
-  # (setup_first_scan, setup_first_snapshot) instead of repeating them.
+  # so a rerun can skip setup_first_scan instead of repeating it. An
+  # unparsable existing config counts as "no prior phase": config_load
+  # below will refuse it properly once it is actually loaded.
   local prior_phase=""
-  config_exists && prior_phase=$(jq -r '.setupPhase // ""' "$CONFIG_FILE" 2>/dev/null)
+  if config_exists; then
+    prior_phase=$(jq -r '.setupPhase // ""' "$CONFIG_FILE" 2>/dev/null) || prior_phase=""
+  fi
 
   setup_tools
   if [[ -n "$import" ]]; then
@@ -47,7 +50,14 @@ cmd_setup() {
   setup_cli_link
   [[ $notimers == 1 ]] || setup_units
   setup_shell_nag "$yes"
-  [[ $notimers == 1 ]] || setup_phase_at_least "$prior_phase" snapshot || setup_first_snapshot
+  # Whether the first snapshot ran is NOT decided by phase rank: a
+  # --no-timers run still stamps every phase including "done" (so a rerun
+  # is idempotent), which would otherwise make a later, timers-on rerun
+  # see "done" >= "snapshot" and skip the first snapshot forever. The real
+  # question is whether one has ever actually completed on this data repo,
+  # and manifests/.last-run (written by the snapshot pipeline itself) is
+  # the one thing that answers that.
+  [[ $notimers == 1 ]] || [[ -f "$DATA_REPO/manifests/.last-run" ]] || setup_first_snapshot
   setup_phase "done"
   if [[ $JSON == 1 ]]; then
     jq -cn --arg r "$DATA_REPO" '{ok:true, dataRepo:$r}'
@@ -145,7 +155,10 @@ setup_seed() {
   chmod 700 "$DATA_REPO/home"
   setup_marker
   git -C "$DATA_REPO" add -A >/dev/null
-  git -C "$DATA_REPO" -c user.name=OmaBackup -c user.email=omabackup@localhost commit -qm "omabackup: initial layout" 2>/dev/null || true
+  # `git commit -q` does not suppress "nothing to commit, working tree
+  # clean" on stdout when a rerun has nothing new to lay down; that line
+  # must never leak into a --json caller's single JSON object.
+  git -C "$DATA_REPO" -c user.name=OmaBackup -c user.email=omabackup@localhost commit -qm "omabackup: initial layout" >/dev/null 2>&1 || true
   setup_phase "seeded"
 }
 
