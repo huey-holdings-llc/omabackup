@@ -1,2 +1,56 @@
+# omabackup allowlist (seed list)
+#
 # Paths under $HOME that omabackup backs up, one per line, relative to $HOME.
-# Prefix a line with ? to mark it optional: a missing optional entry is skipped, a missing required entry halts the snapshot.
+# Directories are copied recursively. Globs are expanded by the shell. Lines
+# starting with # are comments.
+#
+# A leading '?' marks an entry optional: a missing optional entry is skipped
+# and reported as gone instead of halting the run. A required entry (no
+# leading '?') that does not resolve halts the snapshot by design, and no two
+# Omarchy machines carry the exact same set of stock files, so every entry
+# below ships marked optional. Once you have confirmed a path exists on your
+# machine and want a missing copy to stop the backup instead of just being
+# noted, drop its '?'.
+#
+# Anything not listed here is never backed up; the drift verb reports what is
+# missing.
+
+# --- Hyprland ---
+?.config/hypr
+
+# --- Omarchy: the desktop's identity ---
+?.config/omarchy/themebook.json
+?.config/omarchy/shell.json
+?.config/omarchy/shell.toml
+?.config/omarchy/displays.json
+?.config/omarchy/dock.json
+?.config/omarchy/defaults
+?.config/omarchy/hooks
+?.config/omarchy/themes
+?.config/omarchy/extensions
+?.config/omarchy/branding
+
+# --- Terminals ---
+?.config/alacritty
+?.config/foot
+?.config/ghostty
+?.config/kitty
+
+# --- Shell / prompt / TUI ---
+?.bashrc
+?.bash_profile
+?.XCompose
+?.config/starship.toml
+?.config/btop
+?.config/tmux
+?.config/autostart
+?.config/chromium-flags.conf
+
+# --- Deliberately excluded (do not add without reading lib/drift.sh) ---
+#   .ssh/                        private key
+#   .config/gh/hosts.yml         OAuth token
+#   .config/wireguard/           live PrivateKey= values
+#   .local/state/syncthing/      key.pem, https-key.pem, API key
+#   .config/omarchy/plugins/     third-party plugin clones, treated as regenerable
+#   .config/Code/User/globalStorage, workspaceStorage   credentials
+#   dconf/user (binary)          captured as manifests/dconf.txt instead

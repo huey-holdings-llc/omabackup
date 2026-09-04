@@ -83,13 +83,13 @@ main() {
         printf '\033[1;31m[omabackup] not configured -- run: omabackup setup\033[0m\n'
         exit 1
       fi ;;
-    snapshot|drift|allow|ignore|resolve-gone|push|lint|restore|verify|timer|self-test|open) config_load ;;
+    snapshot|drift|allow|ignore|resolve-gone|push|lint|restore|verify|timer|self-test|open|notify-failure) config_load ;;
     *) usage_die "unknown verb '$verb'" ;;
   esac
   case "$verb" in
     help|-h|--help) if [[ $JSON == 1 ]]; then jq -cn --arg u "$(usage)" '{ok:true, usage:$u}'; else usage; fi ;;
     version) if [[ $JSON == 1 ]]; then jq -cn --arg v "$VERSION" '{version:$v}'; else echo "$VERSION"; fi ;;
-    setup|snapshot|drift|status|allow|ignore|resolve-gone|push|lint|restore|verify|health|timer|self-test|open)
+    setup|snapshot|drift|status|allow|ignore|resolve-gone|push|lint|restore|verify|health|timer|self-test|open|notify-failure)
       local fn="cmd_${verb//-/_}"
       declare -F "$fn" >/dev/null || die "verb '$verb' is not implemented yet"
       "$fn" "${ARGS[@]}" ;;

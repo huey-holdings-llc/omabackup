@@ -1,2 +1,31 @@
-# Normalization rules applied to backed-up files before they are compared or committed, one per line.
-# Format and semantics land with Task 15.
+# Normalization rules applied to the staged tree before hashing and commit.
+# Format: <path glob under the staging root><TAB><sed expression>
+#
+# Some backed-up files carry values that change on their own: Omarchy's theme
+# rotation rewrites VS Code's colorTheme and dconf's icon theme on a timer,
+# and themebook.json stamps a "last seen" time every few minutes. Left raw,
+# these produce a stream of commits with no real change of intent, which is
+# how a backup log stops being readable.
+#
+# The intent is still backed up (themebook favorites, default wallpapers, the
+# cycle settings). Only the derived follower values below are neutralized,
+# and Omarchy's own theme hook restores them on the next theme change.
+#
+# Add a newly discovered volatile field with one more line here, no code
+# change needed. Keep expressions anchored and conservative: a bad sed rule
+# can corrupt JSON, and normalize runs before every commit. Prefer deleting a
+# line over inventing a placeholder value, since restore replays whatever is
+# here and a placeholder must stay valid for the app that reads it.
+
+home/.config/Code/User/settings.json	s/"workbench.colorTheme"[[:space:]]*:[[:space:]]*"[^"]*"/"workbench.colorTheme": "Default Dark Modern"/g
+# Delete, not placeholder: dconf.txt is fed to `dconf load` on restore, and a
+# placeholder value would set a theme that does not exist. Omarchy's theme
+# hook rewrites these anyway.
+manifests/dconf.txt	/^icon-theme=/d
+manifests/dconf.txt	/^gtk-theme=/d
+manifests/dconf.txt	/^cursor-theme=/d
+home/.config/omarchy/themebook.json	s/"lastAt": *[0-9][0-9]*/"lastAt":0/g
+home/.config/omarchy/themebook.json	s/"wallpaperLastAt": *[0-9][0-9]*/"wallpaperLastAt":0/g
+home/.config/omarchy/themebook.json	s/"lastSlug":"[^"]*"/"lastSlug":""/g
+home/.config/omarchy/themebook.json	s/"lastPath":"[^"]*"/"lastPath":""/g
+home/.config/omarchy/themebook.json	s/"recents":\[[^]]*\]/"recents":[]/g

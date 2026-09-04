@@ -63,3 +63,14 @@ notify() {
     notify-send -u "$urg" "$head" "$body" >/dev/null 2>&1 || true
   fi
 }
+
+# cmd_notify_failure snapshot|selftest: hidden verb, called from ExecStopPost
+# / OnFailure= in the shipped units. Not in `usage`; not something a user
+# types day to day.
+cmd_notify_failure() {
+  case "${1:-}" in
+    snapshot) notify "OmaBackup: snapshot FAILED" "Run: journalctl --user -u omabackup-snapshot -n 50" critical ;;
+    selftest) notify "OmaBackup: self-test FAILED" "A safety guard has stopped working. Run: omabackup self-test --real" critical ;;
+    *) usage_die "notify-failure snapshot|selftest" ;;
+  esac
+}

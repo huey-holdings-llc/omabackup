@@ -116,6 +116,17 @@ if group 00 "baseline: version, help, config validation"; then
     && ok "self-test: unknown flag exits 2" || bad "self-test: unknown flag exit code"
   eq "self-test: refuses to run from inside a running suite" "$(obj self-test | jq -r .ok)" "false"
   has "the refusal names the guard" "$(obj self-test)" "recursively"
+
+  # notify-failure: hidden verb (not in usage), used from ExecStopPost / OnFailure=
+  # in the shipped units. A bad arg is a usage error like any other verb; a
+  # known one is silent, since the fixture (like the unit files) runs with
+  # OMABACKUP_NOTIFY=0.
+  fails "notify-failure: unknown arg is usage (exit 2)" ob notify-failure bogus
+  [[ $(ob notify-failure bogus >/dev/null 2>&1; echo $?) == 2 ]] \
+    && ok "notify-failure: unknown arg exits 2" || bad "notify-failure: unknown arg exit code"
+  nf_out=$(ob notify-failure snapshot); nf_rc=$?
+  eq "notify-failure snapshot exits 0" "$nf_rc" "0"
+  eq "notify-failure snapshot is silent with OMABACKUP_NOTIFY=0" "$nf_out" ""
 fi
 
 # Later tasks append groups here, in numeric order, each starting with mk_fixture.

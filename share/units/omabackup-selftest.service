@@ -1,0 +1,9 @@
+[Unit]
+Description=OmaBackup: verify the guards still fire
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/omabackup self-test --real
+ExecStopPost=/bin/sh -c 'test "$$EXIT_STATUS" = "0" || %h/.local/bin/omabackup notify-failure selftest'
+Nice=15
+TimeoutStartSec=20min

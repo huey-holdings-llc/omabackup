@@ -1,2 +1,17 @@
-# Paths under /etc that omabackup backs up, one per line, relative to /etc.
-# Prefix a line with ? to mark it optional: a missing optional entry is skipped, a missing required entry halts the snapshot.
+# /etc files worth keeping as a reference copy. restore --etc only diffs
+# these against the live /etc and never writes; a malformed pam.d file locks
+# you out, and an old fstab can make a machine unbootable, so nothing here is
+# ever applied automatically.
+#
+# Paths under /etc that omabackup backs up, one per line, relative to /etc
+# (write the full /etc/... path). A missing entry is skipped with a warning,
+# never fatal: unlike allowlist.txt, nothing here halts the snapshot, since a
+# reference-only copy is worth having on some machines and irrelevant on
+# others.
+
+# --- Omarchy installer: hibernate/resume wiring (limine bootloader) ---
+# resume_offset is the one value you cannot rediscover after a rebuild.
+/etc/default/limine
+/etc/limine-entry-tool.d/resume.conf
+/etc/limine-entry-tool.d/rtc-alarm.conf
+/etc/mkinitcpio.conf.d/omarchy_resume.conf

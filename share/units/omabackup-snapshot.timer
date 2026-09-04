@@ -1,0 +1,10 @@
+[Unit]
+Description=OmaBackup daily snapshot
+
+[Timer]
+OnCalendar=@CALENDAR@
+Persistent=true
+RandomizedDelaySec=@JITTER@
+
+[Install]
+WantedBy=timers.target
