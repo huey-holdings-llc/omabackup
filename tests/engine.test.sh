@@ -58,7 +58,7 @@ mk_fixture() {
   git -C "$FR" add -A && git -C "$FR" commit -qm "fixture"
   export OMABACKUP_CONFIG="$T/cfg/config.json" OMABACKUP_STATE_DIR="$T/state" OMABACKUP_STOCK_DIR="$STOCK"
   export OMABACKUP_NET=0 OMABACKUP_NOTIFY=0 OMABACKUP_SKIP_ETC=1 OMABACKUP_SKIP_TIMERS=1
-  export OMABACKUP_MIN_FILES=1 OMABACKUP_MIN_ALLOWLIST=1 OMABACKUP_LOCK_WAIT=2
+  export OMABACKUP_MIN_FILES=1 OMABACKUP_MIN_ALLOWLIST=1 OMABACKUP_LOCK_WAIT=2 OMABACKUP_MIN_RESTORE=1
   jq -n --arg r "$FR" --arg u "$BARE" '{dataRepo:$r, remote:{url:$u, trusted:true}}' > "$OMABACKUP_CONFIG"
   chmod 600 "$OMABACKUP_CONFIG"
 }
@@ -202,6 +202,81 @@ if group 05 "permissions are recorded in modes.txt"; then
   modes_has '700 home/.config/appb' \
     && ok "modes.txt records the 700 directory" || bad "modes.txt missing the directory mode"
 fi
+if group 06 "restore --configs: dry run touches nothing, --apply backs up and never deletes, /etc never writes"; then
+  mk_fixture g06; seed_home
+  mkdir -p "$FH/.config/appb"; printf '{"a":1}\n' > "$FH/.config/appb/settings.json"
+  chmod 600 "$FH/.config/appb/settings.json"; chmod 700 "$FH/.config/appb"
+  allow '.config/appb'; allow '.config/mytool'
+  printf 'x\n' > "$FH/.config/mytool/trailing .conf "; chmod 600 "$FH/.config/mytool/trailing .conf "
+  check "baseline snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
+
+  # Local drift after the snapshot: one tracked file edited, one file the
+  # snapshot never saw at all.
+  printf 'LOCAL EDIT\n' > "$FH/.config/mytool/mytool.conf"
+  printf 'keepme\n' > "$FH/.config/mytool/not-in-snapshot.conf"
+  before=$(find "$FH" -type f -exec md5sum {} + 2>/dev/null | sort | md5sum)
+
+  # --- dry run: $HOME is byte-for-byte unchanged ---
+  check "dry run exits 0" env HOME="$FH" "$CLI" restore --configs
+  after=$(find "$FH" -type f -exec md5sum {} + 2>/dev/null | sort | md5sum)
+  eq "dry run left \$FH byte-for-byte unchanged" "$after" "$before"
+  eq "json: applied is false on a dry run" "$(obj restore --configs | jq -r .applied)" "false"
+  eq "json: a dry run writes nothing" "$(obj restore --configs | jq -r '.wrote | length')" "0"
+
+  # --- --apply: overwrites the tracked file, leaves a .bak.<epoch> copy,
+  # never deletes the file the snapshot never saw ---
+  out=$(obj restore --configs --apply)
+  eq "json: applied is true" "$(jq -r .applied <<<"$out")" "true"
+  eq "the tracked file was restored" "$(cat "$FH/.config/mytool/mytool.conf")" "setting=1"
+  bak=$(find "$FH/.config/mytool" -maxdepth 1 -name 'mytool.conf.bak.*' -print -quit 2>/dev/null)
+  [ -n "$bak" ] && ok "the overwritten file left a .bak.<epoch> safety copy" \
+    || bad "no .bak.<epoch> safety copy was left"
+  [ -n "$bak" ] && eq "the safety copy holds the pre-restore content" "$(cat "$bak" 2>/dev/null)" "LOCAL EDIT"
+  [ -f "$FH/.config/mytool/not-in-snapshot.conf" ] \
+    && ok "a file absent from the snapshot is not deleted" || bad "restore deleted an untracked file"
+  # shellcheck disable=SC2088  # literal "~/" prefix inside a jq filter/expected value, not a path to expand
+  eq "json names the restored file in wrote[]" \
+    "$(jq -r '.wrote[] | select(. == "~/.config/mytool/mytool.conf")' <<<"$out")" "~/.config/mytool/mytool.conf"
+  # shellcheck disable=SC2088  # literal "~/" prefix inside a jq filter/expected value, not a path to expand
+  eq "json names the backed-up file in backed_up[]" \
+    "$(jq -r '.backed_up[] | select(. == "~/.config/mytool/mytool.conf")' <<<"$out")" "~/.config/mytool/mytool.conf"
+
+  # --- permissions and a trailing-space filename survive a restore into a
+  # FRESH $HOME. Git checks every directory out as 755 and every file gets
+  # whatever the checkout's umask is -- only the modes.txt replay fixes this,
+  # so the repo's checked-out copy is corrupted the same way first, or a mode
+  # that was simply never wrong would prove nothing. ---
+  chmod 755 "$FR/home/.config/appb"
+  RH="$T/restored"; mkdir -p "$RH"
+  check "restore into a fresh \$HOME" env HOME="$RH" "$CLI" restore --configs --apply
+  [ "$(stat -c %a "$RH/.config/appb/settings.json" 2>/dev/null)" = "600" ] \
+    && ok "restored file is 600, not 644" || bad "restored file lost its mode"
+  [ "$(stat -c %a "$RH/.config/appb" 2>/dev/null)" = "700" ] \
+    && ok "restored directory is 700, not 755 (~/.ssh would be world-listable)" || bad "restored directory lost its mode"
+  [ "$(stat -c %a "$RH/.config/mytool/trailing .conf " 2>/dev/null)" = "600" ] \
+    && ok "trailing-space filename keeps its mode" || bad "trailing-space filename lost its mode"
+  [ -z "$(find "$RH" -name .gitkeep -print -quit 2>/dev/null)" ] \
+    && ok "no .gitkeep placeholders restored into \$HOME" || bad ".gitkeep litter restored into \$HOME"
+  chmod 700 "$FR/home/.config/appb"
+
+  # --- /etc is diff-only: never writes, even under --apply ---
+  ETCROOT="$T/etc-live"; mkdir -p "$ETCROOT"
+  mkdir -p "$FR/etc/ssh"; printf 'PermitRootLogin no\n' > "$FR/etc/ssh/sshd_config"
+  before_etc=$(find "$ETCROOT" -type f 2>/dev/null | sort | md5sum)
+  etc_out=$(env HOME="$FH" OMABACKUP_ETC_ROOT="$ETCROOT" "$CLI" restore --etc --apply 2>&1)
+  after_etc=$(find "$ETCROOT" -type f 2>/dev/null | sort | md5sum)
+  eq "--etc never writes under the \$FH-mapped etc root, even with --apply" "$after_etc" "$before_etc"
+  has "the comparison reports the missing file" "$etc_out" "MISSING"
+  has "the comparison names the file" "$etc_out" "/etc/ssh/sshd_config"
+fi
+if group 17 "restore refuses a hollow snapshot"; then
+  mk_fixture g17; seed_home; commit_baseline
+  out=$(env HOME="$FH" OMABACKUP_MIN_RESTORE=9999 "$CLI" restore --configs --apply 2>&1); rc=$?
+  [ "$rc" -ne 0 ] && ok "a hollow snapshot is refused" || bad "restore accepted a hollow snapshot"
+  has "the floor message is explicit" "$out" "refusing to restore"
+  eq "json failures is nonzero" \
+    "$(OMABACKUP_MIN_RESTORE=9999 obj restore --configs --apply | jq -r '.failures > 0')" "true"
+fi
 if group 07 "drift detection"; then
   mk_fixture g07; seed_home
   out=$(ob drift)
@@ -285,12 +360,42 @@ if group 16 "modes survive a filename with a trailing space"; then
   modes_has '600 home/.config/mytool/trailing .conf ' \
     && ok "trailing-space filename keeps its recorded mode" || bad "trailing-space filename lost its mode"
 fi
-# Groups 18, 19 and 20 (self-test.sh:295-324) assert restore behaviour
-# (spurious type conflicts, a real file-vs-directory conflict, a truncated
-# package manifest refused), and group 38 (497-503) asserts the staleness
-# check's handling of a garbage or future manifests/.last-run stamp. Neither
-# the restore verb nor the health verb exists yet, so both land with the verb
-# they exercise rather than sitting here as permanently red placeholders.
+if group 18 "type-conflict guard does not fire spuriously"; then
+  # `while IFS= read -r ty rel` (no field split) made every entry look like a
+  # conflict and ran `cp -a "$HOME/" ...` once per file -- a recursive copy of
+  # $HOME into itself. Restoring into an EMPTY $HOME must produce zero
+  # conflicts and zero runaway backup artifacts.
+  mk_fixture g18; seed_home; commit_baseline
+  RH="$T/restored"; rm -rf "$RH"; mkdir -p "$RH"
+  out=$(env HOME="$RH" "$CLI" restore --configs --apply 2>&1)
+  n_tc=$(grep -c 'type conflict' <<<"$out" || true)
+  [ "${n_tc:-0}" -eq 0 ] && ok "no spurious type conflicts on a clean restore" \
+    || bad "$n_tc spurious type-conflict warning(s) (field-splitting bug)"
+  [ -z "$(find "$RH" -name '*.bak.*' -print -quit 2>/dev/null)" ] \
+    && ok "no runaway .bak artifacts on a clean restore" || bad "runaway backup artifacts were created"
+fi
+if group 19 "a REAL type conflict is detected and backed up"; then
+  mk_fixture g19; seed_home; allow '.config/mytool'; commit_baseline
+  RH="$T/restored"; rm -rf "$RH"; mkdir -p "$RH/.config"
+  printf 'i am a file\n' > "$RH/.config/mytool"   # snapshot has mytool as a DIRECTORY
+  out=$(env HOME="$RH" "$CLI" restore --configs --apply 2>&1)
+  has "file-vs-directory conflict is reported" "$out" "type conflict at ~/.config/mytool"
+  [ -n "$(find "$RH/.config" -maxdepth 1 -name 'mytool.bak.*' -print -quit 2>/dev/null)" ] \
+    && ok "the conflicting file was backed up" || bad "the conflicting file was NOT backed up"
+  [ -d "$RH/.config/mytool" ] && ok "the directory now exists in its place" || bad "the directory was not restored"
+fi
+if group 20 "truncated package manifest actually skips"; then
+  mk_fixture g20; seed_home; commit_baseline
+  printf 'bash\ncoreutils\n' > "$FR/manifests/pacman-native.txt"
+  out=$(ob restore --packages)
+  has "a truncated manifest is refused" "$out" "looks truncated"
+  ! grep -qE 'pacman -S|Installing missing' <<<"$out" \
+    && ok "did not fall through to install" || bad "fell through and tried to install anyway"
+  eq "json marks it skipped, with the reason" "$(obj restore --packages | jq -r '.skipped[0].reason')" \
+    "looks truncated (2 entries, floor 100)"
+fi
+# Group 38 (self-test.sh:497-503, staleness against a garbage/future
+# manifests/.last-run stamp) lands with the health verb -- see below.
 if group 21 "list hygiene"; then
   mk_fixture g21; seed_home; commit_baseline
   check "clean lists lint clean" env HOME="$FH" "$CLI" lint

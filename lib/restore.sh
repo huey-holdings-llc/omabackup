@@ -1,0 +1,363 @@
+#!/usr/bin/env bash
+# Restore this machine's configuration from the data repo. Dry-run unless
+# --apply is passed. Every stage is opt-in. Nothing is ever deleted from
+# $HOME -- an overwritten file or a type-conflicting item is always moved
+# aside to a "<path>.bak.<epoch>" sibling first.
+#
+# Ported from hp-laptop-config/bin/restore.sh (all 308 lines). Sourced by
+# bin/omabackup; never executed.
+#
+# ERREXIT DISCIPLINE: every command whose exit status is inspected sits on
+# the left of `||` or inside an `if`. There is no bare `var=$(cmd)` around a
+# command that is allowed to fail; process substitutions (`< <(...)`) are
+# exempt by construction since their exit status is never checked by bash.
+# shellcheck shell=bash
+
+# ---------------------------------------------------------------------------
+# restore_note MSG: advisory, does not count against failures.
+restore_note() { log "  $*"; }
+# restore_warn MSG: a real problem. Prints, and counts toward RESTORE_FAILURES
+# the same way the source script's warn() did.
+restore_warn() { warn "$*"; RESTORE_FAILURES=$((RESTORE_FAILURES+1)); }
+# restore_skip PATH REASON: record a stage (or an item within one) that was
+# not attempted.
+restore_skip() { RESTORE_SKIPPED+=("{\"path\":$(jstr "$1"),\"reason\":$(jstr "$2")}"); }
+
+# ---------------------------------------------------------- configs
+# restore_stage_configs APPLY: copy $DATA_REPO/home back into $HOME.
+restore_stage_configs() {
+  local apply=$1 min_restore="${OMABACKUP_MIN_RESTORE:-50}"
+
+  if [[ ! -d "$DATA_REPO/home" ]]; then
+    restore_warn "no home/ directory in the repo -- nothing to restore"
+    restore_skip "home" "no home/ directory in the repo"
+    return 0
+  fi
+  local have_n
+  have_n=$(find "$DATA_REPO/home" \( -type f -o -type l \) -printf 'x\0' 2>/dev/null | tr -dc '\0' | wc -c) || true
+  if [[ "${have_n:-0}" -lt "$min_restore" ]]; then
+    restore_warn "refusing to restore: home/ holds only ${have_n:-0} files (floor $min_restore)"
+    restore_skip "home" "refusing to restore: home/ holds only ${have_n:-0} files (floor $min_restore)"
+    return 0
+  fi
+
+  local epoch; epoch=$(date +%s)
+  log "Restoring configs into \$HOME"
+
+  # Type conflicts: a FILE in $HOME where the snapshot has a DIRECTORY (or
+  # vice versa, or a symlink either way) is invisible to the per-file backup
+  # loop below and rsync would otherwise silently replace it with nothing
+  # saved. Back those up explicitly first, then clear them so rsync can lay
+  # down the correct type. NUL-delimited: a newline in a directory name must
+  # not be able to forge a second record.
+  local rec ty rel tgt live
+  while IFS= read -r -d '' rec; do
+    ty="${rec%% *}"; rel="${rec#* }"
+    [[ -n "$rel" ]] || continue
+    tgt="$HOME/$rel"
+    [[ -e "$tgt" || -L "$tgt" ]] || continue
+    if [[ -L "$tgt" ]]; then live=l
+    elif [[ -d "$tgt" ]]; then live=d
+    else live=f; fi
+    [[ "$ty" != "$live" ]] || continue
+    if [[ "$apply" == 1 ]]; then
+      if cp -a "$tgt" "$tgt.bak.$epoch" 2>/dev/null; then
+        # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
+        RESTORE_BACKED_UP+=("$(jstr "~/$rel")")
+        rm -rf -- "$tgt"
+        restore_warn "type conflict at ~/$rel ($live vs $ty in snapshot); backed up to ~/$rel.bak.$epoch"
+      else
+        restore_warn "could not back up type conflict at ~/$rel (data about to be overwritten was NOT saved)"
+      fi
+    else
+      # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
+      RESTORE_WOULD+=("$(jstr "~/$rel (type conflict: $live live vs $ty in snapshot)")")
+    fi
+  done < <(cd "$DATA_REPO/home" && find . -mindepth 1 -printf '%y %P\0')
+
+  # Per-file safety copy: anything about to be overwritten with different
+  # content is copied aside first, preserving its mode. .gitkeep is a git-side
+  # placeholder for an otherwise-empty directory and must never land in $HOME.
+  while IFS= read -r rel; do
+    case "$rel" in */.gitkeep|.gitkeep) continue ;; esac
+    tgt="$HOME/$rel"
+    if [[ "$apply" == 1 ]]; then
+      if [[ -e "$tgt" ]] && ! cmp -s "$DATA_REPO/home/$rel" "$tgt" 2>/dev/null; then
+        if cp -p "$tgt" "$tgt.bak.$epoch" 2>/dev/null; then
+          # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
+          RESTORE_BACKED_UP+=("$(jstr "~/$rel")")
+        else
+          restore_warn "could not back up ~/$rel before overwriting it"
+        fi
+      fi
+      # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
+      RESTORE_WROTE+=("$(jstr "~/$rel")")
+    else
+      # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
+      RESTORE_WOULD+=("$(jstr "~/$rel")")
+    fi
+  done < <(cd "$DATA_REPO/home" && find . -type f -printf '%P\n')
+
+  if [[ "$apply" == 1 ]]; then
+    # --delete is deliberately NOT used: never remove a $HOME file absent
+    # here. .gitkeep itself is excluded -- rsync -a still creates the
+    # directory that held it.
+    if ! rsync -a --exclude=.gitkeep "$DATA_REPO/home/" "$HOME/"; then
+      restore_warn "rsync reported errors -- some files were NOT restored (see above)"
+    fi
+    if [[ ! -f "$DATA_REPO/modes.txt" ]]; then
+      restore_warn "modes.txt missing -- every restored file will keep default permissions (600 files will be 644)"
+    else
+      log "Replaying file modes"
+      # modes.txt is untrusted input synced from the repo: validate every
+      # field before it ever reaches chmod. NUL-delimited for the same
+      # trailing-space-filename reason as everywhere else in this file.
+      local mode path
+      while IFS= read -r -d '' rec; do
+        mode="${rec%% *}"; path="${rec#* }"
+        case "$mode" in [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;; *) continue ;; esac
+        case "$path" in home/*) ;; *) continue ;; esac
+        case "$path" in *..*) restore_warn "suspicious modes.txt path, skipping: $path"; continue ;; esac
+        [[ -e "$DATA_REPO/$path" ]] || continue
+        tgt="$HOME/${path#home/}"
+        [[ -L "$tgt" ]] && continue
+        if [[ -f "$tgt" || -d "$tgt" ]]; then chmod "$mode" "$tgt"; fi
+      done < "$DATA_REPO/modes.txt"
+    fi
+    log "Done. Run 'omarchy restart shell' or log out for shell.json to take effect."
+  else
+    log "[dry] --configs would restore ${have_n:-0} file(s)/link(s) into \$HOME"
+  fi
+}
+
+# ---------------------------------------------------------- etc
+# restore_stage_etc APPLY: diff only, NEVER writes -- a bad pam.d file locks
+# you out and an old fstab can make a machine unbootable. Apply by hand only.
+# OMABACKUP_ETC_ROOT is the same test hook lib/drift.sh already uses to keep
+# this off the real /etc during the suite.
+restore_stage_etc() {
+  local etc_root="${OMABACKUP_ETC_ROOT:-/etc}" rel
+  log "/etc comparison (READ ONLY -- this stage never writes)"
+  if [[ ! -d "$DATA_REPO/etc" ]]; then
+    restore_note "no etc/ directory in the repo"
+    return 0
+  fi
+  while IFS= read -r rel; do
+    if [[ ! -e "$etc_root/$rel" ]]; then
+      [[ $JSON == 1 ]] || printf '  \033[1;33mMISSING\033[0m  /etc/%s\n' "$rel"
+    elif cmp -s "$DATA_REPO/etc/$rel" "$etc_root/$rel" 2>/dev/null; then
+      [[ $JSON == 1 ]] || printf '  same     /etc/%s\n' "$rel"
+    else
+      [[ $JSON == 1 ]] || printf '  \033[1;31mDIFFERS\033[0m  /etc/%s\n' "$rel"
+    fi
+  done < <(cd "$DATA_REPO/etc" && find . -type f -printf '%P\n')
+  [[ $JSON == 1 ]] || echo "  To inspect:  diff etc/<path> /etc/<path>"
+  [[ $JSON == 1 ]] || echo "  Apply by hand only. Never bulk-copy pam.d or fstab."
+}
+
+# ---------------------------------------------------------- packages
+# restore_stage_packages APPLY: install missing packages (interactive, never
+# --noconfirm -- an unattended install has previously pulled ~1.4GB of driver
+# packages nobody asked for).
+restore_stage_packages() {
+  local apply=$1 M="$DATA_REPO/manifests"
+  if [[ ! -f "$M/pacman-native.txt" ]]; then
+    restore_warn "no pacman-native.txt manifest -- skipping package restore"
+    restore_skip "manifests/pacman-native.txt" "manifest missing"
+    return 0
+  fi
+  clean() { tr -d '\r' | grep -vE '^\s*(#|$)' | sed -E -e 's/[[:space:]]+#.*$//' -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//'; }
+  local nat_total; nat_total=$(clean < "$M/pacman-native.txt" | grep -c . || true)
+  if [[ "${nat_total:-0}" -lt 100 ]]; then
+    restore_warn "pacman-native.txt has only ${nat_total:-0} entries -- looks truncated, skipping package install"
+    restore_skip "manifests/pacman-native.txt" "looks truncated (${nat_total:-0} entries, floor 100)"
+    return 0
+  fi
+  have pacman || { restore_warn "pacman not found -- cannot restore packages"; return 0; }
+
+  local missing_native missing_aur
+  missing_native=$(comm -23 <(clean < "$M/pacman-native.txt" | sort) <(pacman -Qqen 2>/dev/null | sort)) || true
+  missing_aur=$(comm -23 <(clean < "$M/pacman-aur.txt" 2>/dev/null | sort) <(pacman -Qqem 2>/dev/null | sort)) || true
+
+  local p
+  if [[ "$apply" != 1 ]]; then
+    if [[ -n "$missing_native" ]]; then
+      while IFS= read -r p; do [[ -n "$p" ]] && RESTORE_WOULD+=("$(jstr "package:$p")"); done <<<"$missing_native"
+    fi
+    if [[ -n "$missing_aur" ]]; then
+      while IFS= read -r p; do [[ -n "$p" ]] && RESTORE_WOULD+=("$(jstr "aur:$p")"); done <<<"$missing_aur"
+    fi
+    return 0
+  fi
+
+  log "Installing missing packages (interactive -- never --noconfirm)"
+  if [[ -n "$missing_native" ]]; then
+    local available gone
+    available=$(comm -12 <(printf '%s\n' "$missing_native") <(pacman -Slq 2>/dev/null | sort -u)) || true
+    gone=$(comm -23 <(printf '%s\n' "$missing_native") <(pacman -Slq 2>/dev/null | sort -u)) || true
+    if [[ -n "$gone" ]]; then
+      restore_warn "no longer in the repos (moved to AUR, renamed, or dropped): $(tr '\n' ' ' <<<"$gone")"
+    fi
+    if [[ -n "$available" ]]; then
+      if printf '%s\n' "$available" | sudo pacman -S --needed -; then
+        while IFS= read -r p; do [[ -n "$p" ]] && RESTORE_WROTE+=("$(jstr "package:$p")"); done <<<"$available"
+      else
+        restore_warn "some native packages failed -- continuing"
+      fi
+    fi
+  else
+    restore_note "native packages already satisfied"
+  fi
+  if [[ -n "$missing_aur" ]]; then
+    have yay || { restore_warn "yay not found -- cannot install AUR packages"; return 0; }
+    local -a aur_pkgs=()
+    mapfile -t aur_pkgs <<<"$missing_aur"
+    if yay -S --needed "${aur_pkgs[@]}"; then
+      for p in "${aur_pkgs[@]}"; do [[ -n "$p" ]] && RESTORE_WROTE+=("$(jstr "aur:$p")"); done
+    else
+      restore_warn "some AUR packages failed (unmaintained or removed from AUR?) -- continuing"
+    fi
+  else
+    restore_note "AUR packages already satisfied"
+  fi
+}
+
+# ---------------------------------------------------------- plugins
+# restore_stage_plugins APPLY: re-clone omarchy shell plugins from the TSV.
+restore_stage_plugins() {
+  local apply=$1 M="$DATA_REPO/manifests/omarchy-plugins.tsv"
+  if [[ ! -f "$M" ]]; then
+    restore_warn "no omarchy-plugins.tsv manifest -- skipping plugin restore"
+    restore_skip "manifests/omarchy-plugins.tsv" "manifest missing"
+    return 0
+  fi
+  local id url rev
+  while IFS=$'\t' read -r id url rev; do
+    case "$id" in \#*|"") continue ;; esac
+    if [[ -d "$HOME/.config/omarchy/plugins/$id" ]]; then
+      restore_note "present: $id"
+      continue
+    fi
+    if [[ "$apply" != 1 ]]; then
+      RESTORE_WOULD+=("$(jstr "plugin:$id")")
+      continue
+    fi
+    log "  adding $id from $url"
+    have omarchy || { restore_warn "  omarchy not found -- cannot add $id"; continue; }
+    # --yes is REQUIRED: omarchy-plugin-add gates on an interactive tty, and
+    # this loop's stdin is the TSV file -- without it every plugin aborts.
+    if omarchy plugin add --yes "$url" </dev/null; then
+      RESTORE_WROTE+=("$(jstr "plugin:$id")")
+      if [[ -n "${rev:-}" && -d "$HOME/.config/omarchy/plugins/$id/.git" ]]; then
+        git -C "$HOME/.config/omarchy/plugins/$id" checkout --quiet "$rev" 2>/dev/null \
+          || restore_note "pinned rev $rev unavailable for $id (left at HEAD)"
+      fi
+    else
+      restore_warn "  failed: $id"
+    fi
+  done < "$M"
+  log "Enable/placement comes from the restored shell.json."
+}
+
+# ---------------------------------------------------------- services
+# restore_stage_services APPLY: enable only units this machine had enabled,
+# skipping anything recorded as deliberately disabled. syncthing is skipped
+# unconditionally -- enabling it mints a NEW device ID and breaks every
+# existing peer pairing. OMABACKUP_SKIP_TIMERS keeps this stage from ever
+# calling systemctl, for the test suite.
+restore_stage_services() {
+  local apply=$1 M="$DATA_REPO/manifests"
+  if [[ ! -f "$M/systemd-user.txt" ]]; then
+    restore_warn "no systemd-user.txt manifest -- skipping service restore"
+    restore_skip "manifests/systemd-user.txt" "manifest missing"
+    return 0
+  fi
+  local -A off=()
+  local u
+  if [[ -f "$M/systemd-user-off.txt" ]]; then
+    while read -r u _rest; do [[ -n "$u" ]] && off["$u"]=1; done < "$M/systemd-user-off.txt"
+  fi
+  local skip_units=" syncthing.service "
+  while read -r u; do
+    case "$u" in ""|\#*) continue ;; esac
+    case "$skip_units" in *" $u "*) continue ;; esac
+    if [[ -n "${off[$u]:-}" ]]; then
+      restore_skip "$u" "disabled on purpose (systemd-user-off.txt)"
+      continue
+    fi
+    if [[ "$apply" != 1 || "${OMABACKUP_SKIP_TIMERS:-0}" == 1 ]]; then
+      RESTORE_WOULD+=("$(jstr "service:$u")")
+      continue
+    fi
+    have systemctl || { restore_warn "  systemctl not found -- cannot enable $u"; continue; }
+    if systemctl --user is-enabled "$u" >/dev/null 2>&1; then
+      continue
+    fi
+    if systemctl --user enable --now "$u" >/dev/null 2>&1; then
+      RESTORE_WROTE+=("$(jstr "service:$u")")
+    else
+      restore_warn "  could not enable $u"
+    fi
+  done < <(awk '{print $1}' "$M/systemd-user.txt" 2>/dev/null)
+  restore_note "system units are not enabled automatically; syncthing.service is never enabled automatically either"
+}
+
+# ---------------------------------------------------------------------------
+# restore_emit APPLY: the one JSON object, printed only when JSON=1.
+restore_emit() {
+  local apply=$1 ok=true
+  [[ "$RESTORE_FAILURES" -eq 0 ]] || ok=false
+  if [[ $JSON == 1 ]]; then
+    jq -cn \
+      --argjson ok "$ok" \
+      --argjson applied "$([[ "$apply" == 1 ]] && echo true || echo false)" \
+      --argjson would_write "[$(jjoin ${RESTORE_WOULD[@]+"${RESTORE_WOULD[@]}"})]" \
+      --argjson wrote "[$(jjoin ${RESTORE_WROTE[@]+"${RESTORE_WROTE[@]}"})]" \
+      --argjson backed_up "[$(jjoin ${RESTORE_BACKED_UP[@]+"${RESTORE_BACKED_UP[@]}"})]" \
+      --argjson skipped "[$(jjoin ${RESTORE_SKIPPED[@]+"${RESTORE_SKIPPED[@]}"})]" \
+      --argjson failures "$RESTORE_FAILURES" \
+      '{ok:$ok, applied:$applied, would_write:$would_write, wrote:$wrote, backed_up:$backed_up, skipped:$skipped, failures:$failures}'
+  else
+    echo
+    if [[ "$RESTORE_FAILURES" -gt 0 ]]; then
+      printf '\033[1;31m%d problem(s) during restore -- read the [warn] lines above.\033[0m\n' "$RESTORE_FAILURES"
+    else
+      printf '\033[1;32mRestore stages completed with no failures.\033[0m\n'
+    fi
+  fi
+}
+
+# cmd_restore --configs|--etc|--packages|--plugins|--services|--all [--apply]
+cmd_restore() {
+  data_repo_require
+  local do_configs=0 do_etc=0 do_packages=0 do_plugins=0 do_services=0 any=0 apply=0 a
+  for a in "$@"; do
+    case "$a" in
+      --configs)  do_configs=1; any=1 ;;
+      --etc)      do_etc=1; any=1 ;;
+      --packages) do_packages=1; any=1 ;;
+      --plugins)  do_plugins=1; any=1 ;;
+      --services) do_services=1; any=1 ;;
+      --all)      do_configs=1; do_packages=1; do_plugins=1; do_services=1; any=1 ;;
+      --apply)    apply=1 ;;
+      *) usage_die "restore: unknown flag '$a'" ;;
+    esac
+  done
+  [[ "$any" == 1 ]] || usage_die "restore: choose at least one of --configs --etc --packages --plugins --services --all"
+
+  RESTORE_WOULD=(); RESTORE_WROTE=(); RESTORE_BACKED_UP=(); RESTORE_SKIPPED=(); RESTORE_FAILURES=0
+
+  if ! take_lock; then
+    restore_warn "the repo lock is held (a snapshot may be running); try again shortly"
+  else
+    [[ "$do_configs" == 1 ]]  && restore_stage_configs "$apply"
+    [[ "$do_etc" == 1 ]]      && restore_stage_etc "$apply"
+    [[ "$do_packages" == 1 ]] && restore_stage_packages "$apply"
+    [[ "$do_plugins" == 1 ]]  && restore_stage_plugins "$apply"
+    [[ "$do_services" == 1 ]] && restore_stage_services "$apply"
+    drop_lock
+  fi
+
+  restore_emit "$apply"
+  [[ "$RESTORE_FAILURES" -eq 0 ]]
+}
