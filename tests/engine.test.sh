@@ -92,5 +92,28 @@ fi
 
 # Later tasks append groups here, in numeric order, each starting with mk_fixture.
 
+if group 12 "mid-merge repo is refused"; then
+  mk_fixture g12; seed_home
+  touch "$FR/.git/MERGE_HEAD"
+  fails "snapshot refuses mid-merge" env HOME="$FH" "$CLI" snapshot --no-push
+  has "reason names the merge" "$(ob snapshot --no-push; true)" "mid-merge"
+  rm "$FR/.git/MERGE_HEAD"
+fi
+if group 37 "a stale .git/index.lock self-heals"; then
+  mk_fixture g37; seed_home
+  touch -d '10 minutes ago' "$FR/.git/index.lock"
+  check "snapshot clears an abandoned lock and runs" env HOME="$FH" "$CLI" snapshot --no-push
+  [[ ! -f "$FR/.git/index.lock" ]] && ok "stale lock removed" || bad "stale lock still present"
+fi
+if group 39 "a LIVE .git/index.lock is never deleted"; then
+  mk_fixture g39; seed_home
+  touch -d '10 minutes ago' "$FR/.git/index.lock"
+  ( exec 3<"$FR/.git/index.lock"; sleep 5 ) & holder=$!
+  sleep 0.3
+  fails "snapshot refuses while another process holds index.lock" env HOME="$FH" "$CLI" snapshot --no-push
+  [[ -f "$FR/.git/index.lock" ]] && ok "live lock untouched" || bad "live lock deleted"
+  kill $holder 2>/dev/null; wait $holder 2>/dev/null
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
