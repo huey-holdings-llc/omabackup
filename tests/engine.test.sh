@@ -99,6 +99,16 @@ if group 12 "mid-merge repo is refused"; then
   has "reason names the merge" "$(ob snapshot --no-push; true)" "mid-merge"
   rm "$FR/.git/MERGE_HEAD"
 fi
+if group 22 "partial coverage is DERIVED, not declared"; then
+  mk_fixture g22; seed_home
+  mkdir -p "$FH/.config/partial/keep" "$FH/.config/partial/drop"
+  echo a > "$FH/.config/partial/keep/a.conf"; echo b > "$FH/.config/partial/drop/b.log"
+  printf '.config/partial/keep\n' >> "$FR/allowlist.txt"; git -C "$FR" commit -qam allow
+  out=$(ob drift)
+  has "the uncovered sibling is reported" "$out" "NEW        ~/.config/partial/drop"
+  # shellcheck disable=SC2088 # matching drift's literal "~/" report prefix, not a path to expand
+  ! grep -q '~/.config/partial$' <<<"$out" && ok "the parent is not reported as a whole" || bad "parent reported wholesale"
+fi
 if group 37 "a stale .git/index.lock self-heals"; then
   mk_fixture g37; seed_home
   touch -d '10 minutes ago' "$FR/.git/index.lock"
@@ -113,6 +123,14 @@ if group 39 "a LIVE .git/index.lock is never deleted"; then
   fails "snapshot refuses while another process holds index.lock" env HOME="$FH" "$CLI" snapshot --no-push
   [[ -f "$FR/.git/index.lock" ]] && ok "live lock untouched" || bad "live lock deleted"
   kill $holder 2>/dev/null; wait $holder 2>/dev/null
+fi
+if group 47 "a bare drift-ignore on a top-level dot-directory does not silence its subtree"; then
+  mk_fixture g47; seed_home
+  mkdir -p "$FH/.config/systemd/user"; printf '[Unit]\n' > "$FH/.config/systemd/user/mine.service"
+  printf '.config/systemd   # 2026-09-03 test: bare entry\n' >> "$FR/drift-ignore.txt"
+  has "unit inside a bare-ignored dir is still reported" "$(ob drift)" "mine.service"
+  printf '.config/systemd/**   # 2026-09-03 test: subtree\n' >> "$FR/drift-ignore.txt"
+  ! grep -q 'mine.service' <<<"$(ob drift)" && ok "subtree ignore silences it" || bad "subtree ignore ineffective"
 fi
 
 echo; echo "passed=$pass failed=$fail"
