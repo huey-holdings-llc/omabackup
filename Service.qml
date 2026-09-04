@@ -45,10 +45,16 @@ Singleton {
   }
   function refresh() { act(["status"], function (o) { if (o && o.state) svc.st = o }) }
 
-  // act: one CLI verb, argv only, --json appended. Never a shell string.
+  // act: one CLI verb, argv only, --json appended. Never a shell string. A
+  // second call while one is in flight is dropped, not queued (matches
+  // Panel.qml's existing runner) -- the CLI itself would just serialize the
+  // two behind its own flock, but busy would then clear on whichever exits
+  // first while the other is still running, and a button gated on busy
+  // would lie about that.
   function act(args, onDone) {
-    var p = actionComponent.createObject(svc, { callback: onDone || null, command: [svc.cli].concat(args).concat(["--json"]) })
+    if (svc.busy) return
     svc.busy = true
+    var p = actionComponent.createObject(svc, { callback: onDone || null, command: [svc.cli].concat(args).concat(["--json"]) })
     p.running = true
   }
   property Component actionComponent: Component {
@@ -64,6 +70,7 @@ Singleton {
           svc.cliError = String(aErr.text || aOut.text || ("omabackup returned no JSON (exit " + code + ")")).trim()
         }
         if (obj && obj.error) svc.cliError = obj.error
+        else if (obj) svc.cliError = ""
         if (p.callback) p.callback(obj, code)
         p.destroy()
       }
