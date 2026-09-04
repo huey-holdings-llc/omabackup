@@ -24,6 +24,28 @@ health_setup_state() {
   echo ready
 }
 
+# health_not_configured_json: the schema-complete status object for when
+# there is no config at all -- cmd_status/cmd_health never run in that case
+# (bin/omabackup skips config_load for status/health specifically so it can
+# still report SOMETHING), so this is the one place that builds the object
+# instead, with a null/empty value for everything health_collect would
+# otherwise have derived. health_setup_state is still the single owner of
+# "setup": called here, before any config_load/data_repo_require has run, its
+# own config_exists early return is what actually fires (DATA_REPO is never
+# touched on this path).
+health_not_configured_json() {
+  local setup; setup=$(health_setup_state)
+  jq -cn \
+    --arg setup "$setup" \
+    --argjson generated "$(date +%s)" \
+    '{state:"attention", setup:$setup, repo:"", generated:$generated,
+      last_run:0, last_run_age_days:-1,
+      drift_scan_complete:false, drift_count:0, drift_truncated:false, drift:[],
+      unpushed:0, diverged:false, push_verifiable:false, uncommitted:[],
+      timers_checked:false, timer_enabled:false, timer_active:false, timer_next:"",
+      selftest_enabled:false, selftest_active:false, problems:[]}'
+}
+
 # health_collect: fills the H_* globals below. Callers must have DATA_REPO
 # set (config_load) and the repo validated (data_repo_require) first.
 health_collect() {

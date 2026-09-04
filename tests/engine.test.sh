@@ -714,6 +714,17 @@ if group 50 "status: JSON for the bar widget"; then
   eq "not-configured status state is attention" "$(OMABACKUP_CONFIG=/nonexistent obj status | jq -r .state)" "attention"
   eq "not-configured status exits 0" "$(OMABACKUP_CONFIG=/nonexistent ob status >/dev/null 2>&1; echo $?)" "0"
   eq "not-configured health exits 1" "$(OMABACKUP_CONFIG=/nonexistent ob health >/dev/null 2>&1; echo $?)" "1"
+
+  # status.json is the widget's only view of the world: a stale "healthy"
+  # file from before the config vanished must not survive a not-configured run.
+  printf '{"state":"ok","setup":"ready"}\n' > "$OMABACKUP_STATE_DIR/status.json"
+  ncj=$(OMABACKUP_CONFIG=/nonexistent obj status)
+  eq "not-configured status.json overwrites the stale file, not just stdout" \
+    "$(jq -S . "$OMABACKUP_STATE_DIR/status.json")" "$(jq -S . <<<"$ncj")"
+  eq "the written file says not-configured, not the stale ready" \
+    "$(jq -r .setup "$OMABACKUP_STATE_DIR/status.json")" "not-configured"
+  eq "not-configured status carries the full configured key set" \
+    "$(jq -S 'keys' <<<"$ncj")" "$(obj status | jq -S 'keys')"
 fi
 
 echo; echo "passed=$pass failed=$fail"
