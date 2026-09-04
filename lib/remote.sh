@@ -16,9 +16,14 @@
 # (git remote set-url) must be respected without a config edit.
 remote_origin_url() { git -C "$DATA_REPO" remote get-url origin 2>/dev/null || true; }
 
-# remote_github_slug URL: print "owner/repo" for a GitHub remote, else nothing.
-# Only these four forms are recognized; anything else (a self-hosted Forgejo,
-# a bare local path) is not GitHub and is not probed -- see remote_probe.
+# remote_github_slug URL: print "owner/repo" for a GitHub remote, else print
+# nothing. Only these four forms are recognized; anything else (a self-hosted
+# Forgejo, a bare local path) is not GitHub and is not probed -- see
+# remote_probe. ALWAYS returns 0: the caller (remote_probe, under errexit)
+# treats "no slug" as a legitimate, common outcome, not a failure -- a bare
+# `[[ ... ]] && printf ...` here made the function exit 1 for every non-GitHub
+# remote, which silently killed the whole process before PUSH_VERIFIABLE was
+# ever set (caught by group 27's local-bare-path origin).
 remote_github_slug() {
   local u=$1 s=""
   case "$u" in
@@ -27,8 +32,10 @@ remote_github_slug() {
     ssh://git@ssh.github.com:443/*) s=${u#ssh://git@ssh.github.com:443/} ;;
     ssh://git@github.com/*) s=${u#ssh://git@github.com/} ;;
   esac
+  s=${s%/}    # a trailing slash (github.com/o/r/) must not become part of the "r/" that .git-stripping below would otherwise leave alone
   s=${s%.git}
-  [[ "$s" == */* ]] && printf '%s' "$s"
+  if [[ "$s" == */* ]]; then printf '%s' "$s"; fi
+  return 0
 }
 
 # remote_probe: sets PUSH_VERIFIABLE (true|false) and PUSH_REASON. GitHub only
@@ -43,7 +50,10 @@ remote_probe() {
   local url slug code
   url=$(remote_origin_url)
   [[ -n "$url" ]] || { PUSH_REASON="no-remote"; return 0; }
-  slug=$(remote_github_slug "$url")
+  # `|| true`: belt-and-braces alongside the `return 0` inside
+  # remote_github_slug itself -- a bare assignment here must never be able to
+  # take the whole process down under errexit, no matter what the callee does.
+  slug=$(remote_github_slug "$url" || true)
   if [[ -z "$slug" ]]; then
     if [[ "$CFG_REMOTE_TRUSTED" == true ]]; then PUSH_VERIFIABLE=true; PUSH_REASON="trusted"; else PUSH_REASON="remote-unverified"; fi
     return 0
@@ -108,24 +118,45 @@ remote_push_if_ahead() {
   # cannot count unpushed commits at all -- that check would silently do
   # nothing, which is how a machine ends up committing locally for weeks
   # with nothing off-disk.
-  [[ $no_upstream -eq 1 ]] && push_args=(-u origin "HEAD:$(repo_branch)")
+  if [[ $no_upstream -eq 1 ]]; then
+    local branch
+    branch=$(repo_branch || true)
+    [[ -n "$branch" ]] || die "cannot determine the current branch in $DATA_REPO; refusing to push"
+    push_args=(-u origin "HEAD:$branch")
+  fi
   local err
   # stderr is captured, not discarded: a port-22 outage is otherwise
   # indistinguishable from every other push failure in the log.
   if err=$(git -C "$DATA_REPO" push -q "${push_args[@]}" 2>&1 >/dev/null); then
     PUSHED=true
+    rm -f "$STATE_DIR/diverged.stamp"
     log "Pushed to origin."
   else
     local behind
     behind=$(git -C "$DATA_REPO" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
     if [[ "${behind:-0}" -gt 0 ]]; then
-      # The remote has commits we do not. Retrying forever is futile and a
-      # daily "will retry" notification is pure cry-wolf, so this fires once
-      # per divergence, not once per run -- Task 9 decides the "once" part.
       DIVERGED=true
       warn "remote has diverged. Run: git -C $DATA_REPO pull --rebase"
-      notify "OmaBackup: remote diverged" "Backups are committing locally but cannot push.
+      # The remote has commits we do not. Retrying forever is futile and a
+      # daily "will retry" notification is pure cry-wolf -- the spec wants a
+      # one-off, not a nag on every run of an unresolved divergence. Stamp
+      # the remote head SHA we notified about; only notify again once that
+      # SHA changes (a human pulled --rebase and pushed something new, or
+      # the divergence moved on its own).
+      local stamp="$STATE_DIR/diverged.stamp" remote_head="" prev=""
+      remote_head=$(git -C "$DATA_REPO" rev-parse '@{upstream}' 2>/dev/null || true)
+      if [[ -f "$stamp" ]]; then
+        prev=$(cat "$stamp" 2>/dev/null || true)
+      fi
+      if [[ -z "$remote_head" || "$remote_head" != "$prev" ]]; then
+        notify "OmaBackup: remote diverged" "Backups are committing locally but cannot push.
 Run: git -C $DATA_REPO pull --rebase"
+        if [[ -n "$remote_head" ]]; then
+          # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
+          mkdir -m 700 -p "$STATE_DIR"
+          printf '%s\n' "$remote_head" > "$stamp"
+        fi
+      fi
     else
       warn "push failed: $(tail -n1 <<<"$err")"
       warn "commit is safe locally; the next run will push it"
