@@ -93,14 +93,27 @@ edited_with_lint_gate() {
   local file=$1 editor=$2 bak lint_json lint_ok problems
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
   mkdir -m 700 -p "$STATE_DIR"
-  bak=$(mktemp "$STATE_DIR/.widget-list.XXXXXX")
+  bak=$(mktemp "$STATE_DIR/.widget-list.XXXXXX") \
+    || { widget_reply_fail "could not create a backup file under $STATE_DIR"; return 1; }
   if ! take_lock; then
     rm -f "$bak"
     widget_reply_fail "the repo lock is held (a snapshot may be running); try again shortly"
     return 1
   fi
-  cp "$DATA_REPO/$file" "$bak"
-  "$editor"
+  if ! cp "$DATA_REPO/$file" "$bak"; then
+    drop_lock; rm -f "$bak"
+    widget_reply_fail "could not back up $file before editing"
+    return 1
+  fi
+  if ! "$editor"; then
+    # Best-effort restore: the editor may have failed before touching the
+    # file at all, but a failed restore here must not itself crash the
+    # reply -- the caller still needs the JSON refusal below.
+    cp "$bak" "$DATA_REPO/$file" 2>/dev/null || true
+    drop_lock; rm -f "$bak"
+    widget_reply_fail "the edit to $file failed; rolled back"
+    return 1
+  fi
   drop_lock
   # --no-walk: hygiene only. A just-allowed path cannot be in home/ until the
   # next snapshot runs, so the completeness walk would roll back every real
@@ -108,7 +121,9 @@ edited_with_lint_gate() {
   lint_json=$(JSON=1 cmd_lint --no-walk 2>/dev/null)
   lint_ok=$(jq -r '.ok // false' <<<"$lint_json" 2>/dev/null || echo false)
   if [[ "$lint_ok" != true ]]; then
-    if take_lock; then cp "$bak" "$DATA_REPO/$file"; drop_lock; fi
+    # Same best-effort note as above: a rollback failure here must not
+    # prevent the lint-rejection reply from reaching the caller.
+    if take_lock; then cp "$bak" "$DATA_REPO/$file" 2>/dev/null || true; drop_lock; fi
     rm -f "$bak"
     problems=$(jq -r '[.problems[] | "\(.code) \(.path)"] | .[0:2] | join(" ")' <<<"$lint_json" 2>/dev/null)
     printf '{"ok":false,"lint_ok":false,"problems":[%s]}\n' \
@@ -121,6 +136,7 @@ edited_with_lint_gate() {
 
 # cmd_allow PATH: append PATH to allowlist.txt, lint-gated.
 cmd_allow() {
+  data_repo_require
   local raw=${1:-} rel
   assert_argv_safe "$raw"
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
@@ -140,6 +156,7 @@ cmd_allow() {
 # lint-gated. A collapsed tree ("path/") becomes the explicit /** subtree
 # form drift-ignore.txt documents.
 cmd_ignore() {
+  data_repo_require
   local raw=${1:-} reason=${2:-} rel entry
   assert_argv_safe "$raw"
   [[ -n "${2:-}" ]] && assert_argv_safe "$2"
@@ -164,6 +181,7 @@ cmd_ignore() {
 # cmd_resolve_gone PATH remove|optional: edit exactly the one matching
 # allowlist.txt line -- delete it, or mark it '?' (optional).
 cmd_resolve_gone() {
+  data_repo_require
   local raw=${1:-} verb=${2:-} rel
   assert_argv_safe "$raw"
   [[ -n "${2:-}" ]] && assert_argv_safe "$2"
@@ -172,7 +190,8 @@ cmd_resolve_gone() {
   drift_has "$raw" 'GONE' \
     || { widget_reply_fail "the drift report does not list that path as GONE"; return 1; }
   _widget_edit_gone() {
-    local tmp; tmp=$(mktemp "$DATA_REPO/.allowlist.widget-tmp.XXXXXX")
+    local tmp
+    tmp=$(mktemp "$DATA_REPO/.allowlist.widget-tmp.XXXXXX") || return 1
     awk -v rel="$rel" -v verb="$verb" '
       { line=$0; sub(/[ \t]+#.*$/,"",line); sub(/[ \t]+$/,"",line) }
       !done && (line==rel || line=="?"rel) {
@@ -194,6 +213,7 @@ cmd_resolve_gone() {
 # files and require --confirm, then stage EXACTLY those paths (never -A) and
 # commit with a message naming them.
 cmd_push() {
+  data_repo_require
   local confirm=${1:-} dirty=() line p files_json=() out
   [[ -n "$confirm" ]] && assert_argv_safe "$confirm"
   local -a watch=(allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt .gitleaks.toml)
@@ -213,7 +233,8 @@ cmd_push() {
 
   if [[ ${#dirty[@]} -gt 0 ]]; then
     if ! take_lock; then widget_reply_fail "the repo lock is held (a snapshot may be running); try again shortly"; return 1; fi
-    git -C "$DATA_REPO" add -- "${dirty[@]}"
+    git -C "$DATA_REPO" add -- "${dirty[@]}" \
+      || { drop_lock; widget_reply_fail "git add failed for the listed files"; return 1; }
     out=$(git -C "$DATA_REPO" commit -q -m "lists: update ${dirty[*]} via widget" 2>&1) \
       || { drop_lock; widget_reply_fail "commit failed: $out"; return 1; }
     drop_lock
@@ -225,17 +246,20 @@ cmd_push() {
 
 # cmd_timer pause|resume|status|run: drive the daily unit.
 cmd_timer() {
+  data_repo_require
   local verb=${1:-} out
   [[ -n "$verb" ]] && assert_argv_safe "$verb"
   case "$verb" in
     pause)
       out=$(systemctl --user disable --now omabackup-snapshot.timer 2>&1) \
         || { widget_reply_fail "could not pause the timer: $out"; return 1; }
+      health_write_status
       printf '{"ok":true}\n'
       ;;
     resume)
       out=$(systemctl --user enable --now omabackup-snapshot.timer 2>&1) \
         || { widget_reply_fail "could not resume the timer: $out"; return 1; }
+      health_write_status
       printf '{"ok":true}\n'
       ;;
     status)
@@ -261,7 +285,10 @@ cmd_timer() {
         printf '{"ok":true,"started":"unit"}\n'
       else
         have setsid || { widget_reply_fail "setsid is not available"; return 1; }
-        setsid -f "$PLUGIN_DIR/bin/omabackup" snapshot >/dev/null 2>&1
+        if ! setsid -f "$PLUGIN_DIR/bin/omabackup" snapshot >/dev/null 2>&1; then
+          widget_reply_fail "could not start a detached snapshot"
+          return 1
+        fi
         printf '{"ok":true,"started":"detached"}\n'
       fi
       ;;
@@ -274,6 +301,7 @@ cmd_timer() {
 # Always an argv array, never a shell string; detached so the popup does not
 # wait on it.
 cmd_open() {
+  data_repo_require
   local -a term=()
   if have omarchy-launch-floating-terminal-with-presentation; then
     term=(omarchy-launch-floating-terminal-with-presentation)
@@ -284,6 +312,9 @@ cmd_open() {
     return 1
   fi
   have setsid || { widget_reply_fail "setsid is not available"; return 1; }
-  ( cd "$DATA_REPO" && setsid -f "${term[@]}" >/dev/null 2>&1 )
+  if ! ( cd "$DATA_REPO" && setsid -f "${term[@]}" >/dev/null 2>&1 ); then
+    widget_reply_fail "could not open a terminal in $DATA_REPO"
+    return 1
+  fi
   printf '{"ok":true}\n'
 }

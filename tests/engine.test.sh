@@ -907,11 +907,27 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
   grep -qx -- '--user start omabackup-snapshot.service' "$T/sysctl.log" \
     && ok "timer run: starts the snapshot service" || bad "timer run argv wrong"
 
-  whp timer pause >/dev/null; whp timer resume >/dev/null
+  # pause/resume are write verbs too: status.json must refresh after each,
+  # same as allow/ignore/resolve-gone/push (compared by the "generated"
+  # epoch, a full second apart so a same-second collision can't hide a bug).
+  before_gen=$(jq -r '.generated // 0' "$OMABACKUP_STATE_DIR/status.json" 2>/dev/null || echo 0)
+  sleep 1
+  whp timer pause >/dev/null
   grep -qx -- '--user disable --now omabackup-snapshot.timer' "$T/sysctl.log" \
     && ok "timer pause: disables --now" || bad "timer pause argv wrong"
+  after_gen=$(jq -r '.generated // 0' "$OMABACKUP_STATE_DIR/status.json" 2>/dev/null || echo 0)
+  [[ "$after_gen" -gt "$before_gen" ]] \
+    && ok "timer pause refreshes status.json" || bad "timer pause left status.json stale"
+
+  sleep 1
+  whp timer resume >/dev/null
   grep -qx -- '--user enable --now omabackup-snapshot.timer' "$T/sysctl.log" \
     && ok "timer resume: enables --now" || bad "timer resume argv wrong"
+  before_gen=$after_gen
+  after_gen=$(jq -r '.generated // 0' "$OMABACKUP_STATE_DIR/status.json" 2>/dev/null || echo 0)
+  [[ "$after_gen" -gt "$before_gen" ]] \
+    && ok "timer resume refreshes status.json" || bad "timer resume left status.json stale"
+
   eq "timer: unknown verb refused" "$(whp timer sideways | jq -r .ok)" "false"
 
   # Detached fallback: OMABACKUP_SKIP_TIMERS=1 must never touch systemctl, and
