@@ -1,33 +1,23 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.coreytyhurst.backup-status",
-  "name": "Backup Status",
-  "version": "0.2.0",
+  "id": "io.github.huey-holdings-llc.omabackup",
+  "name": "OmaBackup",
+  "version": "0.3.0",
   "author": "Corey Tyhurst",
   "license": "MIT",
-  "description": "Glanceable health badge and triage popup for the hp-laptop-config backup engine.",
-  "kinds": [
-    "bar-widget"
-  ],
-  "entryPoints": {
-    "barWidget": "Panel.qml"
-  },
+  "description": "Backs up your Omarchy config to a private git repo every day and tells you what it is not backing up.",
+  "homepage": "https://github.com/huey-holdings-llc/omabackup",
+  "kinds": ["service", "bar-widget"],
+  "keepLoaded": true,
+  "entryPoints": { "service": "Service.qml", "barWidget": "Panel.qml" },
   "barWidget": {
-    "displayName": "Backup Status",
+    "displayName": "OmaBackup",
     "description": "Config-backup health at a glance: drift badge, last snapshot, and in-popup triage.",
     "category": "System",
-    "aliases": [
-      "backup",
-      "backup-status",
-      "drift",
-      "snapshot",
-      "config-backup"
-    ],
+    "aliases": ["backup", "drift", "snapshot", "config-backup", "dotfiles"],
     "allowMultiple": false,
     "defaultSection": "right",
-    "defaults": {
-      "repoDir": "~/projects/hp-laptop-config"
-    }
-  },
-  "homepage": "https://github.com/huey-holdings-llc/omabackup"
+    "defaults": {},
+    "schema": []
+  }
 }

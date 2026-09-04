@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# omabackup: back up your Omarchy config to a private git repo every day, and
+# say what is not being backed up. All logic lives here and in lib/; the shell
+# plugin (Panel.qml, Service.qml) is a view over status.json.
+#
+# Usage: omabackup <verb> [args] [--json]   (omabackup help lists the verbs)
+set -euo pipefail
+umask 077
+
+command -v jq >/dev/null 2>&1 || { echo "omabackup: jq is required (pacman -S jq)" >&2; exit 1; }
+SELF="$(readlink -f "$0")"
+PLUGIN_DIR="$(dirname "$(dirname "$SELF")")"
+VERSION=$(jq -r '.version // "0"' "$PLUGIN_DIR/manifest.json" 2>/dev/null || echo 0)
+PLUGIN_ID="io.github.huey-holdings-llc.omabackup"
+export PLUGIN_DIR VERSION PLUGIN_ID
+
+# --json may appear anywhere; strip it and remember.
+JSON=0; ARGS=()
+for a in "$@"; do
+  case "$a" in --json) JSON=1 ;; *) ARGS+=("$a") ;; esac
+done
+export JSON
+
+for f in "$PLUGIN_DIR"/lib/*.sh; do
+  # shellcheck source=/dev/null
+  . "$f"
+done
+
+usage() {
+  cat <<'EOF'
+omabackup <verb> [args] [--json]
+
+  setup [--data-repo DIR] [--remote URL] [--create-private] [--import DIR]
+        [--trust-remote] [--no-timers] [--yes]     first-run wizard
+  setup check                                       doctor
+  setup --remove                                    remove units, symlink, config
+  snapshot [--dry-run] [--no-push]                  the daily pipeline
+  drift                                             report unbacked config
+  status                                            health (writes status.json)
+  allow PATH | ignore PATH [REASON]                 triage a drift entry
+  resolve-gone PATH remove|optional                 fix a vanished entry
+  push [--confirm]                                  push commits (lists need --confirm)
+  lint [--no-walk]                                  list hygiene
+  restore --configs|--etc|--packages|--plugins|--services|--all [--apply]
+  verify                                            restore fidelity check
+  health                                            login check (silent when ok)
+  timer pause|resume|status
+  self-test [--real]
+  open                                              terminal in the data repo
+  version
+Every verb accepts --json. Exit 0 ran, 1 refused or unhealthy, 2 usage.
+EOF
+}
+
+main() {
+  local verb=${ARGS[0]:-help}
+  [[ ${#ARGS[@]} -gt 0 ]] && ARGS=("${ARGS[@]:1}")
+  case "$verb" in
+    help|-h|--help) usage ;;
+    version) if [[ $JSON == 1 ]]; then jq -cn --arg v "$VERSION" '{version:$v}'; else echo "$VERSION"; fi ;;
+    setup|snapshot|drift|status|allow|ignore|resolve-gone|push|lint|restore|verify|health|timer|self-test|open)
+      local fn="cmd_${verb//-/_}"
+      declare -F "$fn" >/dev/null || die "verb '$verb' is not implemented yet"
+      "$fn" "${ARGS[@]}" ;;
+    *) usage_die "unknown verb '$verb'" ;;
+  esac
+}
+main
