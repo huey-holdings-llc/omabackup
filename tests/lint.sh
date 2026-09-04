@@ -18,8 +18,11 @@ jq -e '.schemaVersion == 1' "$m" >/dev/null && ok "schemaVersion is the number 1
 jq -e '.id | test("^[A-Za-z0-9][A-Za-z0-9._-]*$") and (startswith("omarchy.") | not)' "$m" >/dev/null && ok "id well-formed" || bad "id"
 jq -e '.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")' "$m" >/dev/null && ok "version is semver" || bad "version"
 for k in name author license description homepage; do jq -e --arg k "$k" '.[$k] | type == "string" and length > 0' "$m" >/dev/null && ok "$k present" || bad "$k missing"; done
-ep=$(jq -r '.entryPoints.barWidget // empty' "$m")
-[[ -n "$ep" && -f "$ep" ]] && ok "bar-widget entry point: $ep" || bad "bar-widget entry point missing"
+for kind in $(jq -r '.kinds[]' "$m"); do
+  case "$kind" in bar-widget) key=barWidget ;; *) key=$kind ;; esac
+  ep=$(jq -r --arg k "$key" '.entryPoints[$k] // empty' "$m")
+  [[ -n "$ep" && -f "$ep" ]] && ok "entry point for $kind: $ep" || bad "entry point for $kind missing or absent on disk"
+done
 [[ "$(jq -r .version "$m")" == "$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '[]# ')" ]] && ok "CHANGELOG top release matches manifest version" || bad "CHANGELOG top release != manifest version"
 if find . -path ./.git -prune -o -type l -print | grep -q .; then bad "symlinks in the plugin tree (validator rejects them)"; else ok "no symlinks"; fi
 command -v omarchy-plugin-validate >/dev/null && { omarchy-plugin-validate . >/dev/null && ok "omarchy-plugin-validate" || bad "omarchy-plugin-validate"; }
@@ -29,8 +32,14 @@ if grep -nE '"bash", *"-c"|"sh", *"-c"|bash -c' -- *.qml ui/*.qml; then bad "she
 if grep -nE '"/tmp' -- *.qml ui/*.qml bin/omabackup lib/*.sh; then bad "/tmp referenced"; else ok "no /tmp paths"; fi
 for f in *.qml ui/*.qml; do [[ -s "$f" ]] || bad "$f empty"; done
 if command -v qmllint >/dev/null; then qmllint --version >/dev/null 2>&1 && ok "qmllint available (imports need the shell; not run)"; fi
-# The whole design: the QML must only ever exec the CLI, nothing else.
-if grep -nE 'Process|execDetached' -- *.qml ui/*.qml | grep -vE 'omabackup|cliProc|actionComponent|property Component|createObject|^\S+:[0-9]+: *//' | grep -q 'exec'; then bad "a process runs something other than omabackup"; else ok "all processes route through omabackup"; fi
+# The whole design: every process launch site must name the CLI (or the one
+# terminal launcher a plugin is allowed to shell into), nothing else.
+qml_process_bad=0
+while IFS=: read -r qf qln _; do
+  bad "a process launches something other than omabackup: $qf:$qln"
+  qml_process_bad=1
+done < <(grep -nE 'command:|execDetached\(' -- *.qml ui/*.qml | grep -vE 'omabackup|svc\.cli|Service\.cli|root\.cli|omarchy-launch-floating-terminal-with-presentation')
+[[ $qml_process_bad == 0 ]] && ok "all processes route through omabackup"
 
 step "copy"
 if grep -rn -- $'\xe2\x80\x94' README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md bin/omabackup share/units 2>/dev/null; then bad "em dash in user-facing text"; else ok "no em dashes"; fi
