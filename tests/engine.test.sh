@@ -291,6 +291,24 @@ fi
 # check's handling of a garbage or future manifests/.last-run stamp. Neither
 # the restore verb nor the health verb exists yet, so both land with the verb
 # they exercise rather than sitting here as permanently red placeholders.
+if group 21 "list hygiene"; then
+  mk_fixture g21; seed_home; commit_baseline
+  check "clean lists lint clean" env HOME="$FH" "$CLI" lint
+  printf '*   # 2026-09-03 too wide\n' >> "$FR/drift-ignore.txt"
+  fails "a bare * ignore is TOOWIDE" env HOME="$FH" "$CLI" lint
+  eq "json names the code" "$(obj lint | jq -r '.problems[0].code')" "TOOWIDE"
+  sed -i '$d' "$FR/drift-ignore.txt"
+  printf '.config/nonexistent-dir\n' >> "$FR/allowlist.txt"
+  has "a required entry that resolves to nothing is MISSING" "$(ob lint; true)" "MISSING"
+  sed -i '$d' "$FR/allowlist.txt"
+  echo new > "$FH/.local/bin/late"; printf '.local/bin\n' >> "$FR/allowlist.txt"
+  check "a file newer than the last run is pending, not NOTBACKEDUP" env HOME="$FH" "$CLI" lint
+  check "--no-walk skips the completeness walk" env HOME="$FH" "$CLI" lint --no-walk
+fi
+if [[ "${OMABACKUP_REAL_REPO:-0}" == 1 ]] && group 21R "list hygiene against the REAL data repo"; then
+  unset OMABACKUP_CONFIG OMABACKUP_STATE_DIR OMABACKUP_STOCK_DIR OMABACKUP_SKIP_ETC
+  check "real lists lint clean" "$CLI" lint
+fi
 if group 22 "partial coverage is DERIVED, not declared"; then
   mk_fixture g22; seed_home
   mkdir -p "$FH/.config/partial/keep" "$FH/.config/partial/drop"
