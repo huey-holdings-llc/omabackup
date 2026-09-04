@@ -98,7 +98,10 @@ if group 00 "baseline: version, help, config validation"; then
   jq '. + {bogus:1}' "$OMABACKUP_CONFIG" > "$T/bad.json"
   eq "unknown config key refused as JSON" "$(OMABACKUP_CONFIG=$T/bad.json obj status | jq -r .ok)" "false"
   has "refusal names the key" "$(OMABACKUP_CONFIG=$T/bad.json obj status)" "bogus"
-  eq "missing config refused with setup hint" "$(OMABACKUP_CONFIG=/nonexistent ob status; true)" "$(printf '\033[1;31m[FAIL]\033[0m no config at /nonexistent. Run: omabackup setup')"
+  # status and health are special-cased (Task 10): they run without a config
+  # and report "not-configured" instead of dying, so this die()-refusal probe
+  # uses a verb that still requires config unconditionally.
+  eq "missing config refused with setup hint" "$(OMABACKUP_CONFIG=/nonexistent ob drift; true)" "$(printf '\033[1;31m[FAIL]\033[0m no config at /nonexistent. Run: omabackup setup')"
 fi
 
 # Later tasks append groups here, in numeric order, each starting with mk_fixture.
@@ -206,6 +209,24 @@ if group 07 "drift detection"; then
   has "changed stock file that is allowlisted is not reported" "$out" "drift-scan-complete"
   ! grep -q 'bindings.lua' <<<"$out" && ok "allowlisted file not reported" || bad "allowlisted file reported"
   eq "json items carry type and path" "$(obj drift | jq -r '.items[] | select(.path=="~/.config/mytool") | .type')" "NEW"
+fi
+if group 08 "unpushed-commit detection"; then
+  # Regression: with no upstream configured this check silently did nothing.
+  mk_fixture g08; seed_home; commit_baseline
+  git -C "$FR" push -q -u origin HEAD:main 2>/dev/null
+  git -C "$FR" commit -q --allow-empty -m "unpushed"
+  has "unpushed commit is reported" "$(ob health)" "never pushed"
+  git -C "$FR" push -q origin HEAD:main 2>/dev/null
+  eq "clears after push" "$(grep -c 'never pushed' <<<"$(ob health)")" "0"
+  # fail-closed: a missing upstream must be reported, not silently skipped
+  git -C "$FR" branch --unset-upstream 2>/dev/null
+  has "missing upstream is reported (fails closed)" "$(ob health)" "no upstream"
+  git -C "$FR" branch --set-upstream-to=origin/main main 2>/dev/null
+fi
+if group 09 "staleness"; then
+  mk_fixture g09; seed_home; commit_baseline
+  printf '%s\n' "$(( $(date +%s) - 5*86400 ))" > "$FR/manifests/.last-run"
+  has "stale snapshot is reported" "$(ob health)" "days ago"
 fi
 if group 10 "offline visibility probe (curl prints 000 AND exits non-zero) does not abort the backup"; then
   # curl -w PRINTS 000 on a connection failure *and* exits non-zero; a naive
@@ -427,6 +448,19 @@ if group 37 "a stale .git/index.lock self-heals"; then
   check "snapshot clears an abandoned lock and runs" env HOME="$FH" "$CLI" snapshot --no-push
   [[ ! -f "$FR/.git/index.lock" ]] && ok "stale lock removed" || bad "stale lock still present"
 fi
+if group 38 "a future/garbage last-run stamp does not blind the staleness check"; then
+  mk_fixture g38; seed_home; commit_baseline
+  # Backdate the last COMMIT well past staleDays, so a garbage stamp's
+  # fallback (last commit time) still catches real staleness instead of
+  # silently reading as healthy.
+  old_ts=$(( $(date +%s) - 10*86400 ))
+  GIT_COMMITTER_DATE="@$old_ts" git -C "$FR" commit -q --allow-empty -m "old" --date="@$old_ts"
+  printf 'not-a-number\n' > "$FR/manifests/.last-run"
+  has "garbage stamp falls back to commit time and still reports staleness" "$(ob health)" "days ago"
+  echo $(( $(date +%s) + 2592000 )) > "$FR/manifests/.last-run"
+  has "future stamp is reported, not silently accepted" "$(ob health)" "FUTURE"
+  date +%s > "$FR/manifests/.last-run"
+fi
 if group 39 "a LIVE .git/index.lock is never deleted"; then
   mk_fixture g39; seed_home
   touch -d '10 minutes ago' "$FR/.git/index.lock"
@@ -605,6 +639,81 @@ if group 49 "desktop popups fire only from the timer, never from a manual run"; 
   rm -rf "$FH/.config/appg"
   eq "a vanished optional entry (GONE) pops once" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=1)" "1"
   eq "the same GONE does not pop again" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=1)" "0"
+fi
+if group 50 "status: JSON for the bar widget"; then
+  # The bar widget renders exactly this JSON and nothing else, so every field
+  # the QML relies on gets an assertion here -- a health regression must show
+  # up as a weekly red, not as a blank badge nobody questions.
+  mk_fixture g50; seed_home; commit_baseline
+  { printf 'NEW        ~/.config/appz/z.toml\n'
+    printf 'GONE       ~/.config/gonezo\n'
+    printf 'NEW        ~/.local/share/bigz/ (>2000 files: too large to scan; add or ignore wholesale)\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  date +%s > "$FR/manifests/.last-run"
+  git -C "$FR" push -q -u origin main 2>/dev/null || true
+
+  s=$(obj status)
+  eq "status emits valid JSON" "$(jq -e . <<<"$s" >/dev/null 2>&1 && echo ok || echo bad)" "ok"
+  eq "drift_count matches the report" "$(jq -r .drift_count <<<"$s")" "3"
+  eq "drift lines parse into type+path" "$(jq -r '.drift[0].type + "|" + .drift[0].path' <<<"$s")" "NEW|~/.config/appz/z.toml"
+  eq "GONE lines carried through" "$(jq -r '.drift[1].type' <<<"$s")" "GONE"
+  has "collapsed-tree note survives parsing" "$(jq -r '.drift[2].note' <<<"$s")" "too large"
+  eq "sentinel detected" "$(jq -r .drift_scan_complete <<<"$s")" "true"
+  eq "clean tree: nothing pending" "$(jq -c '[.unpushed,.uncommitted]' <<<"$s")" "[0,[]]"
+  eq "drift alone yields state=attention" "$(jq -r .state <<<"$s")" "attention"
+  eq "last-run age surfaces" "$(jq -c '[(.last_run>0),.last_run_age_days]' <<<"$s")" "[true,0]"
+
+  # The badge must be able to say "and N more" without shipping thousands of
+  # rows of JSON: 2001 synthetic lines exercise the real WIDGET_DRIFT_LIMIT.
+  { i=1; while [ "$i" -le 2001 ]; do printf 'NEW        ~/.config/cap%d.toml\n' "$i"; i=$((i+1)); done
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  eq "drift list caps at the limit with the true count kept" \
+    "$(obj status | jq -c '[(.drift|length),.drift_truncated,.drift_count]')" "[2000,true,2001]"
+
+  # A report that never finished must read as a FAULT, never as "all clean"
+  # -- the same fail-closed rule cmd_health enforces.
+  printf 'NEW        ~/.config/x.toml\n' > "$FR/manifests/drift.txt"
+  eq "missing sentinel is a fault with a stated problem" \
+    "$(obj status | jq -c '[.drift_scan_complete,.state,(.problems|length>0)]')" '[false,"fault",true]'
+  printf '# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  eq "empty completed report is state=ok" "$(obj status | jq -c '[.drift_count,.state]')" '[0,"ok"]'
+
+  # Unpushed commits mirror cmd_health severity: data not off the machine = fault.
+  git -C "$FR" commit -q --allow-empty -m "widget-unpushed"
+  eq "unpushed commit counted and escalated" "$(obj status | jq -c '[.unpushed,.state]')" '[1,"fault"]'
+  git -C "$FR" push -q origin main 2>/dev/null
+  eq "clears after push" "$(obj status | jq -r .unpushed)" "0"
+
+  # Edits the timer will not commit (same pathspec as cmd_health).
+  printf '\n# widget-fixture-edit\n' >> "$FR/drift-ignore.txt"
+  has "uncommitted script edit listed" "$(obj status | jq -r '.uncommitted[]')" "drift-ignore.txt"
+  git -C "$FR" checkout -q -- drift-ignore.txt
+
+  # Paths are attacker-ish input for a JSON emitter: quotes and backslashes in
+  # a filename must not produce invalid JSON or a mangled path.
+  printf 'NEW        ~/.config/we"ird\\path.toml\n# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  # shellcheck disable=SC2088 # expected literal string, not a path to expand
+  eq "quote+backslash in a path round-trips" "$(obj status | jq -r '.drift[0].path')" '~/.config/we"ird\path.toml'
+
+  # A clean slate for the closing assertions, isolated from the synthetic
+  # drift used above.
+  printf '# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  date +%s > "$FR/manifests/.last-run"
+
+  eq "status.json exists after status" "$(test -f "$OMABACKUP_STATE_DIR/status.json" && echo yes)" "yes"
+  eq "status.json equals stdout" "$(obj status | jq -S .)" "$(jq -S . "$OMABACKUP_STATE_DIR/status.json")"
+  eq "setup is ready in the fixture" "$(obj status | jq -r .setup)" "ready"
+  jq '.remote.trusted=false' "$OMABACKUP_CONFIG" > "$T/c2" && mv "$T/c2" "$OMABACKUP_CONFIG"
+  eq "setup reports remote-unverified for an untrusted non-GitHub remote" "$(obj status | jq -r .setup)" "remote-unverified"
+  jq '.remote.trusted=true' "$OMABACKUP_CONFIG" > "$T/c2" && mv "$T/c2" "$OMABACKUP_CONFIG"
+  eq "health exits 0 and prints nothing when ok" "$(ob health)" ""
+
+  # setup=not-configured must be reportable even with no config at all: the
+  # dispatcher skips config_load for status/health only in that case.
+  eq "not-configured status reports setup" "$(OMABACKUP_CONFIG=/nonexistent obj status | jq -r .setup)" "not-configured"
+  eq "not-configured status state is attention" "$(OMABACKUP_CONFIG=/nonexistent obj status | jq -r .state)" "attention"
+  eq "not-configured status exits 0" "$(OMABACKUP_CONFIG=/nonexistent ob status >/dev/null 2>&1; echo $?)" "0"
+  eq "not-configured health exits 1" "$(OMABACKUP_CONFIG=/nonexistent ob health >/dev/null 2>&1; echo $?)" "1"
 fi
 
 echo; echo "passed=$pass failed=$fail"
