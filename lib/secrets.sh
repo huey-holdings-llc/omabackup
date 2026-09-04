@@ -39,16 +39,32 @@ secrets_scan_staging() {
   else
     gl=(gitleaks detect --source "$1" --no-git -c "$RULES_FILE" -i "$DATA_REPO" --no-banner --redact --exit-code 1)
   fi
-  "${gl[@]}" >/dev/null 2>&1 || die "gitleaks found a secret in the staging tree; nothing committed"
+  # Let gitleaks' own stdout/stderr through (findings are already --redact'd) --
+  # swallowing it made a missing rules file, a crashed binary and a real leak
+  # all die with the same "found a secret", with nothing to tell them apart
+  # (engine: snapshot.sh:495-512 does not redirect either). With --json, stdout
+  # must stay a single JSON object, so gitleaks' stdout is rerouted to stderr;
+  # its own stderr is never swallowed in either mode.
+  local rc
+  if [[ "${JSON:-0}" == 1 ]]; then "${gl[@]}" 1>&2; else "${gl[@]}"; fi
+  rc=$?
+  [[ $rc -eq 0 ]] || die "gitleaks exited $rc scanning the staging tree; investigate the output above; nothing committed"
 }
 
 # secrets_scan_staged: the authoritative gate, over exactly what `git add`
 # staged -- the staging-tree scan above only ever covers files copied in from
-# $HOME (engine: snapshot.sh:614-618). Runs inside $DATA_REPO so `git reset -q`
-# undoes only that commit before dying.
+# $HOME (engine: snapshot.sh:614-618). Runs before `git commit`, so on a
+# nonzero exit `git reset -q` undoes the staging (the `git add`), not a
+# commit -- nothing has been committed yet at this point in the pipeline.
 secrets_scan_staged() {
   gitleaks_available || return 0
   log "Scanning the staged commit"
-  ( cd "$DATA_REPO" && gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1 >/dev/null 2>&1 ) \
-    || { git -C "$DATA_REPO" reset -q; die "gitleaks found a secret in the staged commit; commit undone"; }
+  local rc
+  if [[ "${JSON:-0}" == 1 ]]; then
+    ( cd "$DATA_REPO" && gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1 1>&2 )
+  else
+    ( cd "$DATA_REPO" && gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1 )
+  fi
+  rc=$?
+  [[ $rc -eq 0 ]] || { git -C "$DATA_REPO" reset -q; die "gitleaks exited $rc on the staged commit; staging undone, nothing committed"; }
 }
