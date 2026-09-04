@@ -44,7 +44,7 @@ omabackup <verb> [args] [--json]
   restore --configs|--etc|--packages|--plugins|--services|--all [--apply]
   verify                                            restore fidelity check
   health                                            login check (silent when ok)
-  timer pause|resume|status
+  timer pause|resume|status|run
   self-test [--real]
   open                                              terminal in the data repo
   version

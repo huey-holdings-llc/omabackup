@@ -744,6 +744,202 @@ if group 50 "status: JSON for the bar widget"; then
   eq "not-configured status carries the full configured key set" \
     "$(jq -S 'keys' <<<"$ncj")" "$(obj status | jq -S 'keys')"
 fi
+if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"; then
+  # Popup buttons append to the lists. Every write path must refuse arbitrary
+  # input (only paths the CURRENT drift report names), take the repo flock,
+  # lint afterward, and roll back when lint rejects the result -- the widget
+  # must never be able to corrupt the lists it serves.
+  # Drift paths reach these verbs VERBATIM, "~/"-prefixed and never
+  # shell-expanded (the QML passes the JSON path field straight through);
+  # tp() builds them so that stays visibly deliberate.
+  mk_fixture g51; seed_home; commit_baseline
+  # shellcheck disable=SC2088  # matching the LITERAL "~/" status emits, not a path to expand
+  tp() { printf '~/%s' "$1"; }
+  mkdir -p "$FH/.config/appz"; printf 'z=1\n' > "$FH/.config/appz/z.toml"
+  mkdir -p "$FH/.local/share/bigz"; printf 'b\n' > "$FH/.local/share/bigz/f1"
+  { printf 'NEW        ~/.config/appz/z.toml\n'
+    printf 'NEW        ~/.local/share/bigz/ (>2000 files: too large to scan; add or ignore wholesale)\n'
+    printf 'GONE       ~/.config/gonezo\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+
+  eq "allow: accepted and lint-gated" \
+    "$(obj allow "$(tp .config/appz/z.toml)" | jq -c '[.ok,.lint_ok]')" "[true,true]"
+  grep -qx '.config/appz/z.toml' "$FR/allowlist.txt" && ok "allow: appended to allowlist.txt" || bad "allowlist not updated"
+  eq "allow: refuses a path the drift report never named" \
+    "$(obj allow "$(tp .config/never-drifted.conf)" | jq -r .ok)" "false"
+
+  # A duplicate append is exactly what lint rejects: the edit must roll back.
+  eq "allow: re-allowing an allowlisted path is refused" \
+    "$(obj allow "$(tp .config/appz/z.toml)" | jq -r .ok)" "false"
+  [[ "$(grep -cx '.config/appz/z.toml' "$FR/allowlist.txt")" == 1 ]] \
+    && ok "allow: no duplicate line left behind" || bad "duplicate line written"
+
+  # An absolute path smuggled after the "~/" prefix, and a newline smuggled
+  # into the value, must both be refused before the value ever reaches a list
+  # file (rel_from_tilde and assert_argv_safe respectively).
+  # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
+  eq "allow: refuses an absolute path smuggled after ~/" "$(obj allow '~//etc/passwd' | jq -r .ok)" "false"
+  # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
+  eq "allow: refuses a newline-smuggling value" "$(obj allow "$(printf '~/x\ny')" | jq -r .ok)" "false"
+
+  # Even a hostile drift line must not let a write escape $HOME-relative space.
+  cp "$FR/manifests/drift.txt" "$T/drift51.tmp"
+  printf 'NEW        ~/../outside.conf\n# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  eq "allow: refuses traversal even when drift names it" \
+    "$(obj allow "$(tp ../outside.conf)" | jq -r .ok)" "false"
+  cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
+
+  # Ignore: dated entry, reason recorded, collapsed trees become subtree ignores.
+  eq "ignore: accepted" \
+    "$(obj ignore "$(tp .local/share/bigz/)" 'huge store, regenerable' | jq -r .ok)" "true"
+  grep -qE '^\.local/share/bigz/\*\*[[:space:]]+# 20[0-9]{2}-[0-9]{2}-[0-9]{2} huge store, regenerable' "$FR/drift-ignore.txt" \
+    && ok "ignore: dated subtree entry written" || bad "ignore entry malformed"
+
+  # No reason given: the default is dated, not a bare unattributed line.
+  mkdir -p "$FH/.config/appdef"; printf 'x\n' > "$FH/.config/appdef/d.toml"
+  printf 'NEW        ~/.config/appdef/d.toml\n# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  eq "ignore: accepted with no reason given" "$(obj ignore "$(tp .config/appdef/d.toml)" | jq -r .ok)" "true"
+  grep -qE '^\.config/appdef/d\.toml[[:space:]]+# 20[0-9]{2}-[0-9]{2}-[0-9]{2} triaged from widget' "$FR/drift-ignore.txt" \
+    && ok "ignore: default reason is dated 'triaged from widget'" || bad "default reason missing or malformed"
+  cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
+
+  # Folder-level decisions: a "~/dir/" target is accepted when at least one
+  # drifting path lies UNDER it (the folder itself is never a drift line),
+  # refused when nothing under it drifts, and always refused at depth 1 --
+  # "~/.config/" would silence an entire report in one click.
+  mkdir -p "$FH/.config/appq/sub" "$FH/.config/appr"
+  printf 'q\n' > "$FH/.config/appq/a.toml"; printf 'q\n' > "$FH/.config/appq/sub/b.toml"
+  printf 'r\n' > "$FH/.config/appr/a.toml"; printf 'r\n' > "$FH/.config/appr/b.toml"
+  { printf 'NEW        ~/.config/appq/a.toml\n'
+    printf 'NEW        ~/.config/appq/sub/b.toml\n'
+    printf 'NEW        ~/.config/appr/a.toml\n'
+    printf 'NEW        ~/.config/appr/b.toml\n'
+    printf 'GONE       ~/.config/gonezo\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  eq "folder ignore: prefix of drifting files becomes a /** entry" \
+    "$(obj ignore "$(tp .config/appq/)" 'widget folder test' | jq -c '[.ok,.ignored]')" '[true,".config/appq/**"]'
+  eq "folder allow: prefix of drifting files allowlisted as the dir" \
+    "$(obj allow "$(tp .config/appr/)" | jq -c '[.ok,.added]')" '[true,".config/appr"]'
+  grep -qx '.config/appr' "$FR/allowlist.txt" && ok "folder allow: entry written" || bad "folder allow entry missing"
+  eq "folder ignore: refused when nothing under it drifts" \
+    "$(obj ignore "$(tp .config/appx/)" | jq -r .ok)" "false"
+  eq "folder ignore: depth-1 folder refused (would silence the report)" \
+    "$(obj ignore "$(tp .config/)" | jq -r .ok)" "false"
+  cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
+
+  # A file OLDER than the last snapshot is the normal allow case: it cannot be
+  # in home/ until the next snapshot runs, so the write gate must not fail the
+  # completeness walk (that stays the standalone/weekly lint's job).
+  mkdir -p "$FH/.config/appold"; printf 'o\n' > "$FH/.config/appold/old.toml"
+  touch -d '2 days ago' "$FH/.config/appold/old.toml"
+  date +%s > "$FR/manifests/.last-run"
+  printf 'NEW        ~/.config/appold/old.toml\n# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  eq "allow: a file predating the last snapshot is accepted" \
+    "$(obj allow "$(tp .config/appold/old.toml)" | jq -r .ok)" "true"
+  grep -qx '.config/appold/old.toml' "$FR/allowlist.txt" && ok "allow: old-file entry written" || bad "old-file entry missing"
+
+  # When the lists are ALREADY broken, widget writes must refuse (rolled back)
+  # and say why in clean text: no ANSI escapes leaking into the popup.
+  printf '.config/no-such-thing-xyz\n' >> "$FR/allowlist.txt"
+  printf 'o\n' > "$FH/.config/appold/old2.toml"
+  printf 'NEW        ~/.config/appold/old2.toml\n# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  out51=$(obj allow "$(tp .config/appold/old2.toml)")
+  eq "broken lists refuse the write" "$(jq -r .ok <<<"$out51")" "false"
+  has "the refusal names the lint code" "$(jq -r '.problems[0]' <<<"$out51")" "MISSING"
+  [[ "$(jq -r '.problems[0]' <<<"$out51")" != *$'\033'* ]] \
+    && ok "refusal message has no ANSI escapes" || bad "ANSI leaked into the popup message"
+  grep -qx '.config/appold/old2.toml' "$FR/allowlist.txt" && bad "edit not rolled back" || ok "edit rolled back on pre-existing lint problem"
+  sed -i '/no-such-thing-xyz/d' "$FR/allowlist.txt"
+  cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
+
+  # GONE resolution edits exactly one allowlist line.
+  printf '.config/gonezo\n' >> "$FR/allowlist.txt"
+  eq "resolve-gone remove: accepted" "$(obj resolve-gone "$(tp .config/gonezo)" remove | jq -r .ok)" "true"
+  grep -q '^\.config/gonezo' "$FR/allowlist.txt" && bad "gone entry still present" || ok "resolve-gone remove: entry deleted"
+  printf '.config/gonezo\n' >> "$FR/allowlist.txt"
+  eq "resolve-gone optional: accepted" "$(obj resolve-gone "$(tp .config/gonezo)" optional | jq -r .ok)" "true"
+  grep -qx '?.config/gonezo' "$FR/allowlist.txt" && ok "resolve-gone optional: '?' prefixed" || bad "optional marker missing"
+  eq "resolve-gone: refuses a path drift does not list as GONE" \
+    "$(obj resolve-gone "$(tp .config/appz/z.toml)" remove | jq -r .ok)" "false"
+
+  # The dynamic push button: confirm-gated scoped commit, never `git add -A`.
+  out51=$(obj push)
+  eq "push: pending list edits require confirmation" \
+    "$(jq -c '[.ok,.needs_confirm,(.files|length>0)]' <<<"$out51")" '[false,true,true]'
+  printf '# dirty manifest line\n' >> "$FR/manifests/drift.txt"
+  if command -v gitleaks >/dev/null 2>&1; then
+    eq "push --confirm: succeeded" "$(obj push --confirm | jq -r .ok)" "true"
+    [[ -z "$(git -C "$FR" status --porcelain -- allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt .gitleaks.toml)" ]] \
+      && ok "push --confirm: tracked list edits committed" || bad "tracked list edits still dirty"
+    git -C "$FR" status --porcelain -- manifests | grep -q drift.txt \
+      && ok "push --confirm: snapshot-owned paths were NOT swept up" || bad "scoped add leaked into manifests/"
+    [[ "$(git -C "$FR" rev-list --count 'origin/main..main' 2>/dev/null || echo 1)" == 0 ]] \
+      && ok "push --confirm: commit reached the remote" || bad "commit never pushed"
+  else
+    echo "  (gitleaks not installed: skipping push --confirm assertions)"
+  fi
+  # Back to the crafted report: checkout would resurrect the last COMMITTED
+  # drift.txt, which never named appz, and the lock test below needs it named.
+  cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
+
+  # While the lock is held, writes must refuse rather than interleave.
+  ( flock -x 9; sleep 2 ) 9>>"$FR/.lock" &
+  _lockpid=$!
+  sleep 0.3
+  out51=$(env HOME="$FH" OMABACKUP_LOCK_WAIT=1 "$CLI" ignore "$(tp .config/appz/z.toml)" x --json 2>/dev/null)
+  eq "writes refuse while the repo lock is held" "$(jq -r .ok <<<"$out51")" "false"
+  has "the refusal names the lock" "$(jq -r '.problems[0]' <<<"$out51")" "lock"
+  wait "$_lockpid" 2>/dev/null
+
+  # timer/run/pause/resume drive systemctl --user with exactly the right argv
+  # (a fake systemctl records what would have run).
+  mkdir -p "$T/fakebin"
+  printf '#!/bin/sh\necho "$@" >> "%s/sysctl.log"\nexit 0\n' "$T" > "$T/fakebin/systemctl"
+  chmod +x "$T/fakebin/systemctl"
+  : > "$T/sysctl.log"
+  # OMABACKUP_SKIP_TIMERS unset (0) here so these calls actually exercise the
+  # fake systemctl, unlike the rest of this suite which sets it to 1.
+  whp()  { env PATH="$T/fakebin:$PATH" HOME="$FH" OMABACKUP_SKIP_TIMERS=0 "$CLI" "$@" --json 2>/dev/null; }
+  whpd() { env PATH="$T/fakebin:$PATH" HOME="$FH" OMABACKUP_SKIP_TIMERS=1 "$CLI" "$@" --json 2>/dev/null; }
+
+  eq "timer run: starts the unit when systemctl accepts it" \
+    "$(whp timer run | jq -c '[.ok,.started]')" '[true,"unit"]'
+  grep -qx -- '--user start omabackup-snapshot.service' "$T/sysctl.log" \
+    && ok "timer run: starts the snapshot service" || bad "timer run argv wrong"
+
+  whp timer pause >/dev/null; whp timer resume >/dev/null
+  grep -qx -- '--user disable --now omabackup-snapshot.timer' "$T/sysctl.log" \
+    && ok "timer pause: disables --now" || bad "timer pause argv wrong"
+  grep -qx -- '--user enable --now omabackup-snapshot.timer' "$T/sysctl.log" \
+    && ok "timer resume: enables --now" || bad "timer resume argv wrong"
+  eq "timer: unknown verb refused" "$(whp timer sideways | jq -r .ok)" "false"
+
+  # Detached fallback: OMABACKUP_SKIP_TIMERS=1 must never touch systemctl, and
+  # the detached snapshot's OWN health_write_status call refreshes status.json
+  # a few seconds later -- that is how the widget learns the run finished.
+  rm -f "$OMABACKUP_STATE_DIR/status.json"
+  : > "$T/sysctl.log"
+  eq "timer run: detached fallback when timers are skipped" \
+    "$(whpd timer run | jq -c '[.ok,.started]')" '[true,"detached"]'
+  [[ -s "$T/sysctl.log" ]] && bad "detached fallback still called systemctl" || ok "detached fallback did not touch systemctl"
+  _deadline=$(( $(date +%s) + 10 ))
+  while [[ ! -s "$OMABACKUP_STATE_DIR/status.json" && $(date +%s) -lt $_deadline ]]; do sleep 0.2; done
+  [[ -s "$OMABACKUP_STATE_DIR/status.json" ]] \
+    && ok "detached snapshot refreshed status.json within a few seconds" || bad "status.json never appeared"
+
+  # open: a terminal, argv only (never a shell string), cd'd into the data
+  # repo, detached. Both candidate launchers are faked so a real terminal
+  # never pops on the machine running the suite.
+  for n in omarchy-launch-floating-terminal-with-presentation xdg-terminal-exec; do
+    printf '#!/bin/sh\npwd > "%s/open.cwd"\nexit 0\n' "$T" > "$T/fakebin/$n"
+    chmod +x "$T/fakebin/$n"
+  done
+  : > "$T/open.cwd"
+  eq "open: accepted" "$(env PATH="$T/fakebin:$PATH" HOME="$FH" "$CLI" open --json 2>/dev/null | jq -r .ok)" "true"
+  _deadline=$(( $(date +%s) + 5 ))
+  while [[ ! -s "$T/open.cwd" && $(date +%s) -lt $_deadline ]]; do sleep 0.1; done
+  eq "open: launches the terminal cd'd into the data repo" "$(cat "$T/open.cwd" 2>/dev/null)" "$FR"
+fi
 
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
