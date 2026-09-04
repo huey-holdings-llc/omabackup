@@ -22,6 +22,12 @@ fails() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$d" "unexpecte
 eq()   { [[ "$2" == "$3" ]] && ok "$1" || bad "$1" "got '$2' expected '$3'"; }
 has()  { grep -q -- "$3" <<<"$2" && ok "$1" || bad "$1" "missing '$3'"; }
 rand_body() { head -c 300 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c "$1"; }
+# modes_has LINE: modes.txt is NUL-delimited, so translate before grepping
+# rather than relying on grep treating NUL as a line terminator.
+modes_has() { tr '\0' '\n' < "$FR/modes.txt" | grep -qx "$1"; }
+# allow ENTRY: append an allowlist entry and commit it, so a group's own
+# subject is what the run's "uncommitted edits" report is about.
+allow() { printf '%s\n' "$1" >> "$FR/allowlist.txt"; git -C "$FR" commit -qam "allow $1"; }
 # fake_curl CODE [EXIT]: a curl stand-in printing CODE for -w %{http_code}, put on
 # $T/fakebin so callers can prepend it to PATH. Call after mk_fixture (needs $T).
 fake_curl() {
@@ -52,7 +58,7 @@ mk_fixture() {
   git -C "$FR" add -A && git -C "$FR" commit -qm "fixture"
   export OMABACKUP_CONFIG="$T/cfg/config.json" OMABACKUP_STATE_DIR="$T/state" OMABACKUP_STOCK_DIR="$STOCK"
   export OMABACKUP_NET=0 OMABACKUP_NOTIFY=0 OMABACKUP_SKIP_ETC=1 OMABACKUP_SKIP_TIMERS=1
-  export OMABACKUP_MIN_FILES=5 OMABACKUP_MIN_ALLOWLIST=1 OMABACKUP_LOCK_WAIT=2
+  export OMABACKUP_MIN_FILES=1 OMABACKUP_MIN_ALLOWLIST=1 OMABACKUP_LOCK_WAIT=2
   jq -n --arg r "$FR" --arg u "$BARE" '{dataRepo:$r, remote:{url:$u, trusted:true}}' > "$OMABACKUP_CONFIG"
   chmod 600 "$OMABACKUP_CONFIG"
 }
@@ -97,6 +103,24 @@ fi
 
 # Later tasks append groups here, in numeric order, each starting with mk_fixture.
 
+if group 01 "assert: allowlist entry no longer resolves"; then
+  mk_fixture g01; seed_home; commit_baseline
+  before=$(git -C "$FR" rev-parse HEAD)
+  cp "$FR/allowlist.txt" "$T/al.bak"
+  # nullglob only suppresses words that CONTAIN a wildcard, so a literal
+  # missing path expands to itself and a naive match-count guard passes.
+  echo '.config/nope/GONE-RENAMED.conf' >> "$FR/allowlist.txt"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "literal missing path aborts" || bad "literal missing path did NOT abort"
+  has "the refusal says the entries no longer exist" "$out" "no longer exist"
+  eq "no commit created" "$(git -C "$FR" rev-parse HEAD)" "$before"
+  cp "$T/al.bak" "$FR/allowlist.txt"
+  echo '.config/nope/*.toml' >> "$FR/allowlist.txt"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "non-matching glob aborts" || bad "non-matching glob did NOT abort"
+  has "the glob refusal says the entries no longer exist" "$out" "no longer exist"
+  cp "$T/al.bak" "$FR/allowlist.txt"
+fi
 if group 02 "gitleaks gate"; then
   mk_fixture g02; seed_home; commit_baseline
   # shellcheck disable=SC2034  # only the assignment's exit status is used, to gate on gitleaks being installed
@@ -104,11 +128,53 @@ if group 02 "gitleaks gate"; then
     key="sk-ant-api03-$(rand_body 90)AA"
     printf 'ANTHROPIC_API_KEY=%s\n' "$key" > "$FH/.config/mytool/env"
     printf '.config/mytool/env\n' >> "$FR/allowlist.txt"; git -C "$FR" commit -qam allow
-    fails "snapshot refuses a staged Anthropic key" env HOME="$FH" "$CLI" snapshot --no-push
-    ! git -C "$FR" log --oneline | grep -q 'snapshot:' && ok "nothing committed" || bad "a snapshot was committed"
+    before=$(git -C "$FR" rev-parse HEAD)
+    out=$(ob snapshot --no-push); rc=$?
+    [[ $rc -ne 0 ]] && ok "snapshot refuses a staged Anthropic key" || bad "the key was NOT blocked"
+    has "the refusal names the staging tree" "$out" "staging tree"
+    # The fixture's own baseline is a "snapshot:" commit too, so grepping the
+    # log for one proves nothing: pin HEAD across the refused run instead.
+    eq "nothing committed" "$(git -C "$FR" rev-parse HEAD)" "$before"
   else
     echo "  (gitleaks not installed: skipping content gate; filename gate still tested in group 13)"
   fi
+fi
+if group 03 "floor check (hollow snapshot)"; then
+  mk_fixture g03; seed_home; commit_baseline
+  for i in $(seq 1 30); do echo "$i" > "$FH/.config/mytool/f$i"; done
+  allow '.config/mytool'
+  check "baseline with 30 files" env HOME="$FH" "$CLI" snapshot --no-push
+  rm -rf "$FH/.config/mytool"; mkdir -p "$FH/.config/mytool"
+  # OMABACKUP_MIN_FILES= (empty) means "derive the floor from history", which
+  # is the whole point: a fixed number stops discriminating as home/ grows.
+  out=$(env HOME="$FH" OMABACKUP_MIN_FILES= "$CLI" snapshot --no-push 2>&1); rc=$?
+  [[ $rc -ne 0 ]] && ok "a hollow snapshot is refused" || bad "committed a hollow snapshot"
+  has "the floor message is explicit" "$out" "refusing to commit a hollow snapshot"
+fi
+if group 04 "idempotency"; then
+  # Regression: drift.txt and versions.txt embedded a timestamp, so every run
+  # committed and the backup history became noise.
+  mk_fixture g04; seed_home; commit_baseline
+  n1=$(git -C "$FR" rev-list --count HEAD); ob snapshot --no-push >/dev/null; n2=$(git -C "$FR" rev-list --count HEAD)
+  eq "unchanged machine makes no commit" "$n2" "$n1"
+  eq "json says committed=false" "$(obj snapshot --no-push | jq -r .committed)" "false"
+  eq "working tree left clean" "$(git -C "$FR" status --porcelain)" ""
+fi
+if group 05 "permissions are recorded in modes.txt"; then
+  # git stores only the exec bit. The restore half of self-test.sh:160-184
+  # (replaying these modes into a fresh $HOME) needs the restore verb and
+  # lands with it; what the pipeline owns is recording them at all.
+  mk_fixture g05; seed_home
+  mkdir -p "$FH/.config/appb"; printf '{"a":1}\n' > "$FH/.config/appb/settings.json"
+  chmod 600 "$FH/.config/appb/settings.json"; chmod 700 "$FH/.config/appb"
+  allow '.config/appb'
+  check "snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
+  modes_has '600 home/.config/appb/settings.json' \
+    && ok "modes.txt records the 600" || bad "modes.txt missing the 600"
+  # Directories too: git checks every directory out as 755, so a 700 ~/.ssh
+  # came back world-listable on a fresh clone.
+  modes_has '700 home/.config/appb' \
+    && ok "modes.txt records the 700 directory" || bad "modes.txt missing the directory mode"
 fi
 if group 07 "drift detection"; then
   mk_fixture g07; seed_home
@@ -141,10 +207,46 @@ if group 12 "mid-merge repo is refused"; then
   rm "$FR/.git/MERGE_HEAD"
 fi
 if group 13 "filename that looks like a credential"; then
-  mk_fixture g13; seed_home; commit_baseline
-  mkdir -p "$FH/.config/mytool"; printf 'x\n' > "$FH/.config/mytool/ghp_$(rand_body 20).txt"
-  fails "snapshot refuses a ghp_ filename" env HOME="$FH" "$CLI" snapshot --no-push
+  mk_fixture g13; seed_home; allow '.config/mytool'; commit_baseline
+  printf 'x\n' > "$FH/.config/mytool/ghp_$(rand_body 20).txt"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "snapshot refuses a ghp_ filename" || bad "a credential-looking filename was staged"
+  has "the refusal names the filename gate" "$out" "credential-looking filename"
 fi
+if group 14 "allowlist entry that became a symlink"; then
+  mk_fixture g14; seed_home; allow '.config/mytool'
+  # rsync -a stores the link, not the tree behind it: the whole subtree leaves
+  # the backup while the drift scan still calls it covered.
+  mv "$FH/.config/mytool" "$FH/mytool-real"; ln -s "$FH/mytool-real" "$FH/.config/mytool"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "symlinked allowlist entry is refused" || bad "symlinked entry silently emptied the backup"
+  has "the refusal names the symlink" "$out" "symlink to a directory"
+fi
+if group 15 "a dry run must not touch the working tree"; then
+  mk_fixture g15; seed_home; allow '.config/mytool'; commit_baseline
+  printf 'dryrun\n' > "$FH/.config/mytool/dry.conf"
+  before_tree=$(git -C "$FR" status --porcelain | md5sum)
+  check "dry run exits 0" env HOME="$FH" "$CLI" snapshot --dry-run
+  eq "the dry run left the repo untouched" "$(git -C "$FR" status --porcelain | md5sum)" "$before_tree"
+  eq "json reports the dry state and no commit" \
+    "$(obj snapshot --dry-run | jq -r '"\(.state) \(.committed)"')" "dry false"
+fi
+if group 16 "modes survive a filename with a trailing space"; then
+  # `read -r mode path` silently truncated these; modes.txt is NUL-delimited
+  # for exactly this reason. The restore half lands with the restore verb.
+  mk_fixture g16; seed_home; allow '.config/mytool'
+  printf 'x\n' > "$FH/.config/mytool/trailing .conf "
+  chmod 600 "$FH/.config/mytool/trailing .conf "
+  check "snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
+  modes_has '600 home/.config/mytool/trailing .conf ' \
+    && ok "trailing-space filename keeps its recorded mode" || bad "trailing-space filename lost its mode"
+fi
+# Groups 18, 19 and 20 (self-test.sh:295-324) assert restore behaviour
+# (spurious type conflicts, a real file-vs-directory conflict, a truncated
+# package manifest refused), and group 38 (497-503) asserts the staleness
+# check's handling of a garbage or future manifests/.last-run stamp. Neither
+# the restore verb nor the health verb exists yet, so both land with the verb
+# they exercise rather than sitting here as permanently red placeholders.
 if group 22 "partial coverage is DERIVED, not declared"; then
   mk_fixture g22; seed_home
   mkdir -p "$FH/.config/partial/keep" "$FH/.config/partial/drop"
@@ -155,6 +257,25 @@ if group 22 "partial coverage is DERIVED, not declared"; then
   # shellcheck disable=SC2088 # matching drift's literal "~/" report prefix, not a path to expand
   ! grep -q '~/.config/partial$' <<<"$out" && ok "the parent is not reported as a whole" || bad "parent reported wholesale"
 fi
+if group 23 "runs correctly from any working directory"; then
+  # The timer unit runs with WorkingDirectory=$HOME. A git call placed before
+  # the cd into the data repo queried the CALLER's directory, exited 128, and
+  # errexit killed the run with zero output: the daily timer was silently dead.
+  mk_fixture g23; seed_home
+  out=$(cd "$T" && env HOME="$FH" "$CLI" snapshot --dry-run 2>&1); rc=$?
+  [[ $rc -eq 0 ]] && ok "runs from an unrelated CWD" || bad "fails when CWD is not the repo (timer path)" "$out"
+fi
+if group 24 "a vanishing file does not abort the run"; then
+  # rsync exit 24 is a WARNING. Allowlisted paths include files editors and
+  # Omarchy rewrite constantly, so this race is routine.
+  mk_fixture g24; seed_home; allow '.config/mytool'
+  mkdir -p "$FH/.config/mytool/many"
+  for i in $(seq 1 300); do printf 'x\n' > "$FH/.config/mytool/many/f$i"; done
+  ( sleep 0.05; rm -f "$FH/.config/mytool/many/f2"* ) &
+  ob snapshot --no-push >/dev/null 2>&1; rc24=$?
+  wait 2>/dev/null
+  [[ $rc24 -eq 0 ]] && ok "tolerates files vanishing mid-copy" || bad "aborted on rsync exit 24 (rc=$rc24)"
+fi
 if group 25 "an unverifiable repo visibility (403) does not abort the backup"; then
   # Only HTTP 200 proves a repo is public. 403 (unauthenticated rate limit),
   # 429 and 5xx prove nothing and must not hard-fail the whole snapshot.
@@ -163,6 +284,16 @@ if group 25 "an unverifiable repo visibility (403) does not abort the backup"; t
   fake_curl 403
   check "snapshot commits despite an unverifiable 403" env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_NET=1 "$CLI" snapshot
   git -C "$FR" log --oneline | grep -q 'snapshot:' && ok "commit landed locally" || bad "no local commit made"
+fi
+if group 26 "a .gitignore-excluded file warns instead of halting"; then
+  # An app dropping a *.sqlite into an allowlisted directory is a reporting
+  # gap, not data loss: it must not stop every future backup.
+  mk_fixture g26; seed_home; allow '.config/mytool'
+  printf 'x\n' > "$FH/.config/mytool/cache.sqlite"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -eq 0 ]] && ok "a gitignore exclusion warns, it does not die" || bad "died on a gitignore exclusion (rc=$rc)"
+  has "the exclusion is reported" "$out" "excluded by .gitignore"
+  eq "json counts the exclusion" "$(obj snapshot --no-push | jq -r .excluded)" "1"
 fi
 if group 27 "unverified visibility must NOT push"; then
   mk_fixture g27; seed_home
@@ -173,6 +304,52 @@ if group 27 "unverified visibility must NOT push"; then
   jq '.remote.trusted=true' "$OMABACKUP_CONFIG" > "$T/c2" && mv "$T/c2" "$OMABACKUP_CONFIG"
   check "trusted remote pushes" env HOME="$FH" "$CLI" snapshot
   [[ $(git -C "$BARE" rev-list --count main) -ge 1 ]] && ok "pushed once trusted" || bad "not pushed"
+fi
+if group 28 "empty directories survive the backup"; then
+  mk_fixture g28; seed_home; allow '.config/mytool'
+  mkdir -p "$FH/.config/mytool/emptydir"
+  check "snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
+  [[ -e "$FR/home/.config/mytool/emptydir/.gitkeep" ]] \
+    && ok "empty dir marked with .gitkeep" || bad "empty dir lost (git cannot store one)"
+  git -C "$FR" ls-files home/ | grep -q gitkeep && ok ".gitkeep is tracked" || bad ".gitkeep not tracked"
+fi
+if group 29 "JSONC settings do not block the backup"; then
+  # VS Code's settings.json is officially JSONC. Rejecting comments and
+  # trailing commas stopped every backup until a human edited the file.
+  mk_fixture g29; seed_home
+  mkdir -p "$FH/.config/appjsonc"
+  printf '{\n  // a comment\n  "theme": "x",\n}\n' > "$FH/.config/appjsonc/settings.json"
+  printf '.config/appjsonc/settings.json\n' >> "$FR/allowlist.txt"
+  printf 'home/.config/appjsonc/settings.json\ts/"theme": *"[^"]*"/"theme":"n"/g\n' > "$FR/normalize.txt"
+  git -C "$FR" commit -qam "allow and normalize"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -eq 0 ]] && ok "pre-existing JSONC is tolerated" || bad "JSONC blocked the backup (rc=$rc)"
+  # ...and prove the rule actually ran, or the assertion above is vacuous.
+  grep -q '"theme":"n"' "$FR/home/.config/appjsonc/settings.json" 2>/dev/null \
+    && ok "the normalize rule actually applied" || bad "normalize rule never ran; the check above was vacuous"
+fi
+if group 30 "a symlinked directory inside the backup is refused"; then
+  # RELATIVE link, target OUTSIDE the allowlisted tree: the case that loses
+  # data. The guard used to run over the STAGING copy, where this link dangles
+  # because its target was never copied, so -xtype d was false and it passed.
+  mk_fixture g30; seed_home; allow '.config/mytool'
+  mkdir -p "$FH/.local/share/outside"; printf 'important\n' > "$FH/.local/share/outside/important.conf"
+  ln -s ../../.local/share/outside "$FH/.config/mytool/sub"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "relative symlinked subdirectory is refused" \
+    || bad "relative symlinked subdir silently dropped its contents (rc=$rc)"
+  has "the refusal names the symlinked directory" "$out" "symlinked directory inside the backup"
+fi
+if group 32 "a .gitignore-excluded file is committed into the drift report"; then
+  # The EXCLUDED lines were appended AFTER `git add`, so they were never
+  # committed and left the tree permanently dirty: the feature was inert.
+  # The health half of self-test.sh:441 lands with the health verb.
+  mk_fixture g32; seed_home; allow '.config/mytool'
+  printf 'x\n' > "$FH/.config/mytool/cache.sqlite"
+  check "snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
+  git -C "$FR" show HEAD:manifests/drift.txt 2>/dev/null | grep -q EXCLUDED \
+    && ok "the EXCLUDED line is committed" || bad "EXCLUDED line never committed (inert feature)"
+  eq "working tree left clean" "$(git -C "$FR" status --porcelain)" ""
 fi
 if group 33 "drift reports each path exactly once"; then
   mk_fixture g33; seed_home
@@ -190,6 +367,37 @@ if group 34 "a script in a ~/.local/bin SUBDIRECTORY is not invisible"; then
   d=$(ob drift)
   grep -q 'tools/deep.sh' <<<"$d" && ok "nested script surfaces" || bad "nested script invisible to every scanner"
 fi
+if group 35 "a removed app does not halt backups, but mass disappearance does"; then
+  # Real event: an uninstalled app's stale allowlist entry blocked every backup
+  # while unrelated changes went uncaptured. One missing entry must be soft;
+  # many missing means something structural (wrong HOME, unmounted disk).
+  mk_fixture g35; seed_home; commit_baseline
+  jq '.maxMissingPct=90' "$OMABACKUP_CONFIG" > "$T/c2" && mv "$T/c2" "$OMABACKUP_CONFIG"
+  mv "$FH/.bashrc" "$T/bashrc.away"
+  out=$(ob snapshot --no-push); rc1=$?
+  [[ $rc1 -eq 0 ]] && ok "one absent entry does not halt the backup" || bad "halted on a single absent entry"
+  grep -q '^GONE' "$FR/manifests/drift.txt" && ok "recorded as GONE" || bad "not recorded as GONE"
+  mv "$T/bashrc.away" "$FH/.bashrc"
+  jq '.maxMissingPct=25' "$OMABACKUP_CONFIG" > "$T/c2" && mv "$T/c2" "$OMABACKUP_CONFIG"
+  mv "$FH/.config/hypr" "$T/hypr.away"; mv "$FH/.local/bin" "$T/bin.away"
+  out=$(ob snapshot --no-push); rc2=$?
+  [[ $rc2 -ne 0 ]] && ok "mass disappearance still refuses to run" || bad "committed with most entries missing"
+  has "the refusal says the entries no longer exist" "$out" "no longer exist"
+  mv "$T/hypr.away" "$FH/.config/hypr"; mv "$T/bin.away" "$FH/.local/bin"
+fi
+if group 36 "an oversized file is skipped and reported, not silently dropped"; then
+  mk_fixture g36; seed_home; allow '.config/mytool'; commit_baseline
+  head -c 12000000 /dev/urandom > "$FH/.config/mytool/huge.dat"
+  gitsize_before=$(du -sk "$FR/.git" | cut -f1)
+  check "snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
+  [[ ! -e "$FR/home/.config/mytool/huge.dat" ]] \
+    && ok "oversized file kept out of the backup" || bad "oversized file was committed"
+  grep -q '^TOOBIG' "$FR/manifests/drift.txt" && ok "reported as TOOBIG" || bad "silently dropped"
+  eq "json counts it" "$(obj snapshot --no-push | jq -r .toobig)" "1"
+  gitsize_after=$(du -sk "$FR/.git" | cut -f1)
+  [[ $((gitsize_after - gitsize_before)) -lt 2000 ]] \
+    && ok ".git did not grow by the file size" || bad ".git grew $((gitsize_after - gitsize_before))KB"
+fi
 if group 37 "a stale .git/index.lock self-heals"; then
   mk_fixture g37; seed_home
   touch -d '10 minutes ago' "$FR/.git/index.lock"
@@ -201,7 +409,9 @@ if group 39 "a LIVE .git/index.lock is never deleted"; then
   touch -d '10 minutes ago' "$FR/.git/index.lock"
   ( exec 3<"$FR/.git/index.lock"; sleep 5 ) & holder=$!
   sleep 0.3
-  fails "snapshot refuses while another process holds index.lock" env HOME="$FH" "$CLI" snapshot --no-push
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "snapshot refuses while another process holds index.lock" || bad "ran with a live index.lock"
+  has "the refusal names the live holder" "$out" "another git process is using"
   [[ -f "$FR/.git/index.lock" ]] && ok "live lock untouched" || bad "live lock deleted"
   kill $holder 2>/dev/null; wait $holder 2>/dev/null
 fi
@@ -238,6 +448,47 @@ if group 42 "a disabled drift scanner is surfaced, not silent"; then
     "$(OMABACKUP_STOCK_DIR=/nonexistent obj drift | jq -r '.items[] | select(.type=="ERROR") | .path' | head -1 | grep -c '^# ERROR')" "0"
   [[ -n "$(OMABACKUP_STOCK_DIR=/nonexistent obj drift | jq -r '.items[] | select(.type=="ERROR") | .path' | head -1)" ]] \
     && ok "the ERROR item's message text is not empty" || bad "the ERROR item's message text is empty"
+fi
+if group 43 "every manifest is generated BEFORE its carry-forward guard"; then
+  # stock-fingerprint.txt was generated AFTER the loop that protects manifests
+  # from being blanked, so the loop tested a file that did not exist yet: a
+  # permanent false alarm on the one guard that stops rsync --delete eating
+  # real data.
+  mk_fixture g43; seed_home; commit_baseline
+  _run=$(ob snapshot --no-push)
+  grep -q 'could not be regenerated' <<<"$_run" \
+    && bad "spurious carry-forward warning" "$(grep -o '[a-z-]*\.[a-z]* could not be regenerated' <<<"$_run" | head -1)" \
+    || ok "a healthy run emits no carry-forward warning"
+  [[ -s "$FR/manifests/stock-fingerprint.txt" ]] \
+    && ok "stock-fingerprint.txt is non-empty after a normal run" || bad "stock-fingerprint.txt missing or empty"
+fi
+if group 44 "the snapshot commits only its own output, and the staged gate still scans"; then
+  # A human edit to the lists or the README used to be swept into a
+  # "snapshot:" commit by `git add -A`. The health half of self-test.sh:588
+  # lands with the health verb.
+  mk_fixture g44; seed_home; allow '.config/mytool'; commit_baseline
+  printf 'scratch note\n' > "$FR/notes.txt"
+  printf 'scoped\n' > "$FH/.config/mytool/scoped.conf"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -eq 0 ]] && ok "a dirty non-snapshot file does not block the run" || bad "run failed with a dirty repo root (rc=$rc)"
+  git -C "$FR" show --name-only --format= HEAD | grep -qx 'notes.txt' \
+    && bad "notes.txt was swept into the snapshot commit" || ok "notes.txt was NOT committed by the snapshot"
+  has "the edit is reported in the run" "$out" "uncommitted edits outside the snapshot"
+  # ...but if a human has STAGED something with a secret in it, the staged gate
+  # must still catch it: it scans exactly what is about to be committed.
+  if command -v gitleaks >/dev/null; then
+    printf 'note: ghp_%s\n' "$(rand_body 36)" > "$FR/notes.txt"
+    git -C "$FR" add notes.txt
+    printf 'gate\n' > "$FH/.config/mytool/gate.conf"
+    before=$(git -C "$FR" rev-parse HEAD)
+    out=$(ob snapshot --no-push); rc=$?
+    [[ $rc -ne 0 ]] && ok "a secret in a pre-staged file blocks the commit" || bad "staged gate did NOT fire (rc=$rc)"
+    has "the refusal names the staged commit" "$out" "staged commit"
+    eq "no commit created" "$(git -C "$FR" rev-parse HEAD)" "$before"
+    git -C "$FR" diff --cached --quiet && ok "the index was reset" || bad "index left staged after the abort"
+  else
+    echo "  (gitleaks not installed: skipping the staged-commit gate)"
+  fi
 fi
 if group 45 "a PUBLIC repo aborts the run (HTTP 200 is the only proof of public)"; then
   mk_fixture g45; seed_home
@@ -292,6 +543,33 @@ if group 48 "a huge unbacked tree is reported wholesale, never scanned per-file"
   has "small sibling is still scanned" "$d" "share/small/one.conf"
   ! grep -q 'bigok' <<<"$d" && ok "allowlisted huge tree stays quiet" || bad "allowlisted huge tree wrongly reported"
   has "sentinel still present with the guard" "$d" "# drift-scan-complete"
+fi
+if group 49 "desktop popups fire only from the timer, never from a manual run"; then
+  # A manual run already prints the same warning to a terminal somebody is
+  # reading, and the fixture's popups once named paths that exist only under a
+  # scratch $HOME. systemd sets INVOCATION_ID for a unit's processes and
+  # nothing else does. notify() prefers omarchy-notification-send and falls
+  # back to notify-send, so BOTH are stubbed or an Omarchy machine never
+  # reaches the log at all.
+  mk_fixture g49; seed_home; commit_baseline
+  mkdir -p "$T/fakebin"
+  for n in notify-send omarchy-notification-send; do
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/notify.log"\n' "$T" > "$T/fakebin/$n"
+    chmod +x "$T/fakebin/$n"
+  done
+  # $@ = env options/assignments; prints how many "new unbacked" popups the run sent
+  npop() {
+    : > "$T/notify.log"
+    env "$@" PATH="$T/fakebin:$PATH" HOME="$FH" "$CLI" snapshot --no-push >/dev/null 2>&1
+    grep -c 'new unbacked' "$T/notify.log" || true
+  }
+  mkdir -p "$FH/.config/appd"; printf 'x\n' > "$FH/.config/appd/d.toml"
+  eq "manual run (no INVOCATION_ID) sends no popup" "$(npop -u INVOCATION_ID OMABACKUP_NOTIFY=1)" "0"
+  mkdir -p "$FH/.config/appe"; printf 'x\n' > "$FH/.config/appe/e.toml"
+  eq "timer path (INVOCATION_ID set) pops once for new drift" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=1)" "1"
+  eq "an unchanged report does not pop again" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=1)" "0"
+  mkdir -p "$FH/.config/appf"; printf 'x\n' > "$FH/.config/appf/f.toml"
+  eq "OMABACKUP_NOTIFY=0 silences the timer path too" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=0)" "0"
 fi
 
 echo; echo "passed=$pass failed=$fail"
