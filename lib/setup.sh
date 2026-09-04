@@ -14,10 +14,10 @@ cmd_setup() {
   local data="" remote="" create=0 import="" trust=0 notimers=0 yes=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --data-repo) data=$2; shift 2 ;;
-      --remote) remote=$2; shift 2 ;;
+      --data-repo) [[ $# -ge 2 ]] || usage_die "setup: --data-repo needs a value"; data=$2; shift 2 ;;
+      --remote) [[ $# -ge 2 ]] || usage_die "setup: --remote needs a value"; remote=$2; shift 2 ;;
       --create-private) create=1; shift ;;
-      --import) import=$2; shift 2 ;;
+      --import) [[ $# -ge 2 ]] || usage_die "setup: --import needs a value"; import=$2; shift 2 ;;
       --trust-remote) trust=1; shift ;;
       --no-timers) notimers=1; shift ;;
       --yes) yes=1; shift ;;
@@ -25,6 +25,13 @@ cmd_setup() {
     esac
   done
   [[ -n "$import" && -n "$data" ]] && usage_die "setup: --import and --data-repo are exclusive"
+
+  # Read the phase a PRIOR run reached before anything below touches config,
+  # so a rerun can skip the two steps expensive enough to be worth skipping
+  # (setup_first_scan, setup_first_snapshot) instead of repeating them.
+  local prior_phase=""
+  config_exists && prior_phase=$(jq -r '.setupPhase // ""' "$CONFIG_FILE" 2>/dev/null)
+
   setup_tools
   if [[ -n "$import" ]]; then
     setup_import "$import"
@@ -33,12 +40,14 @@ cmd_setup() {
     setup_seed
   fi
   config_load
-  setup_first_scan
+  setup_phase_at_least "$prior_phase" scanned || setup_first_scan
   setup_remote "$remote" "$create" "$trust" "$yes"
-  [[ $notimers == 1 ]] || setup_units
+  # The units exec %h/.local/bin/omabackup: the symlink must exist before a
+  # timer can fire, so link before enabling anything that would run it.
   setup_cli_link
+  [[ $notimers == 1 ]] || setup_units
   setup_shell_nag "$yes"
-  [[ $notimers == 1 ]] || setup_first_snapshot
+  [[ $notimers == 1 ]] || setup_phase_at_least "$prior_phase" snapshot || setup_first_snapshot
   setup_phase "done"
   if [[ $JSON == 1 ]]; then
     jq -cn --arg r "$DATA_REPO" '{ok:true, dataRepo:$r}'
@@ -51,6 +60,26 @@ cmd_setup() {
 # repeating finished steps.
 setup_phase() { config_write "$(jq --arg p "$1" '.setupPhase=$p' "$CONFIG_FILE")"; }
 
+# setup_phase_rank PHASE: this phase's position in the resume order. seeded
+# and imported rank the same (either means the repo layout step is done); an
+# empty or unknown phase ranks below everything, so a fresh install always
+# runs every step.
+setup_phase_rank() {
+  case "$1" in
+    seeded|imported) echo 1 ;;
+    scanned)         echo 2 ;;
+    remote)          echo 3 ;;
+    units)           echo 4 ;;
+    link)            echo 5 ;;
+    nag)             echo 6 ;;
+    snapshot)        echo 7 ;;
+    done)            echo 8 ;;
+    *)               echo 0 ;;
+  esac
+}
+# setup_phase_at_least PRIOR TARGET: has a prior run already reached TARGET?
+setup_phase_at_least() { [[ $(setup_phase_rank "$1") -ge $(setup_phase_rank "$2") ]]; }
+
 # ask PROMPT DEFAULT YES: gum input, unless --yes was given or stdin is not a
 # tty (a systemd unit, a script, this test suite), in which case DEFAULT wins.
 ask() {
@@ -58,12 +87,16 @@ ask() {
   if [[ $yes == 1 || ! -t 0 ]] || ! have gum; then printf '%s' "$default"; return; fi
   gum input --header "$prompt" --value "$default"
 }
-# confirm PROMPT YES: same rule as ask, but for a yes/no gate. Unattended
-# (--yes, or no tty) always confirms; gum decides otherwise.
+# confirm PROMPT YES: a yes/no gate. Only an explicit YES=1 auto-confirms;
+# with no tty (a systemd unit, a script, this test suite) or no gum, the
+# safe answer is no, since this gates things like trusting a remote enough
+# to push to it. Only gum, interactively, can actually decline for a human.
 confirm() {
   local prompt=$1 yes=$2
-  [[ $yes == 1 || ! -t 0 ]] && return 0
-  have gum && gum confirm "$prompt"
+  [[ $yes == 1 ]] && return 0
+  [[ -t 0 ]] || return 1
+  have gum || return 1
+  gum confirm "$prompt"
 }
 
 setup_tools() {
@@ -83,7 +116,14 @@ setup_data_repo() {
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
   mkdir -m 700 -p "$dir"
   [[ -d "$dir/.git" ]] || git -C "$dir" init -q -b main
-  config_write "$(jq -cn --arg r "$dir" --argjson d "$CONFIG_DEFAULTS" '$d + {dataRepo:$r}')"
+  # A rerun MERGES into whatever config already exists (remote.trusted,
+  # shellNag, timer.* and setupPhase must all survive); only a first-ever
+  # setup starts clean from CONFIG_DEFAULTS.
+  if config_exists; then
+    config_write "$(jq -c --argjson d "$CONFIG_DEFAULTS" --arg r "$dir" '$d * . + {dataRepo:$r}' "$CONFIG_FILE")"
+  else
+    config_write "$(jq -cn --arg r "$dir" --argjson d "$CONFIG_DEFAULTS" '$d + {dataRepo:$r}')"
+  fi
   # shellcheck disable=SC2034  # CFG_JSON: read by cfg() (lib/config.sh), not this file
   CFG_JSON=$(cat "$CONFIG_FILE")
   DATA_REPO=$dir
@@ -124,7 +164,11 @@ setup_import() {
   for d in home manifests; do
     [[ -d "$dir/$d" ]] || die "$dir has no $d/"
   done
-  config_write "$(jq -cn --arg r "$dir" --argjson d "$CONFIG_DEFAULTS" '$d + {dataRepo:$r}')"
+  if config_exists; then
+    config_write "$(jq -c --argjson d "$CONFIG_DEFAULTS" --arg r "$dir" '$d * . + {dataRepo:$r}' "$CONFIG_FILE")"
+  else
+    config_write "$(jq -cn --arg r "$dir" --argjson d "$CONFIG_DEFAULTS" '$d + {dataRepo:$r}')"
+  fi
   # shellcheck disable=SC2034  # CFG_JSON: read by cfg() (lib/config.sh), not this file
   CFG_JSON=$(cat "$CONFIG_FILE")
   DATA_REPO=$dir
@@ -167,10 +211,13 @@ setup_remote() {
   fi
   url=$(remote_origin_url)
   if [[ -n "$url" && -z "$(remote_github_slug "$url")" ]]; then
-    if [[ $trust == 0 ]] && confirm "This remote is not on GitHub, so OmaBackup cannot check that it is private. Push to it anyway? Only say yes if you know it is private." "$yes"; then
+    # The trust question is only ever asked interactively: confirm's safe
+    # default is no, so an unattended run (--yes, or no tty) leaves a
+    # non-GitHub remote untrusted unless --trust-remote said otherwise.
+    if [[ $trust == 0 && $yes == 0 ]] && confirm "This remote is not on GitHub, so OmaBackup cannot check that it is private. Push to it anyway? Only say yes if you know it is private." 0; then
       trust=1
     fi
-    [[ $yes == 1 && $trust == 0 ]] && warn "non-GitHub remote left untrusted: commits will not be pushed until remote.trusted is true"
+    [[ $trust == 0 ]] && warn "non-GitHub remote left untrusted: commits will not be pushed until remote.trusted is true"
   fi
   config_write "$(jq --arg u "$url" --argjson t "$([[ $trust == 1 ]] && echo true || echo false)" '.remote={url:$u, trusted:$t}' "$CONFIG_FILE")"
   setup_phase "remote"
@@ -193,6 +240,7 @@ setup_units() {
 setup_cli_link() {
   mkdir -p "$HOME/.local/bin"
   ln -sfn "$PLUGIN_DIR/bin/omabackup" "$HOME/.local/bin/omabackup"
+  setup_phase "link"
 }
 
 # setup_shell_nag YES: opt in when config already carries shellNag, or
@@ -204,14 +252,21 @@ setup_shell_nag() {
     grep -qF "$line" "$rc" 2>/dev/null || printf '\n# OmaBackup login check\n%s\n' "$line" >> "$rc"
     config_write "$(jq '.shellNag=true' "$CONFIG_FILE")"
   fi
+  setup_phase "nag"
 }
 
 setup_first_snapshot() {
   log "Running the first snapshot (no push)"
-  # Force JSON=1 for the inner call and discard its own JSON object: setup
-  # already promised exactly one JSON object on stdout, and the snapshot's
-  # own report would otherwise become a second one under `setup --json`.
-  JSON=1 cmd_snapshot --no-push >/dev/null || die "the first snapshot failed, fix the reported problem and rerun omabackup setup"
+  # Capture the inner call in a subshell (command substitution always forks
+  # one) so its own die() can only exit THAT subshell, not the wizard: die()
+  # exits the process outright, and without this a failing snapshot would
+  # kill setup before it could report anything in the caller's own mode.
+  local out
+  if out=$(JSON=1 cmd_snapshot --no-push); then
+    :
+  else
+    die "the first snapshot failed: $(jq -r '.error // "unknown"' <<<"$out" 2>/dev/null). Fix the reported problem and rerun omabackup setup"
+  fi
 }
 
 # setup_check: the doctor (`setup check`). Probes tools, reads config if
@@ -289,5 +344,9 @@ setup_remove() {
   rm -f "$HOME/.config/systemd/user"/omabackup-*.{service,timer} "$HOME/.local/bin/omabackup"
   [[ "${OMABACKUP_SKIP_TIMERS:-0}" != 1 ]] && systemctl --user daemon-reload || true
   rm -f "$CONFIG_FILE"
-  log "Removed. Your data repo and its remote are untouched."
+  if [[ $JSON == 1 ]]; then
+    jq -cn '{ok:true, removed:true}'
+  else
+    log "Removed. Your data repo and its remote are untouched."
+  fi
 }

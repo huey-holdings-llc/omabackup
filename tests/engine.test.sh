@@ -1131,7 +1131,12 @@ fi
 
 if group 60 "setup creates a data repo, seeds, marker, config"; then
   T="$ROOT/g60"; FH="$T/home"; mkdir -p "$FH" "$T/state"
-  export OMABACKUP_CONFIG="$T/cfg.json" OMABACKUP_STATE_DIR="$T/state" OMABACKUP_STOCK_DIR="$STOCK_SRC" OMABACKUP_NET=0 OMABACKUP_NOTIFY=0 OMABACKUP_SKIP_ETC=1
+  export OMABACKUP_CONFIG="$T/cfg.json" OMABACKUP_STATE_DIR="$T/state" OMABACKUP_STOCK_DIR="$STOCK_SRC" OMABACKUP_NET=0 OMABACKUP_NOTIFY=0 OMABACKUP_SKIP_ETC=1 OMABACKUP_SKIP_TIMERS=1
+
+  fails "setup: --data-repo with no value is usage (exit 2)" env HOME="$FH" "$CLI" setup --data-repo
+  [[ $(env HOME="$FH" "$CLI" setup --data-repo >/dev/null 2>&1; echo $?) == 2 ]] \
+    && ok "setup: --data-repo with no value exits 2" || bad "setup: --data-repo with no value exit code"
+
   check "unattended setup, local only, no timers" env HOME="$FH" "$CLI" setup --data-repo "$T/data" --no-timers --yes
   [[ -f "$T/data/.omabackup" ]] && ok "marker written" || bad "no marker"
   [[ -f "$T/data/allowlist.txt" && -f "$T/data/drift-ignore.txt" && -f "$T/data/.gitleaks.toml" ]] && ok "seeds copied" || bad "seeds missing"
@@ -1139,19 +1144,39 @@ if group 60 "setup creates a data repo, seeds, marker, config"; then
   eq "config is 0600" "$(stat -c %a "$OMABACKUP_CONFIG")" "600"
   eq "phase recorded as done" "$(jq -r .setupPhase "$OMABACKUP_CONFIG")" "done"
   check "setup check passes" env HOME="$FH" "$CLI" setup check
+
+  # A rerun must merge into the existing config, not replace it: a manual
+  # edit to an unrelated key (here timer.calendar) must survive.
+  jq '.timer.calendar="hourly"' "$OMABACKUP_CONFIG" > "$T/cfg.tmp" && mv "$T/cfg.tmp" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
   check "setup is idempotent" env HOME="$FH" "$CLI" setup --data-repo "$T/data" --no-timers --yes
+  eq "a rerun preserves an unrelated config edit (merge, not replace)" "$(jq -r .timer.calendar "$OMABACKUP_CONFIG")" "hourly"
+  eq "phase still done after rerun" "$(jq -r .setupPhase "$OMABACKUP_CONFIG")" "done"
 fi
 
-if group 61 "setup --import adopts an existing engine repo"; then
+if group 61 "setup --import adopts an existing engine repo; unattended trust stays opt-in"; then
   mk_fixture g61; seed_home; rm "$FR/.omabackup"
   check "import writes the marker" env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
   eq "marker format 1" "$(jq -r .format "$FR/.omabackup")" "1"
-  mkdir -p "$T/notarepo"; fails "import refuses a directory without the lists" env HOME="$FH" "$CLI" setup --import "$T/notarepo" --no-timers --yes
+  # $FR's origin is $BARE, a local path: not GitHub. An unattended run
+  # (--yes, no tty, no --trust-remote) must never trust it, even though
+  # mk_fixture's own pre-authored config said trusted:true.
+  eq "unattended import leaves a non-GitHub remote untrusted without --trust-remote" \
+    "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "false"
+
+  git init -q "$T/notarepo"
+  fails "import refuses a directory without the lists" env HOME="$FH" "$CLI" setup --import "$T/notarepo" --no-timers --yes
+
+  # Rerunning setup against the same non-GitHub remote with --trust-remote
+  # is the only way to flip it to trusted.
+  check "setup --remote --trust-remote rerun" env HOME="$FH" "$CLI" setup --data-repo "$FR" --remote "$BARE" --trust-remote --no-timers --yes
+  eq "explicit --trust-remote sets remote.trusted true" "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "true"
 fi
 
 if group 62 "setup --remove leaves the data repo alone"; then
   mk_fixture g62; seed_home
-  check "remove" env HOME="$FH" "$CLI" setup --remove --yes
+  out62=$(obj setup --remove --yes); rc62=$?
+  eq "remove --json exits 0" "$rc62" "0"
+  eq "remove --json prints exactly one JSON object" "$(jq -c '[.ok,.removed]' <<<"$out62")" "[true,true]"
   [[ ! -f "$OMABACKUP_CONFIG" ]] && ok "config removed" || bad "config still there"
   [[ -f "$FR/allowlist.txt" ]] && ok "data repo untouched" || bad "data repo damaged"
 fi
