@@ -18,13 +18,25 @@
 # throwaway directory under $STATE_DIR (never /tmp), removed on every exit
 # path via an EXIT trap.
 #
-# "Since the last run" is read from the MTIME of manifests/.last-run, not its
-# content, which is a deliberate change from the source script: the content
-# is a wall-clock epoch with one-second resolution, so two lines of a fast
-# test landing in the same second are indistinguishable from "unchanged" and
-# the mtime is not. The mtime is exactly as meaningful -- both answer "when
-# did the last run start" -- and it is what a test (or a human backdating a
-# stamp by hand) can set precisely with touch -d.
+# "Since the last run" is read from the CONTENT of manifests/.last-run (the
+# start-of-run epoch the engine writes there), matching every other consumer
+# of that file (lib/lint.sh, lib/health.sh). The pipeline writes that content
+# near the END of the run, well after staging, so a file edited between the
+# run's start and its end must still read as "changed since" -- using the
+# file's mtime instead (an earlier version of this file did) is systematically
+# too late a cutoff and wrongly flags exactly that window as a real mismatch.
+# Garbage or missing content is never silently treated as epoch 0 (that would
+# excuse everything): unparseable content falls back to the file's own mtime,
+# with a warning, and a missing file falls back to the data repo's last
+# commit time, same as before.
+#
+# Two other departures from the literal source, both deliberate:
+#   - The badmode early-exit threshold is 20, not the source's 5. This repo's
+#     modes.txt fixtures commonly carry more than 5 entries under test, and 5
+#     stops the check well before it has looked at a representative sample.
+#   - The throwaway restore reuses restore_stage_configs from lib/restore.sh
+#     (rsync plus the modes.txt replay) instead of the source's inline
+#     find/cp loop -- see cmd_verify below.
 #
 # ERREXIT DISCIPLINE: every command whose exit status is inspected sits on
 # the left of `||` or inside an `if`; process substitutions are exempt by
@@ -52,7 +64,7 @@ verify_is_normalized() {
 }
 
 # verify_changed_since LIVE_PATH: true when LIVE_PATH is newer than
-# VERIFY_SINCE -- see the file header for why that is an mtime, not a parse.
+# VERIFY_SINCE -- see the file header for what that is read from.
 verify_changed_since() {
   local mtime; mtime=$(stat -c %Y "$1" 2>/dev/null) || mtime=0
   [[ "$mtime" -gt "${VERIFY_SINCE:-0}" ]]
@@ -125,15 +137,30 @@ cmd_verify() {
 
   local VERIFY_SINCE=0
   if [[ -f "$DATA_REPO/manifests/.last-run" ]]; then
-    VERIFY_SINCE=$(stat -c %Y "$DATA_REPO/manifests/.last-run" 2>/dev/null) || VERIFY_SINCE=0
+    local since_content
+    since_content=$(cat "$DATA_REPO/manifests/.last-run" 2>/dev/null) || since_content=""
+    if [[ "$since_content" =~ ^[1-9][0-9]*$ ]]; then
+      VERIFY_SINCE="$since_content"
+    else
+      # Never silently treat garbage as epoch 0 -- that would excuse every
+      # mismatch in the run. Fall back to the file's own mtime, and say so.
+      warn "manifests/.last-run content is not a positive integer ('$since_content'); falling back to its mtime"
+      VERIFY_SINCE=$(stat -c %Y "$DATA_REPO/manifests/.last-run" 2>/dev/null) || VERIFY_SINCE=0
+    fi
   else
     VERIFY_SINCE=$(git -C "$DATA_REPO" log -1 --format=%ct 2>/dev/null) || VERIFY_SINCE=0
   fi
 
-  local compared=0 skip_norm=0 skip_changed=0 rel live rest
+  local compared=0 skip_norm=0 skip_changed=0 absent=0 rel live rest
   while IFS= read -r rel; do
     live="$live_home/$rel"; rest="$R/$rel"
-    [[ -e "$live" ]] || continue
+    if [[ ! -e "$live" ]]; then
+      # Backed up but not on the live machine: not a fidelity bug (restore
+      # only ever adds), and not comparable either. Counted for the human
+      # summary only -- the JSON schema has no field for it.
+      absent=$((absent+1))
+      continue
+    fi
     compared=$((compared+1))
     if cmp -s "$live" "$rest"; then
       :
@@ -168,7 +195,7 @@ cmd_verify() {
         verify_mismatch "~/$rel (mode $got, recorded $mode)"
         badmode=$((badmode+1))
       fi
-      [[ "$badmode" -ge 20 ]] && break
+      [[ "$badmode" -ge 20 ]] && break   # 20, not the source's 5 -- see the file header
     done < "$DATA_REPO/modes.txt"
   fi
 
@@ -186,7 +213,8 @@ cmd_verify() {
       '{ok:$ok, compared:$compared, mismatched:$mismatched, skipped_normalized:$skipped_normalized, skipped_changed:$skipped_changed}'
   else
     echo
-    printf '  %s compared, %s normalised-as-expected, %s changed since the last run\n' "$compared" "$skip_norm" "$skip_changed"
+    printf '  %s compared, %s normalised-as-expected, %s changed since the last run, %s absent from live\n' \
+      "$compared" "$skip_norm" "$skip_changed" "$absent"
     if [[ "$ok" == true ]]; then
       printf '\033[1;32mrestore fidelity verified\033[0m\n'
     else

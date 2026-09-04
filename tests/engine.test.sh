@@ -531,18 +531,33 @@ if group 31 "restore fidelity"; then
   eq "json mismatched is empty" "$(obj verify | jq '.mismatched|length')" "0"
   # A file changed since the last run legitimately differs from the backup --
   # a fast test (and a slow real one) both rewrite configs after the run
-  # finishes. "Since" is the last-run stamp's MTIME (see lib/verify.sh's
-  # header), which is why this backdates it with touch -d rather than editing
-  # its content.
+  # finishes. "Since" is the last-run stamp's CONTENT (the start-of-run
+  # epoch the engine writes there, same as lib/lint.sh and lib/health.sh
+  # read), so the backdating writes content, not just mtime; the mtime is
+  # kept in step too since a real snapshot always agrees.
   printf 'changed\n' > "$FH/.bashrc"
+  date -d '1 hour ago' +%s > "$FR/manifests/.last-run"
   touch -d '1 hour ago' "$FR/manifests/.last-run"
   git -C "$FR" commit -qam x 2>/dev/null || true
   eq "a file changed since the last run is skipped, not failed" "$(obj verify | jq -r .ok)" "true"
   # Now the mismatch predates the last-run stamp: it must be reported, not
   # silently swallowed by the same exception.
   touch -d '1 hour ago' "$FH/.bashrc"
+  date +%s > "$FR/manifests/.last-run"
   touch "$FR/manifests/.last-run"
   fails "a mismatch older than the last run fails verify" env HOME="$FH" "$CLI" verify
+  # Regression: the pipeline writes manifests/.last-run's CONTENT at the
+  # START of the run but its MTIME lands later, near the run's end (whatever
+  # else the pipeline does after that write). A file edited in that window
+  # (after the content epoch, before the mtime) must still be excused by the
+  # content-based cutoff -- an mtime-based cutoff wrongly flags it, because
+  # the mtime is a later, stricter boundary than the run actually started at.
+  since_t=$(date +%s)
+  printf '%s\n' "$since_t" > "$FR/manifests/.last-run"
+  touch -d "@$((since_t + 3))" "$FR/manifests/.last-run"
+  touch -d "@$((since_t + 1))" "$FH/.bashrc"
+  eq "a file edited after the content epoch but before the later mtime is excused" \
+    "$(obj verify | jq -c '[.ok,.skipped_changed]')" '[true,1]'
 fi
 if [[ "${OMABACKUP_REAL_REPO:-0}" == 1 ]] && group 31R "restore fidelity against the REAL backup"; then
   unset OMABACKUP_CONFIG OMABACKUP_STATE_DIR OMABACKUP_STOCK_DIR OMABACKUP_SKIP_ETC
