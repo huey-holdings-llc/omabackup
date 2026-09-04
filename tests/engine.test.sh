@@ -174,6 +174,10 @@ if group 42 "a disabled drift scanner is surfaced, not silent"; then
   has "a disabled scanner is surfaced as # ERROR" "$out" "# ERROR"
   eq "json items carry it as type ERROR" \
     "$(OMABACKUP_STOCK_DIR=/nonexistent obj drift | jq -r '[.items[] | select(.type=="ERROR")] | length > 0')" "true"
+  eq "json ERROR item carries the message, not the prefix" \
+    "$(OMABACKUP_STOCK_DIR=/nonexistent obj drift | jq -r '.items[] | select(.type=="ERROR") | .path' | head -1 | grep -c '^# ERROR')" "0"
+  [[ -n "$(OMABACKUP_STOCK_DIR=/nonexistent obj drift | jq -r '.items[] | select(.type=="ERROR") | .path' | head -1)" ]] \
+    && ok "the ERROR item's message text is not empty" || bad "the ERROR item's message text is empty"
 fi
 if group 46 "hand-authored /etc drop-ins are reported"; then
   mk_fixture g46; seed_home

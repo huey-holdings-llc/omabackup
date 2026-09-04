@@ -13,7 +13,6 @@
 # expand. Rewriting it to "$HOME/" would change the report and break the
 # `has` assertions in tests/engine.test.sh that match strings like
 # "NEW        ~/.config/mytool".
-shopt -s extglob   # drift_items_json's ${rest##+( )} whitespace strip needs this
 
 # drift_scan: print the report to stdout, ending with the "# drift-scan-complete"
 # sentinel. The daily pipeline (snapshot, Task 9) refuses to commit without that
@@ -409,17 +408,29 @@ cmd_drift() {
 }
 
 # drift_items_json: report lines on stdin -> JSON array body (type, path, note).
-# Used by cmd_drift --json and, later, health/widget via drift_parse.
+# Used by cmd_drift --json and, later, health/widget via drift_parse. Leading
+# whitespace is trimmed with `${v#"${v%%[! ]*}"}` (strip the longest
+# leading-spaces-only prefix), not `${v##+( )}`, so this needs no `extglob`:
+# that shopt used to be set at file scope and leaked into every other verb
+# for the rest of the process, the same class of leak Task 5 fixed for
+# nullglob.
 drift_items_json() {
   local items=() type path note rest line
   while IFS= read -r line; do
     case "$line" in
       '# ERROR'*)
-        type=ERROR; path=${line#\# ERROR }; note=""
+        # Both "# ERROR: msg" (drift_scan's own lines) and "# ERROR msg" are
+        # accepted: strip the marker, an optional colon, then leading spaces,
+        # so path carries the message, never the "# ERROR" prefix.
+        type=ERROR
+        path=${line#'# ERROR'}; path=${path#:}
+        path=${path#"${path%%[! ]*}"}
+        note=""
         ;;
       ''|'#'*) continue ;;
       *)
-        type=${line%% *}; rest=${line#"$type"}; rest=${rest##+( )}
+        type=${line%% *}; rest=${line#"$type"}
+        rest=${rest#"${rest%%[! ]*}"}
         path=${rest%% (*}; note=""; [[ "$rest" == *" ("* ]] && note=${rest#*"$path" }
         path=${path%/}   # a directory's trailing "/" is report display flourish, not part of the path
         ;;
