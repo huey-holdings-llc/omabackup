@@ -24,6 +24,7 @@ NAG_DAYS=7
 [[ -n "${OMABACKUP_MIN_ALLOWLIST:-}" ]] || unset OMABACKUP_MIN_ALLOWLIST
 
 CONFIG_KNOWN='["dataRepo","remote","maxFileSize","staleDays","maxMissingPct","maxScanFiles","notify","shellNag","timer","setupPhase"]'
+CONFIG_KNOWN_DOTTED='["remote.url","remote.trusted","timer.calendar","timer.jitter"]'
 CONFIG_DEFAULTS='{"remote":{"url":"","trusted":false},"maxFileSize":"8m","staleDays":2,"maxMissingPct":25,"maxScanFiles":2000,"notify":true,"shellNag":false,"timer":{"calendar":"daily","jitter":"30m"},"setupPhase":""}'
 
 logf() {
@@ -38,9 +39,14 @@ config_exists() { [[ -r "$CONFIG_FILE" ]]; }
 config_load() {
   config_exists || die "no config at $CONFIG_FILE. Run: omabackup setup"
   jq -e . "$CONFIG_FILE" >/dev/null 2>&1 || die "config is not valid JSON: $CONFIG_FILE"
+  jq -e 'type == "object"' "$CONFIG_FILE" >/dev/null 2>&1 || die "config is not a JSON object: $CONFIG_FILE"
   local unknown
-  unknown=$(jq -r --argjson known "$CONFIG_KNOWN" 'keys - $known | .[]' "$CONFIG_FILE")
-  [[ -z "$unknown" ]] || die "unknown config key(s): $(echo "$unknown" | tr '\n' ' ')"
+  unknown=$(jq -r --argjson known "$CONFIG_KNOWN" --argjson knownDotted "$CONFIG_KNOWN_DOTTED" '
+    ([paths as $p | select(($p | length) == 1) | $p[0]] - $known) as $top
+    | ([paths as $p | select(($p | length) == 2) | ($p[0] + "." + ($p[1] | tostring))] - $knownDotted) as $nested
+    | ($top + $nested) | join(" ")
+  ' "$CONFIG_FILE")
+  [[ -z "$unknown" ]] || die "unknown config key(s): $unknown"
   CFG_JSON=$(jq -c --argjson d "$CONFIG_DEFAULTS" '$d * .' "$CONFIG_FILE")
   DATA_REPO=$(cfg dataRepo); DATA_REPO=${DATA_REPO/#\~/$HOME}
   [[ -n "$DATA_REPO" && "$DATA_REPO" != null ]] || die "config has no dataRepo"
