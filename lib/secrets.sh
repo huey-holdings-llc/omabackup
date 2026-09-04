@@ -44,10 +44,13 @@ secrets_scan_staging() {
   # all die with the same "found a secret", with nothing to tell them apart
   # (engine: snapshot.sh:495-512 does not redirect either). With --json, stdout
   # must stay a single JSON object, so gitleaks' stdout is rerouted to stderr;
-  # its own stderr is never swallowed in either mode.
-  local rc
-  if [[ "${JSON:-0}" == 1 ]]; then "${gl[@]}" 1>&2; else "${gl[@]}"; fi
-  rc=$?
+  # its own stderr is never swallowed in either mode. `|| rc=$?` keeps the
+  # gitleaks invocation on the left of `||`: bin/omabackup runs under
+  # `set -euo pipefail`, and a failing command inside a bare `if ...; then`
+  # body is NOT errexit-exempt -- it killed the process before `rc` could be
+  # read, so a real leak never reached reset/die at all.
+  local rc=0
+  if [[ "${JSON:-0}" == 1 ]]; then "${gl[@]}" >&2 || rc=$?; else "${gl[@]}" || rc=$?; fi
   [[ $rc -eq 0 ]] || die "gitleaks exited $rc scanning the staging tree; investigate the output above; nothing committed"
 }
 
@@ -59,12 +62,14 @@ secrets_scan_staging() {
 secrets_scan_staged() {
   gitleaks_available || return 0
   log "Scanning the staged commit"
-  local rc
+  # `|| rc=$?` for the same reason as secrets_scan_staging: under
+  # `set -euo pipefail`, a failing command in a bare `if ...; then` body is
+  # not errexit-exempt and would kill the process before reset/die ran.
+  local rc=0
   if [[ "${JSON:-0}" == 1 ]]; then
-    ( cd "$DATA_REPO" && gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1 1>&2 )
+    ( cd "$DATA_REPO" && gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1 >&2 ) || rc=$?
   else
-    ( cd "$DATA_REPO" && gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1 )
+    ( cd "$DATA_REPO" && gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1 ) || rc=$?
   fi
-  rc=$?
   [[ $rc -eq 0 ]] || { git -C "$DATA_REPO" reset -q; die "gitleaks exited $rc on the staged commit; staging undone, nothing committed"; }
 }
