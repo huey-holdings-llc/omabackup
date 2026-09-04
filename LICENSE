@@ -23,8 +23,3 @@ SOFTWARE.
 ---
 External dependencies (not bundled): git, rsync, jq, gum, systemd, util-linux (flock) ship with Omarchy;
 gitleaks (MIT, https://github.com/gitleaks/gitleaks) is optional and gates pushes only.
-
----
-
-External dependencies (not bundled; all ship with Omarchy):
-  voxtype (MIT), ffmpeg (LGPL/GPL), jq (MIT), PipeWire tools (MIT), systemd (LGPL).
