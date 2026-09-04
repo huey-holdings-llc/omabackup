@@ -56,7 +56,7 @@ main() {
   local verb=${ARGS[0]:-help}
   [[ ${#ARGS[@]} -gt 0 ]] && ARGS=("${ARGS[@]:1}")
   case "$verb" in
-    help|-h|--help) usage ;;
+    help|-h|--help) if [[ $JSON == 1 ]]; then jq -cn --arg u "$(usage)" '{ok:true, usage:$u}'; else usage; fi ;;
     version) if [[ $JSON == 1 ]]; then jq -cn --arg v "$VERSION" '{version:$v}'; else echo "$VERSION"; fi ;;
     setup|snapshot|drift|status|allow|ignore|resolve-gone|push|lint|restore|verify|health|timer|self-test|open)
       local fn="cmd_${verb//-/_}"

@@ -17,7 +17,15 @@ die() {
   fi
   exit 1
 }
-usage_die() { printf 'omabackup: %s\nRun: omabackup help\n' "$*" >&2; exit 2; }
+# usage_die: bad usage. Exit 2. With --json the refusal is still one JSON object.
+usage_die() {
+  if [[ "${JSON:-0}" == 1 ]]; then
+    jq -cn --arg m "$*" '{ok:false, error:$m, usage:true}'
+  else
+    printf 'omabackup: %s\nRun: omabackup help\n' "$*" >&2
+  fi
+  exit 2
+}
 
 # ---- json -----------------------------------------------------------------
 # Drift paths are arbitrary filenames: escape, and strip control bytes.
