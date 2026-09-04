@@ -92,6 +92,19 @@ fi
 
 # Later tasks append groups here, in numeric order, each starting with mk_fixture.
 
+if group 02 "gitleaks gate"; then
+  mk_fixture g02; seed_home; commit_baseline
+  # shellcheck disable=SC2034  # only the assignment's exit status is used, to gate on gitleaks being installed
+  if have_gitleaks=$(command -v gitleaks); then
+    key="sk-ant-api03-$(rand_body 90)AA"
+    printf 'ANTHROPIC_API_KEY=%s\n' "$key" > "$FH/.config/mytool/env"
+    printf '.config/mytool/env\n' >> "$FR/allowlist.txt"; git -C "$FR" commit -qam allow
+    fails "snapshot refuses a staged Anthropic key" env HOME="$FH" "$CLI" snapshot --no-push
+    ! git -C "$FR" log --oneline | grep -q 'snapshot:' && ok "nothing committed" || bad "a snapshot was committed"
+  else
+    echo "  (gitleaks not installed: skipping content gate; filename gate still tested in group 13)"
+  fi
+fi
 if group 07 "drift detection"; then
   mk_fixture g07; seed_home
   out=$(ob drift)
@@ -111,6 +124,11 @@ if group 12 "mid-merge repo is refused"; then
   fails "snapshot refuses mid-merge" env HOME="$FH" "$CLI" snapshot --no-push
   has "reason names the merge" "$(ob snapshot --no-push; true)" "mid-merge"
   rm "$FR/.git/MERGE_HEAD"
+fi
+if group 13 "filename that looks like a credential"; then
+  mk_fixture g13; seed_home; commit_baseline
+  mkdir -p "$FH/.config/mytool"; printf 'x\n' > "$FH/.config/mytool/ghp_$(rand_body 20).txt"
+  fails "snapshot refuses a ghp_ filename" env HOME="$FH" "$CLI" snapshot --no-push
 fi
 if group 22 "partial coverage is DERIVED, not declared"; then
   mk_fixture g22; seed_home
@@ -164,6 +182,14 @@ if group 40 "a missing stock tree does not disable ALL drift detection"; then
     || bad "reported 0 items without the stock tree; drift fully disabled"
   has "sentinel still emitted" "$d_without" "drift-scan-complete"
   has "the missing tree is reported" "$d_without" "ERROR: omarchy stock config tree not found"
+fi
+if group 41 "the secret gate does not blind itself"; then
+  mk_fixture g41; seed_home; commit_baseline
+  rm "$FR/.gitleaks.toml"
+  if command -v gitleaks >/dev/null; then
+    check "snapshot still passes rules from share/ when the repo copy is gone" env HOME="$FH" "$CLI" snapshot --no-push
+    has "run mentions the rules path" "$(ob snapshot --no-push --dry-run)" "gitleaks.toml"
+  fi
 fi
 if group 42 "a disabled drift scanner is surfaced, not silent"; then
   mk_fixture g42; seed_home
