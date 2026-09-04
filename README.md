@@ -1,4 +1,9 @@
-# Backup Status (`io.github.coreytyhurst.backup-status`)
+# OmaBackup
+
+Public name for the backup-status widget, being turned into a portable plugin.
+Until that rewrite lands, the installed plugin id is still
+`io.github.coreytyhurst.backup-status` and everything below describes the
+personal version.
 
 A glanceable Omarchy bar widget for the
 [hp-laptop-config](https://github.com/coreytyhurst/hp-laptop-config) backup
