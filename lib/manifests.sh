@@ -53,6 +53,20 @@ is_placeholder() {
   return 1
 }
 
+# manifests_bounded CMD...: run CMD under a 30-second ceiling where `timeout`
+# exists, plain where it does not. The generators that talk to D-Bus (dconf,
+# fprintd) or the network (nmcli, npm, omarchy, the VS Code CLI) can hang
+# indefinitely, and the daily run holds the data repo's flock for the whole
+# time they do: one wedged call blocks every later run and the timer with it,
+# until somebody notices the backup stopped. A timeout exits non-zero, so each
+# caller's `|| placeholder` fallback fires exactly as it does for a tool that
+# is not installed, and the carry-forward guard then restores the previous
+# committed copy rather than letting rsync --delete eat it.
+MANIFESTS_TIMEOUT=30
+manifests_bounded() {
+  if have timeout; then timeout "$MANIFESTS_TIMEOUT" "$@"; else "$@"; fi
+}
+
 # manifests_find_size SIZE: translate the config's rsync-flavoured maxFileSize
 # ("8m") into find's flavour ("8M"). They must agree or the TOOBIG report
 # names files rsync actually copied, or misses files it dropped.
@@ -112,7 +126,7 @@ manifests_generate() {
   # ---- identity and desktop ---------------------------------------------
   id -nG > "$M/groups.txt" 2>/dev/null || printf '(none)\n' > "$M/groups.txt"
   if have dconf; then
-    dconf dump / > "$M/dconf.txt" 2>/dev/null || printf '(dconf unavailable)\n' > "$M/dconf.txt"
+    manifests_bounded dconf dump / > "$M/dconf.txt" 2>/dev/null || printf '(dconf unavailable)\n' > "$M/dconf.txt"
   else
     printf '(dconf unavailable)\n' > "$M/dconf.txt"
   fi
@@ -138,7 +152,7 @@ manifests_generate() {
     printf 'unknown\n' > "$M/locale.txt"
   fi
   if have fprintd-list; then
-    fprintd-list "${USER:-$(id -un)}" 2>/dev/null | tail -n +2 > "$M/fingerprint.txt" \
+    manifests_bounded fprintd-list "${USER:-$(id -un)}" 2>/dev/null | tail -n +2 > "$M/fingerprint.txt" \
       || printf '(none)\n' > "$M/fingerprint.txt"
   else
     printf '(none)\n' > "$M/fingerprint.txt"
@@ -146,14 +160,14 @@ manifests_generate() {
   # Connection NAMES only. The files under /etc/NetworkManager/system-connections
   # hold WiFi PSKs and WireGuard private keys and are never copied anywhere.
   if have nmcli; then
-    nmcli -t -f NAME,TYPE con show > "$M/network.txt" 2>/dev/null || printf '(nmcli unavailable)\n' > "$M/network.txt"
+    manifests_bounded nmcli -t -f NAME,TYPE con show > "$M/network.txt" 2>/dev/null || printf '(nmcli unavailable)\n' > "$M/network.txt"
   else
     printf '(nmcli unavailable)\n' > "$M/network.txt"
   fi
 
   # ---- toolchains that live only on this disk ---------------------------
   if have code; then
-    code --list-extensions > "$M/vscode-extensions.txt" 2>/dev/null || printf '(code CLI unavailable)\n' > "$M/vscode-extensions.txt"
+    manifests_bounded code --list-extensions > "$M/vscode-extensions.txt" 2>/dev/null || printf '(code CLI unavailable)\n' > "$M/vscode-extensions.txt"
   else
     printf '(code CLI unavailable)\n' > "$M/vscode-extensions.txt"
   fi
@@ -163,7 +177,7 @@ manifests_generate() {
     printf '(uv unavailable)\n' > "$M/uv-tools.txt"
   fi
   if have npm; then
-    npm ls -g --depth=0 --parseable 2>/dev/null | tail -n +2 | xargs -rn1 basename | grep -vx npm > "$M/npm-global.txt" \
+    manifests_bounded npm ls -g --depth=0 --parseable 2>/dev/null | tail -n +2 | xargs -rn1 basename | grep -vx npm > "$M/npm-global.txt" \
       || printf '(npm unavailable)\n' > "$M/npm-global.txt"
   else
     printf '(npm unavailable)\n' > "$M/npm-global.txt"
@@ -181,7 +195,7 @@ manifests_generate() {
     done
   } > "$M/omarchy-plugins.tsv"
   if have omarchy; then
-    omarchy plugin list --json > "$M/omarchy-plugins.json" 2>/dev/null || printf '[]\n' > "$M/omarchy-plugins.json"
+    manifests_bounded omarchy plugin list --json > "$M/omarchy-plugins.json" 2>/dev/null || printf '[]\n' > "$M/omarchy-plugins.json"
   else
     printf '[]\n' > "$M/omarchy-plugins.json"
   fi
@@ -234,7 +248,9 @@ manifests_generate() {
 # "is this drift new?" comparison has to be taken here, before it moves.
 manifests_drift() {
   local M="$1/manifests"
-  MAN_DRIFT_PREV=$(grep -hE '^(MODIFIED|NEW|# ERROR)' "$DATA_REPO/manifests/drift.txt" 2>/dev/null | sort || true)
+  # Same filter as snapshot_drift_finish's "new_drift", GONE included: the two
+  # are the operands of one comm, so they have to select the same line classes.
+  MAN_DRIFT_PREV=$(grep -hE '^(MODIFIED|NEW|GONE|# ERROR)' "$DATA_REPO/manifests/drift.txt" 2>/dev/null | sort || true)
   # stderr lands in the report on purpose: a scan that dies partway through
   # must leave its reason where a human reading drift.txt will find it. The
   # missing sentinel is what the pipeline actually refuses on.

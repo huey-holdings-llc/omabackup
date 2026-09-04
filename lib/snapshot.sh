@@ -21,9 +21,19 @@
 # OMABACKUP_MIN_ALLOWLIST override; config.sh unsets them when they are empty,
 # which is how a caller asks for "derive it" explicitly.
 snapshot_floors_from_history() {
-  local prev_tracked=0 prev_entries=0
+  local prev_tracked=0 prev_entries=0 listing
   if git -C "$DATA_REPO" rev-parse --verify HEAD >/dev/null 2>&1; then
-    prev_tracked=$(git -C "$DATA_REPO" ls-tree -r --name-only HEAD home/ 2>/dev/null | grep -c . || true)
+    # NOT `|| true`. HEAD resolving but its tree failing to read means a
+    # damaged object store, and swallowing that drops the floor to the
+    # bootstrap 20 -- exactly the state in which a hollow snapshot sails
+    # through and overwrites a healthy backup. The listing is taken first so
+    # its failure can reach die(); the counting after it is allowed to find
+    # nothing (a repo with no home/ yet is legitimate).
+    listing=$(git -C "$DATA_REPO" ls-tree -r --name-only HEAD home/ 2>/dev/null) \
+      || die "HEAD exists but is unreadable; run: git -C $DATA_REPO fsck"
+    prev_tracked=$(grep -c . <<<"$listing" || true)
+    # This one IS allowed to fail: a repo whose first commit predates
+    # allowlist.txt has no such path in HEAD, which is bootstrap, not damage.
     prev_entries=$(git -C "$DATA_REPO" show HEAD:allowlist.txt 2>/dev/null | grep -cvE '^[[:space:]]*(#|$)' || true)
   fi
   if [[ "${prev_tracked:-0}" -ge 20 ]]; then
@@ -266,8 +276,12 @@ snapshot_drift_finish() {
   if [[ "$SNAP_DRY" != 1 ]]; then
     cp "$rep" "$DATA_REPO/manifests/drift.txt" 2>/dev/null || true
   fi
+  # GONE belongs in this filter alongside NEW: an optional entry that has
+  # vanished means the backup just got smaller, which is the one drift class
+  # nobody notices on their own. It must match manifests_drift's capture of
+  # the previous report exactly, or the comm below diffs two different things.
   local new_drift
-  new_drift=$(grep -hE '^(MODIFIED|NEW|# ERROR)' "$rep" 2>/dev/null | sort || true)
+  new_drift=$(grep -hE '^(MODIFIED|NEW|GONE|# ERROR)' "$rep" 2>/dev/null | sort || true)
   SNAP_NEW_DRIFT=$(comm -13 <(printf '%s\n' "$MAN_DRIFT_PREV") <(printf '%s\n' "$new_drift") | grep . || true)
   manifests_drift_counts "$rep"
   log "drift: ${DRIFT_N} item(s); see manifests/drift.txt"
@@ -517,14 +531,18 @@ cmd_snapshot() {
   GONE=()
 
   data_repo_require
-  repo_assert_clean
   cd "$DATA_REPO" || die "cannot cd $DATA_REPO"
 
-  # Single instance. Two concurrent runs share one $STAGE, and the second
-  # one's `rm -rf "$STAGE"` can empty the tree between the floor check and the
-  # sync -- which once committed a snapshot with 213 of 214 files deleted.
-  # Wait briefly rather than skipping instantly: a manual run overlapping the
-  # timer should queue, not silently do nothing.
+  # Single instance, and it is taken BEFORE repo_assert_clean, not after.
+  # Two concurrent runs share one $STAGE, and the second one's
+  # `rm -rf "$STAGE"` can empty the tree between the floor check and the sync
+  # -- which once committed a snapshot with 213 of 214 files deleted. More
+  # narrowly: repo_assert_clean DELETES an abandoned .git/index.lock, and the
+  # only thing that makes that safe is being the sole instance. Asserting
+  # first and locking second let two runs race over that removal, which is the
+  # argument the engine's own comment makes for the guard. Wait briefly rather
+  # than skipping instantly: a manual run overlapping the timer should queue,
+  # not silently do nothing.
   if ! take_lock; then
     exec 9>&-
     warn "another run held the lock for ${OMABACKUP_LOCK_WAIT:-20}s; skipping this run"
@@ -532,6 +550,7 @@ cmd_snapshot() {
     return 0
   fi
 
+  repo_assert_clean
   snapshot_floors_from_history
   snapshot_assert_allowlist
   snapshot_stage

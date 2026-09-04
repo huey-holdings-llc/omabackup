@@ -151,11 +151,34 @@ if group 03 "floor check (hollow snapshot)"; then
   [[ $rc -ne 0 ]] && ok "a hollow snapshot is refused" || bad "committed a hollow snapshot"
   has "the floor message is explicit" "$out" "refusing to commit a hollow snapshot"
 fi
+if group 03b "a damaged object store refuses instead of lowering the floor"; then
+  # HEAD resolving while its tree does not read means a damaged object store.
+  # Swallowing that failure dropped the derived floor to the bootstrap 20, and
+  # a repo in that state would then accept a hollow snapshot over a healthy
+  # backup. Pointing the branch at a NON-tree object reproduces it exactly:
+  # rev-parse --verify still succeeds, ls-tree does not.
+  mk_fixture g03b; seed_home; commit_baseline
+  for i in $(seq 1 30); do echo "$i" > "$FH/.config/mytool/f$i"; done
+  allow '.config/mytool'
+  check "baseline with 30 files" env HOME="$FH" "$CLI" snapshot --no-push
+  # Written straight into the loose ref: `git update-ref` refuses to point a
+  # branch at a non-commit, and a real damaged store never asked its permission.
+  blob=$(printf 'not a commit\n' | git -C "$FR" hash-object -w --stdin)
+  printf '%s\n' "$blob" > "$FR/.git/refs/heads/main"
+  out=$(env HOME="$FH" OMABACKUP_MIN_FILES= "$CLI" snapshot --no-push 2>&1); rc=$?
+  [[ $rc -ne 0 ]] && ok "a damaged HEAD is refused" || bad "ran against a damaged object store"
+  has "the refusal points at fsck" "$out" "fsck"
+fi
 if group 04 "idempotency"; then
   # Regression: drift.txt and versions.txt embedded a timestamp, so every run
   # committed and the backup history became noise.
   mk_fixture g04; seed_home; commit_baseline
-  n1=$(git -C "$FR" rev-list --count HEAD); ob snapshot --no-push >/dev/null; n2=$(git -C "$FR" rev-list --count HEAD)
+  n1=$(git -C "$FR" rev-list --count HEAD)
+  # Assert the run SUCCEEDED before counting: "no new commit" is trivially
+  # true of a snapshot that refused to run at all.
+  ob snapshot --no-push >/dev/null; rc=$?
+  [[ $rc -eq 0 ]] && ok "snapshot runs" || bad "snapshot failed (rc=$rc)"
+  n2=$(git -C "$FR" rev-list --count HEAD)
   eq "unchanged machine makes no commit" "$n2" "$n1"
   eq "json says committed=false" "$(obj snapshot --no-push | jq -r .committed)" "false"
   eq "working tree left clean" "$(git -C "$FR" status --porcelain)" ""
@@ -455,7 +478,10 @@ if group 43 "every manifest is generated BEFORE its carry-forward guard"; then
   # permanent false alarm on the one guard that stops rsync --delete eating
   # real data.
   mk_fixture g43; seed_home; commit_baseline
-  _run=$(ob snapshot --no-push)
+  # Same reason as group 04: "no warning in the output" is trivially true of a
+  # run that produced no output because the verb refused.
+  _run=$(ob snapshot --no-push); rc=$?
+  [[ $rc -eq 0 ]] && ok "snapshot runs" || bad "snapshot failed (rc=$rc)"
   grep -q 'could not be regenerated' <<<"$_run" \
     && bad "spurious carry-forward warning" "$(grep -o '[a-z-]*\.[a-z]* could not be regenerated' <<<"$_run" | head -1)" \
     || ok "a healthy run emits no carry-forward warning"
@@ -570,6 +596,15 @@ if group 49 "desktop popups fire only from the timer, never from a manual run"; 
   eq "an unchanged report does not pop again" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=1)" "0"
   mkdir -p "$FH/.config/appf"; printf 'x\n' > "$FH/.config/appf/f.toml"
   eq "OMABACKUP_NOTIFY=0 silences the timer path too" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=0)" "0"
+  # A vanished OPTIONAL entry is a GONE line, and the backup just got smaller.
+  # That is the one drift class nobody notices on their own, so it has to pop
+  # exactly like a NEW line does: once, then never again for the same report.
+  mkdir -p "$FH/.config/appg"; printf 'x\n' > "$FH/.config/appg/g.toml"
+  allow '?.config/appg'
+  eq "adding a covered optional entry is not new drift" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=1)" "0"
+  rm -rf "$FH/.config/appg"
+  eq "a vanished optional entry (GONE) pops once" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=1)" "1"
+  eq "the same GONE does not pop again" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=1)" "0"
 fi
 
 echo; echo "passed=$pass failed=$fail"
