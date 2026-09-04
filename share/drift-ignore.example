@@ -1,0 +1,2 @@
+# Paths under $HOME that are deliberately not backed up, one per line, relative to $HOME.
+# A path here is silenced in drift reports without being copied into the data repo.

@@ -1,0 +1,2 @@
+# Normalization rules applied to backed-up files before they are compared or committed, one per line.
+# Format and semantics land with Task 15.

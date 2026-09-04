@@ -1,0 +1,2 @@
+# Paths under /etc that omabackup backs up, one per line, relative to /etc.
+# Prefix a line with ? to mark it optional: a missing optional entry is skipped, a missing required entry halts the snapshot.

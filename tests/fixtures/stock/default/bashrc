@@ -1,0 +1,2 @@
+# stock stand-in for /usr/share/omarchy/default/bashrc
+source ~/.local/share/omarchy/default/bash/rc

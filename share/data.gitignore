@@ -1,0 +1,21 @@
+# Belt-and-braces. The allowlist already governs what is copied in, but if any
+# of these ever appear in this tree it is a bug -- fail closed, don't commit.
+.staging/
+*.bak.*
+id_*
+!id_*.pub
+*.pem
+*.key
+*.p12
+*.pfx
+*.kdbx
+.env
+.env.*
+hosts.yml
+.credentials.json
+Cookies*
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.lock
+manifests/.last-run
