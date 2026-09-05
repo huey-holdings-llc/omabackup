@@ -232,9 +232,12 @@ omarchy plugin add https://github.com/huey-holdings-llc/omabackup --enable
 
 Then open the bar widget and press "Set up OmaBackup", or run
 `omabackup setup` yourself. You will be asked where the data repo should
-live and for a remote to push to (or to stay local only). To adopt an
-existing engine repo instead of creating a new one, run
-`omabackup setup --import DIR` (adoption is a flag, not a wizard prompt).
+live and for a remote to push to (or to stay local only, which is a
+supported answer: with no remote at all the widget says "Remote: none (local
+only)" and stays green, and only a remote that exists and cannot be verified
+is reported as a problem). To adopt an existing engine repo instead of
+creating a new one, run `omabackup setup --import DIR` (adoption is a flag,
+not a wizard prompt).
 
 ## Update
 

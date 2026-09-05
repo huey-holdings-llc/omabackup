@@ -472,13 +472,20 @@ setup_unnag() {
 }
 
 setup_first_snapshot() {
-  log "Running the first snapshot (no push)"
+  log "Running the first snapshot"
+  # NOT --no-push. With the push suppressed here, `git push -u` never ran, so
+  # @{upstream} was never set and a wizard that had just said "Setup complete"
+  # left the widget in the fault state with the Push button hidden. The gate
+  # decides instead: remote_push_if_ahead pushes when the probe (or the trust
+  # flag) allows it and warns when it does not, so a refused push is a warning
+  # inside a successful setup, exactly as it is on the daily timer path.
+  #
   # Capture the inner call in a subshell (command substitution always forks
   # one) so its own die() can only exit THAT subshell, not the wizard: die()
   # exits the process outright, and without this a failing snapshot would
   # kill setup before it could report anything in the caller's own mode.
   local out
-  if out=$(JSON=1 cmd_snapshot --no-push); then
+  if out=$(JSON=1 cmd_snapshot); then
     :
   else
     die "the first snapshot failed: $(jq -r '.error // "unknown"' <<<"$out" 2>/dev/null). Fix the reported problem and rerun omabackup setup"

@@ -48,7 +48,7 @@ health_not_configured_json() {
     '{state:"attention", setup:$setup, repo:"", generated:$generated,
       last_run:0, last_run_age_days:-1,
       drift_scan_complete:false, drift_count:0, drift_truncated:false, drift:[],
-      unpushed:0, diverged:false, upstream_readable:false,
+      unpushed:0, diverged:false, upstream_readable:false, remote:"none",
       push_verifiable:false, push_reason:"unprobed", uncommitted:[],
       timers_checked:false, timer_enabled:false, timer_active:false, timer_next:"",
       selftest_enabled:false, selftest_active:false, problems:[]}'
@@ -127,7 +127,17 @@ health_collect() {
   # probing. Under one name, a machine with no gitleaks printed
   # push_verifiable:false from snapshot and wrote push_verifiable:true into
   # status.json, in the same run.
+  #
+  # STAYING LOCAL IS A SUPPORTED ANSWER. The wizard offers it ("Private git
+  # remote URL (empty to stay local)"), and "no upstream configured" was then
+  # reported as a problem forever: any problem is a fault, so the bar showed
+  # the alert triangle for the life of the install and the login check printed
+  # a red line in every new terminal. A remote that EXISTS and cannot be
+  # verified stays a problem, which is the half that is actually about a
+  # backup not leaving the machine.
   H_UNPUSHED=0; H_DIVERGED=false; H_UPSTREAM_READABLE=false
+  H_REMOTE=none
+  [[ -z "$(remote_origin_url)" ]] || H_REMOTE=configured
   if git -C "$DATA_REPO" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
     local ahead behind
     ahead=$(git -C "$DATA_REPO" rev-list --count '@{upstream}..HEAD' 2>/dev/null || true)
@@ -140,7 +150,7 @@ health_collect() {
       H_PROBLEMS+=("remote has diverged -- pull --rebase needed")
     fi
     [[ "$H_UNPUSHED" -gt 0 ]] && H_PROBLEMS+=("$H_UNPUSHED commit(s) never pushed -- not yet off this machine")
-  else
+  elif [[ "$H_REMOTE" == configured ]]; then
     H_PROBLEMS+=("no upstream configured -- cannot tell if anything is pushed")
   fi
 
@@ -283,6 +293,7 @@ health_status_json() {
     --argjson unpushed "$H_UNPUSHED" \
     --argjson diverged "$H_DIVERGED" \
     --argjson upstream_readable "$H_UPSTREAM_READABLE" \
+    --arg remote "$H_REMOTE" \
     --argjson push_verifiable "$H_PUSH_VERIFIABLE" \
     --arg push_reason "$H_PUSH_REASON" \
     --argjson uncommitted "[$H_UNCOMMITTED_JSON]" \
@@ -298,6 +309,7 @@ health_status_json() {
       drift_scan_complete:$scan_complete, drift_count:$drift_count,
       drift_truncated:$drift_truncated, drift:$drift,
       unpushed:$unpushed, diverged:$diverged, upstream_readable:$upstream_readable,
+      remote:$remote,
       push_verifiable:$push_verifiable, push_reason:$push_reason,
       uncommitted:$uncommitted,
       timers_checked:$timers_checked, timer_enabled:$timer_enabled, timer_active:$timer_active,
@@ -328,7 +340,11 @@ health_print_human() {
   printf 'drift: %s item(s)' "$H_DRIFT_COUNT"
   [[ "$H_DRIFT_TRUNCATED" == true ]] && printf ' (truncated)'
   printf '\n'
-  printf 'unpushed commits: %s\n' "$H_UNPUSHED"
+  if [[ "$H_REMOTE" == none ]]; then
+    printf 'remote: none (local only)\n'
+  else
+    printf 'unpushed commits: %s\n' "$H_UNPUSHED"
+  fi
   if (( ${#H_PROBLEMS[@]} > 0 )); then
     printf 'problems:\n'
     for p in "${H_PROBLEMS[@]}"; do printf '  - %s\n' "$p"; done

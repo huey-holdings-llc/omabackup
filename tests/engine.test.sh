@@ -2878,5 +2878,52 @@ if group 87 "a repo or a config from a newer version is refused or ignored, neve
     "$(OMABACKUP_CONFIG=$T/nested2.json env HOME="$FH" "$CLI" status >/dev/null 2>&1; echo $?)" "0"
 fi
 
+if group 88 "a repo with no remote is a supported state, not a permanent fault"; then
+  # The wizard offers "Private git remote URL (empty to stay local)", and
+  # "no upstream configured" was then a problem forever: any problem is a
+  # fault, so the bar showed the alert triangle for the life of the install
+  # and the login check printed a red line in every new terminal.
+  mk_fixture g88; seed_home; commit_baseline
+  # A clean slate, the same way group 50 builds one: an empty complete report
+  # and a fresh stamp, so "ok" here is about the remote and nothing else.
+  printf '# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  date +%s > "$FR/manifests/.last-run"
+  git -C "$FR" add -A >/dev/null 2>&1; git -C "$FR" commit -qm "clean slate" >/dev/null 2>&1
+
+  git -C "$FR" remote remove origin
+  s88=$(obj status)
+  eq "with no origin at all the state is ok" "$(jq -r .state <<<"$s88")" "ok"
+  eq "and status says so in one word" "$(jq -r .remote <<<"$s88")" "none"
+  eq "no upstream problem is reported" \
+    "$(jq -r '[.problems[] | select(test("upstream"))] | length' <<<"$s88")" "0"
+  eq "the login check is silent, so it does not paint every new terminal red" \
+    "$(ob health)" ""
+  has "the human status names the local-only state" "$(ob status)" "remote: none (local only)"
+
+  # A remote that EXISTS and has never been pushed to is the other half: that
+  # one really is "your backup is not off this machine yet".
+  git -C "$FR" remote add origin "$BARE"
+  s88=$(obj status)
+  eq "an origin with no upstream is still a problem" \
+    "$(jq -r '[.problems[] | select(test("upstream"))] | length' <<<"$s88")" "1"
+  eq "and that makes the state a fault" "$(jq -r .state <<<"$s88")" "fault"
+  eq "status reports the remote as configured" "$(jq -r .remote <<<"$s88")" "configured"
+  eq "the not-configured object carries the same keys" \
+    "$(OMABACKUP_CONFIG=/nonexistent obj status | jq -S 'keys')" "$(jq -S 'keys' <<<"$s88")"
+
+  # The wizard's own first snapshot no longer suppresses the push, so a setup
+  # that finishes leaves an upstream behind and the widget is not born in the
+  # fault state. OMABACKUP_SKIP_TIMERS (not --no-timers, which skips the first
+  # snapshot entirely) keeps real systemd out of it.
+  mk_fixture g88b
+  seed_home
+  eq "setup runs to completion" \
+    "$(OMABACKUP_SKIP_TIMERS=1 obj setup --data-repo "$FR" --remote "$BARE" --trust-remote --yes | jq -r .ok)" "true"
+  eq "the wizard's first snapshot established an upstream" \
+    "$(git -C "$FR" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo none)" "origin/main"
+  eq "so the widget does not open on 'no upstream configured'" \
+    "$(obj status | jq -r '[.problems[] | select(test("upstream"))] | length')" "0"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

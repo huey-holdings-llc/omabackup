@@ -41,6 +41,9 @@ Panel {
   readonly property var st: svcReady ? svc.st : null
   readonly property string helperError: svcReady ? svc.cliError : "OmaBackup service unavailable"
   property string actionError: ""
+  // A neutral counterpart to actionError: an action that succeeded and had
+  // nothing to do still owes the user a sentence, and the red one would lie.
+  property string actionNote: ""
   readonly property bool busy: svcReady ? svc.busy : false
   readonly property string setupState: svcReady ? svc.setup : "not-configured"
   property bool confirmOpen: false
@@ -63,6 +66,9 @@ Panel {
   readonly property var problems: st && st.problems ? st.problems : []
   readonly property var uncommitted: st && st.uncommitted ? st.uncommitted : []
   readonly property int unpushed: st && st.unpushed ? st.unpushed : 0
+  // "Stay local" is a first-class answer to the wizard's remote question, so
+  // the popup says so instead of claiming a push state it cannot have.
+  readonly property bool hasRemote: !!(st && st.remote === "configured")
   readonly property bool timerKnown: !!(st && st.timers_checked)
   readonly property bool timerArmed: !!(st && st.timer_enabled && st.timer_active)
 
@@ -196,9 +202,12 @@ Panel {
   }
   function pushOrConfirm() {
     if (root.uncommitted.length > 0) { confirmOpen = !confirmOpen; return }
-    if (!root.svc) return
-    if (root.unpushed > 0) root.svc.pushOrConfirm(false, function(rep) {
-      root.actionError = (rep && rep.ok === true) ? "" : root.actionErrorText(rep, "push failed")
+    if (!root.svc || !root.hasRemote) return
+    var hadUnpushed = root.unpushed > 0
+    root.svc.pushOrConfirm(false, function(rep) {
+      var good = !!(rep && rep.ok === true)
+      root.actionError = good ? "" : root.actionErrorText(rep, "push failed")
+      root.actionNote = (good && !hadUnpushed) ? "Nothing to push. Every commit is already on the remote." : ""
     })
   }
   function confirmPush() {
@@ -225,6 +234,7 @@ Panel {
   onOpenedChanged: if (opened) {
     confirmOpen = false
     pendingNote = null
+    actionNote = ""
     refresh()
     if (panelFlick) panelFlick.contentY = 0
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -335,6 +345,17 @@ Panel {
             wrapMode: Text.Wrap
           }
 
+          Text {
+            visible: root.actionNote.length > 0
+            width: parent.width
+            text: root.actionNote
+            textFormat: Text.PlainText
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
+
           // Every fail-closed reason the helper found, verbatim.
           Column {
             visible: root.problems.length > 0
@@ -385,9 +406,11 @@ Panel {
               }
             }
             InfoRow {
-              width: parent.width; label: "Pushed"
-              value: root.unpushed > 0 ? root.unpushed + " commit(s) waiting" : "up to date"
-              valueColor: root.unpushed > 0 ? root.urgent : ""
+              width: parent.width
+              label: root.hasRemote ? "Pushed" : "Remote"
+              value: !root.hasRemote ? "none (local only)"
+                   : root.unpushed > 0 ? root.unpushed + " commit(s) waiting" : "up to date"
+              valueColor: root.hasRemote && root.unpushed > 0 ? root.urgent : ""
               foreground: root.foreground; dimColor: root.dim; fontFamily: root.fontFamily
             }
             InfoRow {
@@ -592,7 +615,10 @@ Panel {
             }
             Button {
               width: (parent.width - parent.spacing * 2) * 0.33
-              visible: root.uncommitted.length > 0 || root.unpushed > 0
+              // Visible whenever a remote exists, waiting commits or not: a
+              // button that appears only once something is wrong cannot be
+              // found when you want to check that nothing is.
+              visible: root.uncommitted.length > 0 || root.hasRemote
               text: root.uncommitted.length > 0 ? "Commit…  (p)" : "Push  (p)"
               iconText: "󰛃"
               foreground: root.unpushed > 0 ? root.urgent : root.foreground
