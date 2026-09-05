@@ -379,6 +379,13 @@ setup_units() {
   mkdir -p "$dst"
   local f cal jit
   cal=$(cfg timer.calendar); jit=$(cfg timer.jitter)
+  # `awk -v x=VALUE` runs the value through awk's own escape processing, so a
+  # literal backslash in it is not a backslash by the time the program sees
+  # it: `daily\nExecStart=/bin/sh -c …` arrived as a real newline and a second
+  # directive inside the unit. config_load refuses a backslash outright now;
+  # doubling it here means this substitution is safe on its own terms too,
+  # rather than only because something upstream checked.
+  cal=${cal//\\/\\\\}; jit=${jit//\\/\\\\}
   for f in "$PLUGIN_DIR"/share/units/*; do
     # Placeholder-safe substitution. This was a sed `s|...|...|` with the
     # config value as the replacement text, so a `|` in the value terminated

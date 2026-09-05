@@ -2526,6 +2526,21 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
     "$(OMABACKUP_CONFIG=$T/bad2.json obj status | jq -r .ok)" "false"
   has "the refusal names that key" \
     "$(OMABACKUP_CONFIG=$T/bad2.json obj status | jq -r .error)" "timer.jitter"
+  # A backslash is not systemd syntax, but it IS awk syntax: `awk -v x=VALUE`
+  # runs the value through awk's escape processing, so `daily\nExecStart=...`
+  # arrived in the unit as a real newline and a second directive -- and the
+  # systemd-analyze check that would have caught the value never ran, because
+  # it only warns when the tool is absent. The character class is
+  # unconditional for exactly that reason.
+  jq '.timer={calendar:"daily\\nExecStart=/bin/sh -c evil", jitter:"30m"}' \
+    "$OMABACKUP_CONFIG" > "$T/bs.json"
+  bs85=$(OMABACKUP_CONFIG=$T/bs.json obj status)
+  eq "a calendar carrying a backslash is refused at load" "$(jq -r .ok <<<"$bs85")" "false"
+  has "the refusal names the class" "$(jq -r .error <<<"$bs85")" "must not contain a backslash"
+  jq '.timer={calendar:"daily", jitter:"30m%h"}' "$OMABACKUP_CONFIG" > "$T/pct.json"
+  eq "a percent sign (a systemd unit specifier) is refused too" \
+    "$(OMABACKUP_CONFIG=$T/pct.json obj status | jq -r .ok)" "false"
+
   # A perfectly ordinary calendar with spaces and asterisks still loads, and
   # lands in the unit verbatim: the substitution must not be doing anything
   # clever with the value.
@@ -2549,6 +2564,32 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
   has "and the config's" "$(jq -r '.problems[]' <<<"$m85")" "config says 'weekly'"
   has "and names the fix" "$(jq -r '.problems[]' <<<"$m85")" "omabackup setup"
   eq "the mismatch is a fault, not a footnote" "$(jq -r .state <<<"$m85")" "fault"
+
+  # ...and a machine with no systemd-analyze says so, rather than only warning
+  # into a timer's journal. A PATH of symlinks to everything in /usr/bin
+  # except systemd-analyze: `command -v` has to find nothing at all, so
+  # shadowing it with a stub would not do.
+  nsa85="$T/nosdbin"; mkdir -p "$nsa85"
+  cp -as /usr/bin/. "$nsa85"/ 2>/dev/null || true
+  rm -f "$nsa85/systemd-analyze"
+  if [[ -x "$nsa85/jq" && ! -e "$nsa85/systemd-analyze" ]]; then
+    jq '.timer={calendar:"daily", jitter:"30m"}' "$OMABACKUP_CONFIG" > "$T/c" && mv "$T/c" "$OMABACKUP_CONFIG"
+    n85=$(env HOME="$FH" PATH="$nsa85" "$CLI" status --json 2>/dev/null)
+    has "an unvalidated timer setting is a problem, not just a warning" \
+      "$(jq -r '.problems[]' <<<"$n85")" "timer settings not validated"
+    eq "and that makes the state a fault" "$(jq -r .state <<<"$n85")" "fault"
+    eq "the same run with systemd-analyze present says nothing of the kind" \
+      "$(obj status | jq -r '[.problems[] | select(contains("not validated"))] | length')" "0"
+    # The loss event in full: the backslash value on the machine that has no
+    # systemd-analyze to catch it. The character class is the only thing
+    # standing between that value and awk.
+    eq "and the backslash value is still refused with no systemd-analyze at all" \
+      "$(OMABACKUP_CONFIG=$T/bs.json env HOME="$FH" PATH="$nsa85" "$CLI" status --json 2>/dev/null | jq -r .ok)" "false"
+    eq "the unit never gets written with an injected directive" \
+      "$(grep -c 'ExecStart=/bin/sh' "$FH/.config/systemd/user/omabackup-snapshot.timer" || true)" "0"
+  else
+    echo "  (could not build a systemd-analyze-free PATH: skipping)"
+  fi
 fi
 
 if group 86 "the gitleaks rules and the staged scan survive an older or a newer gitleaks"; then
