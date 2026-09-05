@@ -137,9 +137,12 @@ to back anything up on its own.
   threshold), `TOOBIG` (over the size cap), `EXCLUDED` (matched `.gitignore`
   after staging).
 * **Popup triage**: `NEW` files grouped by folder, biggest first; one click
-  Allows or Ignores a whole directory (folder targets are refused at depth
-  one, so `~/.config/` can never be silenced by accident), a caret expands a
-  folder to single files, `GONE` rows offer Remove or Mark-optional (the
+  Allows or Ignores a whole directory (folder groups are only formed two
+  segments deep or more, because a depth-one target is refused so
+  `~/.config/` can never be silenced by accident), a caret expands a
+  folder to single files, `MODIFIED` rows carry the same Allow/Ignore pair,
+  `TOOBIG`, `EXCLUDED` and `ERROR` rows carry a line saying what to do
+  instead, `GONE` rows offer Remove or Mark-optional (the
   second only while the entry is not already optional; every seed entry is,
   so on a fresh machine those rows offer Remove alone), and a notes toggle
   switches Ignore between a dated default reason and asking for one.

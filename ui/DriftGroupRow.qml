@@ -62,7 +62,7 @@ Column {
       AccessibleActionButton {
         enabled: !root.busy
         iconText: "󰐕"
-        tooltipText: "Back up this whole folder (" + root.entries.length + " files)"
+        tooltipText: "Allowlist " + root.path + " so every file in it, now and later, is backed up (" + root.entries.length + " here today)"
         foreground: root.foreground
         fontFamily: root.fontFamily
         onClicked: root.allowRequested(root.path)
@@ -70,7 +70,7 @@ Column {
       AccessibleActionButton {
         enabled: !root.busy
         iconText: "󰈉"
-        tooltipText: "Ignore this whole folder (records a dated " + root.path + "** decision)"
+        tooltipText: "Never back up anything under " + root.path + ", now or later (records a dated " + root.path + "** decision)"
         foreground: root.foreground
         fontFamily: root.fontFamily
         onClicked: root.ignoreRequested(root.path)
