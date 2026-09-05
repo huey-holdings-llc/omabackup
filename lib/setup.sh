@@ -281,6 +281,14 @@ setup_remote() {
     gh repo create "$name" --private --confirm >/dev/null 2>&1 || gh repo create "$name" --private >/dev/null
     url=$(gh repo view "$name" --json sshUrl -q .sshUrl)
   fi
+  # Trust is the escape hatch for a remote OmaBackup cannot check. A GitHub
+  # remote it can check, so trusting one only ever means "skip the probe on a
+  # repo that might be public". Refused BEFORE anything is written, so a
+  # refusal leaves neither the git remote nor the config half-changed.
+  local target=${url:-$have_origin}
+  if [[ $trust == 1 && -n "$target" ]] && remote_is_github "$target"; then
+    die "GitHub remotes are verified automatically; trust is only for other hosts"
+  fi
   if [[ -n "$url" ]]; then
     assert_argv_safe "$url"
     if [[ -z "$have_origin" ]]; then
@@ -290,7 +298,12 @@ setup_remote() {
     fi
   fi
   url=$(remote_origin_url)
-  if [[ -n "$url" && -z "$(remote_github_slug "$url")" ]]; then
+  if [[ -n "$url" ]] && remote_is_github "$url"; then
+    # Never carry a trust flag on a GitHub host, however the URL is spelled.
+    # A shape remote_github_slug cannot turn into owner/repo is unverifiable,
+    # and unverifiable must read as "cannot push", not as "trusted".
+    trust=0
+  elif [[ -n "$url" ]]; then
     # Same remote as last time, already trusted: the operator answered this
     # question once and nothing has changed, so the answer stands. A DIFFERENT
     # url makes the question live again and falls through to the warning

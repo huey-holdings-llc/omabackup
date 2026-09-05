@@ -43,19 +43,26 @@ to back anything up on its own.
   gate finding something stops the commit before it happens.
 * **A visibility probe before every push.** For a GitHub remote, OmaBackup
   asks `https://api.github.com/repos/OWNER/REPO`, unauthenticated, after
-  waiting for the network to come up. An HTTP 200 is the only proof the repo
-  is public, and the run refuses outright; a 404 is proof it is private and
-  the push goes ahead; anything else (rate-limited, an outage) commits
-  locally and skips the push rather than guessing. The probe is only worth
-  anything if git pushes where it fetches, so a `remote.origin.pushurl` that
-  differs from the fetch URL refuses the push until you remove it
+  waiting for the network to come up. The remote counts as GitHub by its
+  host, whatever the URL's spelling (scheme, `user@`, port and case are all
+  normalised), and the owner/repo it asks about has to be exactly that, so a
+  URL it cannot reduce to one is treated as unverifiable and never probed.
+  An HTTP 200 is the only proof the repo is public, and the run refuses
+  outright; a 404 is proof it is private and the push goes ahead; anything
+  else (rate-limited, an outage) commits locally and skips the push rather
+  than guessing. The probe is only worth anything if git pushes where it
+  fetches, so a `remote.origin.pushurl` that differs from the fetch URL
+  refuses the push until you remove it
   (`git config --unset remote.origin.pushurl`).
 * **An explicit trust flag for everything else.** A remote that is not on
   GitHub cannot be probed this way, so it is only ever pushed to once you
   mark it trusted, either at setup or by editing `remote.trusted` yourself.
-  That trust belongs to one remote: it counts only while `remote.url` still
-  names the repo's current origin, so repointing origin by hand stops the
-  pushes until you rerun `omabackup setup --trust-remote`.
+  `--trust-remote` refuses a GitHub host outright: that one is verified
+  automatically, and trusting it would only mean skipping the probe on a repo
+  that might be public. That trust belongs to one remote: it counts only
+  while `remote.url` still names the repo's current origin, so repointing
+  origin by hand stops the pushes until you rerun
+  `omabackup setup --trust-remote`.
   Push protection is not available on free private repos, so a private
   GitHub repo is still worth double-checking by hand.
 * **No token ever touches this tool.** Push authentication is whatever git

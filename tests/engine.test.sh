@@ -1464,8 +1464,9 @@ if group 64 "a flagless setup rerun keeps the configured data repo, remote and p
   [[ ! -d "$FH/.local/share/omabackup/data" ]] && ok "the rerun created no repo at the default location" \
     || bad "the rerun created a second data repo at the default location"
 
-  # And the widget's own rerun (Panel.qml's remote-unverified card) flips
-  # trust without moving anything else.
+  # And an explicit --trust-remote rerun flips trust on this non-GitHub
+  # remote without moving anything else. (The widget's remote-unverified card
+  # runs plain `setup` in a terminal, never this: see group 72.)
   check "setup --trust-remote --yes rerun" env HOME="$FH" "$CLI" setup --trust-remote --yes --no-timers
   eq "the trust rerun still keeps dataRepo" "$(jq -r .dataRepo "$OMABACKUP_CONFIG")" "$TABS/elsewhere"
   eq "the trust rerun still keeps remote.url" "$(jq -r .remote.url "$OMABACKUP_CONFIG")" "$T/remote.git"
@@ -1887,6 +1888,59 @@ if group 71 "normalize rules are data: no command execution, no writes outside t
   eq "and it is not reported as BADRULE" "$(jq -r '[.problems[]|select(.code=="BADRULE")]|length' <<<"$b71")" "0"
   cp "$T/normalize.bak" "$FR/normalize.txt"
   eq "the fixture lints clean again" "$(obj lint --no-walk | jq -r .ok)" "true"
+fi
+
+if group 72 "a GitHub remote is recognised whatever the URL spelling, and is never trusted by hand"; then
+  # remote_github_slug matched four literal prefixes, so real, working GitHub
+  # clone URLs read as "not GitHub": no visibility probe ever ran, health
+  # reported remote-unverified, and the widget's card offered one click to
+  # mark a possibly PUBLIC repo trusted. The slug also went into the API URL
+  # unvalidated, so "github.com/o/r/.." probed a different repository than the
+  # one git pushes to and its 404 was recorded as proof of private.
+  mk_fixture g72; seed_home; commit_baseline
+  jq '.remote.trusted=false' "$OMABACKUP_CONFIG" > "$T/c72" && mv "$T/c72" "$OMABACKUP_CONFIG" \
+    && chmod 600 "$OMABACKUP_CONFIG"
+  # A curl stand-in that RECORDS the URL it was asked for, so the assertion is
+  # about the exact api.github.com path the probe built, not just the verdict.
+  # nm-online is stubbed too: remote_probe waits on it before probing, and a
+  # real one blocks for NET_WAIT seconds on a machine that is offline.
+  mkdir -p "$T/fakebin"
+  printf '#!/bin/sh\nfor a; do :; done\nprintf "%%s\\n" "$a" > "%s"\nprintf 404\n' "$T/probed" > "$T/fakebin/curl"
+  printf '#!/bin/sh\nexit 0\n' > "$T/fakebin/nm-online"
+  chmod +x "$T/fakebin/curl" "$T/fakebin/nm-online"
+  # probe72 URL: point origin at URL, run the pipeline far enough to probe,
+  # and print "push_reason|the URL curl was asked for".
+  probe72() {
+    git -C "$FR" remote set-url origin "$1"
+    : > "$T/probed"
+    printf '# %s\n' "$1" >> "$FH/.bashrc"    # something to commit, so each run is a real one
+    local r
+    r=$(env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_NET=1 NET_WAIT=1 \
+        "$CLI" snapshot --no-push --json 2>/dev/null | jq -r .push_reason)
+    printf '%s|%s' "$r" "$(cat "$T/probed" 2>/dev/null)"
+  }
+
+  for u72 in 'http://github.com/o/r' 'https://GitHub.com/o/r' 'https://user@github.com/o/r' \
+             'ssh://git@github.com:22/o/r' 'git@github.com:o/r.git'; do
+    eq "$u72 is probed as o/r and reads private" "$(probe72 "$u72")" \
+      "private|https://api.github.com/repos/o/r"
+  done
+
+  # Unverifiable shapes: empty slug, no probe, and never "trusted".
+  for u72 in 'https://github.com/o/r/..' 'https://github.com//o/r'; do
+    eq "$u72 is unverifiable and never probed" "$(probe72 "$u72")" "remote-unverified|"
+  done
+
+  # Trust is the escape hatch for a remote that cannot be checked. A GitHub
+  # remote can be, so marking one trusted only ever means "skip the probe on a
+  # repo that might be public".
+  git -C "$FR" remote set-url origin "https://github.com/someone/omabackup-data.git"
+  t72=$(obj setup --trust-remote --yes --no-timers)
+  eq "setup --trust-remote refuses a GitHub origin" "$(jq -r .ok <<<"$t72")" "false"
+  has "the refusal says GitHub is verified automatically" "$(jq -r .error <<<"$t72")" "verified automatically"
+  eq "the refusal left remote.trusted alone" "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "false"
+  git -C "$FR" remote set-url origin "git@github.com:someone/omabackup-data.git"
+  eq "the scp-like spelling is refused too" "$(obj setup --trust-remote --yes --no-timers | jq -r .ok)" "false"
 fi
 
 echo; echo "passed=$pass failed=$fail"

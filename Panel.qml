@@ -213,7 +213,13 @@ Panel {
     if (!root.svc) return
     if (root.setupState === "not-configured") root.svc.runSetup()
     else if (root.setupState === "gitleaks-missing") Quickshell.execDetached(["wl-copy", "sudo pacman -S gitleaks"])
-    else if (root.setupState === "remote-unverified") Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", root.svc.cli, "setup", "--trust-remote", "--yes"])
+    // Not `setup --trust-remote --yes`: that was one click to mark a remote
+    // trusted with the wizard's only interactive safety valve bypassed by
+    // design, and the URL shapes the slug parser missed meant a real GitHub
+    // repo could reach this card with no visibility probe ever run. The card
+    // opens the wizard in a terminal instead, where the trust question is
+    // asked with its consequence attached (and refused outright for GitHub).
+    else if (root.setupState === "remote-unverified") root.svc.runSetup()
   }
 
   onOpenedChanged: if (opened) {

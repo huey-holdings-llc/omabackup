@@ -37,25 +37,64 @@ remote_trust_ok() {
   return 1
 }
 
-# remote_github_slug URL: print "owner/repo" for a GitHub remote, else print
-# nothing. Only these four forms are recognized; anything else (a self-hosted
-# Forgejo, a bare local path) is not GitHub and is not probed -- see
-# remote_probe. ALWAYS returns 0: the caller (remote_probe, under errexit)
-# treats "no slug" as a legitimate, common outcome, not a failure -- a bare
-# `[[ ... ]] && printf ...` here made the function exit 1 for every non-GitHub
-# remote, which silently killed the whole process before PUSH_VERIFIABLE was
-# ever set (caught by group 27's local-bare-path origin).
-remote_github_slug() {
-  local u=$1 s=""
+# remote_url_parts URL: print "host<TAB>path" for a git remote URL, with the
+# scheme, the userinfo and the port stripped and the host lowercased. Prints
+# an empty host for anything that is not a URL at all (a bare local path, the
+# fixtures' /path/to/remote.git).
+#
+# ONE normaliser, because matching four literal prefixes missed real, working
+# GitHub clone URLs: `http://github.com/o/r`, `https://GitHub.com/o/r`,
+# `https://user@github.com/o/r` and `ssh://git@github.com:22/o/r` all read as
+# "not GitHub", which meant no visibility probe ever ran and the widget then
+# offered one click to trust a possibly PUBLIC repo. ALWAYS returns 0: the
+# callers treat "not GitHub" as a legitimate, common outcome, not a failure.
+remote_url_parts() {
+  local u=$1 rest auth path="" host
   case "$u" in
-    git@github.com:*) s=${u#git@github.com:} ;;
-    https://github.com/*) s=${u#https://github.com/} ;;
-    ssh://git@ssh.github.com:443/*) s=${u#ssh://git@ssh.github.com:443/} ;;
-    ssh://git@github.com/*) s=${u#ssh://git@github.com/} ;;
+    http://*|https://*|ssh://*|git://*) rest=${u#*://}
+      auth=${rest%%/*}
+      case "$rest" in */*) path=${rest#*/} ;; esac
+      ;;
+    *://*) printf '\t'; return 0 ;;   # some other scheme: not a form we parse
+    *)
+      # scp-like `[user@]host:path`. The FIRST colon separates the two, and a
+      # string with no colon at all is a local path, not a remote host.
+      case "$u" in *:*) ;; *) printf '\t'; return 0 ;; esac
+      auth=${u%%:*}; path=${u#*:}
+      ;;
   esac
+  case "$auth" in *@*) auth=${auth##*@} ;; esac    # userinfo
+  host=${auth%%:*}                                  # port
+  host=${host,,}
+  printf '%s\t%s' "$host" "$path"
+  return 0
+}
+
+# remote_is_github URL: 0 when the URL's HOST is GitHub, whatever shape the
+# rest of it takes. Trust is refused for these (setup_remote): a GitHub remote
+# is proven private by the API probe or not at all.
+remote_is_github() {
+  local hp; hp=$(remote_url_parts "$1")
+  case "${hp%%$'\t'*}" in github.com|ssh.github.com) return 0 ;; esac
+  return 1
+}
+
+# remote_github_slug URL: print "owner/repo" for a GitHub remote, else print
+# nothing. The slug is interpolated into the api.github.com URL the probe
+# asks about, so its SHAPE is validated: `https://github.com/o/r/..` used to
+# yield the slug `o/r/..`, which curl normalised before sending, so the probe
+# asked about a different repository than the one git pushes to and a 404 on
+# the wrong path was recorded as "private". Anything that is not exactly
+# owner/repo is unverifiable, and unverifiable is never probed.
+remote_github_slug() {
+  local hp host s
+  hp=$(remote_url_parts "$1")
+  host=${hp%%$'\t'*}; s=${hp#*$'\t'}
+  case "$host" in github.com|ssh.github.com) ;; *) return 0 ;; esac
   s=${s%/}    # a trailing slash (github.com/o/r/) must not become part of the "r/" that .git-stripping below would otherwise leave alone
   s=${s%.git}
-  if [[ "$s" == */* ]]; then printf '%s' "$s"; fi
+  [[ "$s" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 0
+  printf '%s' "$s"
   return 0
 }
 

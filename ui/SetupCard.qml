@@ -17,7 +17,7 @@ Column {
   readonly property var copy: ({
     "not-configured":    { title: "OmaBackup is not set up", body: "Create a private data repo, seed the lists, and install the daily timer.", button: "Set up OmaBackup" },
     "gitleaks-missing":  { title: "Push is off: gitleaks is not installed", body: "Snapshots commit locally. Install gitleaks to let them push.", button: "Copy install command" },
-    "remote-unverified": { title: "Push is off: remote not verified", body: "OmaBackup cannot check that this remote is private. Mark it trusted only if you know it is.", button: "Mark remote trusted" }
+    "remote-unverified": { title: "Push is off: remote not verified", body: "OmaBackup cannot check that this remote is private. Setup opens in a terminal and asks whether to push to it anyway.", button: "Review remote in setup" }
   })
   readonly property var entry: root.copy[root.mode] || root.copy["not-configured"]
 
