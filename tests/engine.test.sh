@@ -2260,5 +2260,39 @@ FAKEDE
     "$(jq -r '[.items[] | select(.type=="ERROR")] | length' <<<"$ej81")" "2"
 fi
 
+if group 82 "an ERROR row in the drift report is a fault, and the stock tree follows OMARCHY_PATH"; then
+  # An ERROR row means a detector did not run. It was counted as one more
+  # drift item, so "the biggest detector is switched off" rendered exactly
+  # like one unbacked file, at severity attention, in a list people skim.
+  mk_fixture g82; seed_home; commit_baseline
+  git -C "$FR" push -q -u origin main 2>/dev/null || true
+  { printf 'NEW        ~/.config/appz/z.toml\n'
+    printf '# ERROR: omarchy stock config tree not found at /usr/share/omarchy/config\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  date +%s > "$FR/manifests/.last-run"
+  s82=$(obj status)
+  eq "an ERROR row makes the state a fault, not attention" "$(jq -r .state <<<"$s82")" "fault"
+  has "the problem names the check that did not run" "$(jq -r '.problems[]' <<<"$s82")" \
+    "omarchy stock config tree not found"
+  has "the problem says a check could not complete" "$(jq -r '.problems[]' <<<"$s82")" \
+    "drift scan could not complete a check"
+  eq "the row is still an ERROR item in the drift list" \
+    "$(jq -r '[.drift[] | select(.type=="ERROR")] | length' <<<"$s82")" "1"
+  # Control: the same report without the ERROR row is attention, so this is
+  # not simply "any drift is a fault now".
+  { printf 'NEW        ~/.config/appz/z.toml\n'; printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  eq "ordinary drift alone is still attention" "$(obj status | jq -r .state)" "attention"
+
+  # STOCK_DIR followed a hardcoded /usr/share/omarchy while the shell itself
+  # resolves the same tree from OMARCHY_PATH, so a moved tree (or an
+  # `omarchy dev link` checkout) broke the engine and not the shell -- and
+  # section 1, the single biggest detector, went quiet behind one ERROR row.
+  o82=$(env -u OMABACKUP_STOCK_DIR HOME="$FH" OMARCHY_PATH="$STOCK" "$CLI" drift)
+  eq "OMARCHY_PATH is enough to find the stock tree" "$(grep -c 'stock config tree not found' <<<"$o82" || true)" "0"
+  n82=$(env -u OMABACKUP_STOCK_DIR HOME="$FH" OMARCHY_PATH="$T/no-such-omarchy" "$CLI" drift)
+  has "and a bad OMARCHY_PATH is reported against that path, not the hardcoded one" \
+    "$n82" "$T/no-such-omarchy/config"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

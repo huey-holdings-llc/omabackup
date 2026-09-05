@@ -10,7 +10,13 @@ CONFIG_FILE="${OMABACKUP_CONFIG:-$XDG_CONFIG_HOME/omabackup/config.json}"
 STATE_DIR="${OMABACKUP_STATE_DIR:-$XDG_STATE_HOME/omabackup}"
 STATUS_FILE="$STATE_DIR/status.json"
 LOG_FILE="$STATE_DIR/omabackup.log"
-STOCK_DIR="${OMABACKUP_STOCK_DIR:-/usr/share/omarchy}"
+# OMARCHY_PATH is how the shell itself resolves the stock tree
+# (/usr/share/omarchy/shell/shell.qml reads it), and `omarchy dev link` points
+# it at a checkout. Hardcoding /usr/share/omarchy meant a moved or linked stock
+# tree broke the engine while the shell carried on: section 1 of the drift scan
+# (~/.config against stock, the single biggest detector) would emit one ERROR
+# row and stop reporting every newly appearing ~/.config/<app>.
+STOCK_DIR="${OMABACKUP_STOCK_DIR:-${OMARCHY_PATH:-/usr/share/omarchy}}"
 
 # Guard-weakening test hooks, honoured ONLY when the suite marks itself with
 # OMABACKUP_IN_SUITE=1 (tests/engine.test.sh exports it at its own top).

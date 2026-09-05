@@ -85,6 +85,18 @@ health_collect() {
     arr="[${items}]"
     count=$(jq 'length' <<<"$arr")
     H_DRIFT_COUNT=$count
+    # An ERROR row means a detector did not run: a missing stock tree, a pacman
+    # this scan could not parse, an unreadable drop-in directory. Counting it
+    # as one more drift item made "the biggest detector is switched off" render
+    # exactly like one unbacked file, at severity attention, in a list a user
+    # has learned to skim. Any ERROR is a problem, and any problem is a fault.
+    # This retro-fits a loud failure onto every present and future producer of
+    # an ERROR line, which is why it is done here and not at each producer.
+    local err
+    while IFS= read -r err; do
+      [[ -n "$err" ]] || continue
+      H_PROBLEMS+=("drift scan could not complete a check: $err")
+    done < <(jq -r '.[] | select(.type == "ERROR") | .path' <<<"$arr")
     if (( count > WIDGET_DRIFT_LIMIT )); then
       H_DRIFT_TRUNCATED=true
       H_DRIFT_JSON=$(jq -c ".[0:${WIDGET_DRIFT_LIMIT}]" <<<"$arr")
