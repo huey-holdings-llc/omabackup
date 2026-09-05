@@ -253,16 +253,23 @@ omarchy plugin update io.github.huey-holdings-llc.omabackup
 ## Remove
 
 ```bash
-omarchy plugin remove io.github.huey-holdings-llc.omabackup
 omabackup setup --remove
+omarchy plugin remove io.github.huey-holdings-llc.omabackup
 ```
 
-`omarchy plugin remove` alone leaves the config, the timers, the CLI symlink
-and the `~/.bashrc` login check behind; `setup --remove` disables and deletes
-the timers, the `~/.local/bin/omabackup` symlink,
-`~/.config/omabackup/config.json`, and the two-line login check it added to
-`~/.bashrc` (nothing else in that file is touched). Your data repo and its
-remote are never touched by either command.
+**In that order.** `~/.local/bin/omabackup` is a symlink into the plugin
+directory, so removing the plugin first leaves it dangling and `omabackup
+setup --remove` can no longer be run at all: the timers, the config and the
+`~/.bashrc` line stay behind, and the failure notifier execs the same dead
+path, so a failing daily backup says nothing. (If it has already happened,
+run `setup --remove` from a checkout of this repo: `bash bin/omabackup setup
+--remove`.)
+
+`setup --remove` disables and deletes the timers, the
+`~/.local/bin/omabackup` symlink, `~/.config/omabackup/config.json`, and the
+two-line login check it added to `~/.bashrc` (nothing else in that file is
+touched). It asks first; with no `gum` to ask with, pass `--yes`. Your data
+repo and its remote are never touched by either command.
 
 ## Use
 

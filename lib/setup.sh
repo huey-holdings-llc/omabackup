@@ -557,6 +557,12 @@ setup_check() {
 
 # setup_remove [--yes]: undo the local install (timers, the ~/.local/bin
 # symlink, config). The data repo and its remote are never touched.
+# setup_remove [--yes]: undo steps 6, 7 and 8 of the wizard. Deliberately
+# tolerant of a plugin directory that is already gone: the documented order
+# used to remove the plugin FIRST, which leaves ~/.local/bin/omabackup
+# dangling, and anyone who followed it is running this from a checkout with
+# nothing but that dangling link left to clean up. Nothing here reads the
+# plugin directory, and `rm -f` removes a dangling symlink like any other.
 setup_remove() {
   local yes=0
   [[ "${1:-}" == --yes ]] && yes=1
@@ -575,5 +581,6 @@ setup_remove() {
     jq -cn '{ok:true, removed:true}'
   else
     log "Removed. Your data repo and its remote are untouched."
+    log "Run this before removing the plugin: ~/.local/bin/omabackup points into the plugin directory. You can run 'omarchy plugin remove' now."
   fi
 }

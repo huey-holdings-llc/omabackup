@@ -1497,6 +1497,26 @@ if group 62 "setup --remove takes back what setup put in, and leaves the data re
   if grep -q 'omabackup health' "$FH/.bashrc"; then bad "the .bashrc check line survived --remove"; else ok "the .bashrc check line was removed"; fi
   if cmp -s "$T/bashrc.before" "$FH/.bashrc"; then ok ".bashrc is byte-identical to before setup"; else bad ".bashrc differs from before setup" "$(diff "$T/bashrc.before" "$FH/.bashrc" | head -5)"; fi
   [[ -f "$FR/allowlist.txt" ]] && ok "data repo untouched" || bad "data repo damaged"
+
+  # The order matters and the tool has to say so: ~/.local/bin/omabackup is a
+  # symlink INTO the plugin directory, so "omarchy plugin remove" first leaves
+  # it dangling and this verb can no longer be reached at all. The README used
+  # to document exactly that order.
+  check "a full setup run again, to remove a second time" \
+    env HOME="$FH" "$CLI" setup --data-repo "$FR" --yes
+  human62=$(env HOME="$FH" "$CLI" setup --remove --yes 2>&1)
+  has "the removal says which way round the two steps go" "$human62" "Run this before removing the plugin"
+
+  # And anyone who already followed the old order is running this with the
+  # plugin gone: a dangling CLI link must be cleaned up, not choked on.
+  env HOME="$FH" "$CLI" setup --data-repo "$FR" --yes >/dev/null 2>&1
+  ln -sfn "$T/no-such-plugin-dir/bin/omabackup" "$FH/.local/bin/omabackup"
+  [[ -L "$FH/.local/bin/omabackup" && ! -e "$FH/.local/bin/omabackup" ]] \
+    && ok "the CLI link is dangling, as it is after the plugin goes first" || bad "could not build a dangling link"
+  eq "remove still exits 0 with the plugin directory gone" \
+    "$(env HOME="$FH" "$CLI" setup --remove --yes --json >/dev/null 2>&1; echo $?)" "0"
+  [[ ! -e "$FH/.local/bin/omabackup" && ! -L "$FH/.local/bin/omabackup" ]] \
+    && ok "and the dangling link is gone too" || bad "the dangling link survived --remove"
 fi
 
 if group 63 "a huge drift report does not blow the jq ARG_MAX"; then
