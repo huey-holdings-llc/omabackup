@@ -2096,6 +2096,33 @@ if group 74 "guard-weakening OMABACKUP_* hooks need the suite marker, and status
   ! grep -q 'ignoring OMABACKUP' <<<"$(obj status | jq -r '.problems[]')" \
     && ok "under the marker no override problem is reported" || bad "the suite's own hooks read as ignored"
 
+  # The marker alone is not enough. It is one exported variable away from
+  # being set by whoever set the hook, which would put the gate back where it
+  # started, so the fixtures' own OMABACKUP_CONFIG redirection has to be there
+  # too. A real install sets neither. Same fixture, marker kept, redirection
+  # dropped, and a config where a real install would keep one.
+  mkdir -p "$FH/.config/omabackup"
+  cp "$OMABACKUP_CONFIG" "$FH/.config/omabackup/config.json"
+  chmod 600 "$FH/.config/omabackup/config.json"
+  # XDG_CONFIG_HOME is pinned inside the fixture rather than left to the
+  # caller's: with OMABACKUP_CONFIG gone the CLI falls back to
+  # $XDG_CONFIG_HOME/omabackup/config.json, and the developer running this
+  # suite has that exported to their REAL config directory.
+  m74=$(env -u OMABACKUP_CONFIG HOME="$FH" XDG_CONFIG_HOME="$FH/.config" \
+        XDG_STATE_HOME="$FH/.local/state" OMABACKUP_ETC_ROOT="$T/etcroot" \
+        OMABACKUP_MIN_FILES=1 "$CLI" snapshot --no-push --json 2>/dev/null)
+  eq "the marker without the config redirection does not revive the hook" "$(jq -r .ok <<<"$m74")" "false"
+  has "the refusal is still the hollow-snapshot floor" \
+    "$(jq -r .error <<<"$m74")" "refusing to commit a hollow snapshot"
+  n74=$(env -u OMABACKUP_CONFIG HOME="$FH" XDG_CONFIG_HOME="$FH/.config" \
+        XDG_STATE_HOME="$FH/.local/state" OMABACKUP_MIN_FILES=1 "$CLI" status --json 2>/dev/null)
+  eq "status reads fault while the marker is set alone" "$(jq -r .state <<<"$n74")" "fault"
+  has "status names the stray marker" \
+    "$(jq -r '.problems[]' <<<"$n74")" "OMABACKUP_IN_SUITE is set outside a test run"
+  has "and still names the ignored override" "$(jq -r '.problems[]' <<<"$n74")" "OMABACKUP_MIN_FILES"
+  ! grep -q 'set outside a test run' <<<"$(obj status | jq -r '.problems[]')" \
+    && ok "a real fixture run reports no stray marker" || bad "the suite's own runs read as a stray marker"
+
   # ...and under the marker the hook still does its job, or the suite could
   # not build a fixture at all.
   eq "under the marker the floor override is honoured" "$(obj snapshot --no-push | jq -r .ok)" "true"

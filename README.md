@@ -443,17 +443,22 @@ fixture), `NET_WAIT` (how many seconds `nm-online` may wait),
 `systemctl --user`), and `OMABACKUP_LOCK_WAIT`.
 
 Six more hooks weaken a guard rather than redirect a path, so they take
-effect **only when `OMABACKUP_IN_SUITE=1` is set too**, which the suite
-exports at its own top: `OMABACKUP_MIN_FILES` and `OMABACKUP_MIN_ALLOWLIST`
-(the derived snapshot floors), `OMABACKUP_MIN_RESTORE` (the floor
-`restore --configs` refuses below), `OMABACKUP_NET=0` (skip the visibility
-probe entirely), and `OMABACKUP_SKIP_ETC=1` / `OMABACKUP_SKIP_DROPINS=1`
-(skip the `/etc` half of the drift scan). Without the marker they are
-ignored, and `status` reports a problem naming every one it found, so the
-widget shows a fault. A `systemd --user` unit inherits the user manager's
-environment, so any of these set once in `~/.config/environment.d` or
-`.bashrc` would otherwise have reached the daily timer forever with nothing
-saying so.
+effect **only when `OMABACKUP_IN_SUITE=1` and `OMABACKUP_CONFIG` are both
+set**: the suite exports the marker at its own top and every fixture points
+`OMABACKUP_CONFIG` at its own throwaway config, while a real install sets
+neither. The pair matters, because a marker on its own is one more exported
+variable for whoever set the hook. `OMABACKUP_MIN_FILES` and
+`OMABACKUP_MIN_ALLOWLIST` (the derived snapshot floors),
+`OMABACKUP_MIN_RESTORE` (the floor `restore --configs` refuses below),
+`OMABACKUP_NET=0` (skip the visibility probe entirely), and
+`OMABACKUP_SKIP_ETC=1` / `OMABACKUP_SKIP_DROPINS=1`
+(skip the `/etc` half of the drift scan). Without both, they are ignored and
+`status` reports a problem naming every one it found, so the widget shows a
+fault; the marker set without the redirection is reported on its own as
+"OMABACKUP_IN_SUITE is set outside a test run". A `systemd --user` unit
+inherits the user manager's environment, so any of these set once in
+`~/.config/environment.d` or `.bashrc` would otherwise have reached the daily
+timer forever with nothing saying so.
 
 Design docs: [docs/superpowers/specs/2026-09-03-omabackup-design.md](docs/superpowers/specs/2026-09-03-omabackup-design.md)
 and [docs/superpowers/plans/2026-09-03-omabackup-1.0.md](docs/superpowers/plans/2026-09-03-omabackup-1.0.md).

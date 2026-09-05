@@ -209,6 +209,11 @@ health_collect() {
   # still someone believing a guard is off. Report it: any problem is a fault.
   [[ -z "${OMABACKUP_OVERRIDES_IGNORED:-}" ]] \
     || H_PROBLEMS+=("ignoring OMABACKUP_* override(s) set in the environment: $OMABACKUP_OVERRIDES_IGNORED")
+  # The suite marker on its own is the shape of an attempt to switch the
+  # hooks back on: it means something set the marker without the config
+  # redirection every fixture uses, which no real install does.
+  [[ "${OMABACKUP_SUITE_MARKER_STRAY:-0}" != 1 ]] \
+    || H_PROBLEMS+=("OMABACKUP_IN_SUITE is set outside a test run")
 
   H_SETUP=$(health_setup_state)
 }

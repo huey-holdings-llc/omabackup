@@ -18,8 +18,16 @@ LOG_FILE="$STATE_DIR/omabackup.log"
 # row and stop reporting every newly appearing ~/.config/<app>.
 STOCK_DIR="${OMABACKUP_STOCK_DIR:-${OMARCHY_PATH:-/usr/share/omarchy}}"
 
-# Guard-weakening test hooks, honoured ONLY when the suite marks itself with
-# OMABACKUP_IN_SUITE=1 (tests/engine.test.sh exports it at its own top).
+# Guard-weakening test hooks, honoured ONLY when BOTH of these hold:
+# OMABACKUP_IN_SUITE=1 (tests/engine.test.sh exports it at its own top) and
+# OMABACKUP_CONFIG naming a config file. The marker alone is one exported
+# variable away from being set by whoever set the hook, which puts the whole
+# gate back where it started; every fixture points OMABACKUP_CONFIG at its own
+# throwaway config, and a real install never sets it, because a real install
+# reads $XDG_CONFIG_HOME/omabackup/config.json. Two variables that only ever
+# occur together in a test run are a much worse thing to arrive at by accident
+# than one. A marker set WITHOUT the redirection is reported as a problem of
+# its own below, so the bypass attempt is visible rather than silent.
 #
 # A `systemd --user` unit inherits the user manager's environment
 # (~/.config/environment.d/*.conf, `systemctl --user import-environment`, a
@@ -36,7 +44,12 @@ STOCK_DIR="${OMABACKUP_STOCK_DIR:-${OMARCHY_PATH:-/usr/share/omarchy}}"
 # they point the tool at other files or quieten it, they do not weaken a guard
 # over what it does look at.
 OMABACKUP_OVERRIDES_IGNORED=""
-if [[ "${OMABACKUP_IN_SUITE:-0}" != 1 ]]; then
+OMABACKUP_SUITE_MARKER_STRAY=0
+_ob_in_suite=0
+if [[ "${OMABACKUP_IN_SUITE:-0}" == 1 ]]; then
+  if [[ -n "${OMABACKUP_CONFIG:-}" ]]; then _ob_in_suite=1; else OMABACKUP_SUITE_MARKER_STRAY=1; fi
+fi
+if [[ "$_ob_in_suite" != 1 ]]; then
   for _ob_hook in OMABACKUP_MIN_FILES OMABACKUP_MIN_ALLOWLIST OMABACKUP_MIN_RESTORE \
                   OMABACKUP_NET OMABACKUP_SKIP_ETC OMABACKUP_SKIP_DROPINS; do
     [[ -n "${!_ob_hook:-}" ]] || continue
@@ -45,7 +58,8 @@ if [[ "${OMABACKUP_IN_SUITE:-0}" != 1 ]]; then
   done
   unset _ob_hook
 fi
-export OMABACKUP_OVERRIDES_IGNORED
+unset _ob_in_suite
+export OMABACKUP_OVERRIDES_IGNORED OMABACKUP_SUITE_MARKER_STRAY
 
 OMABACKUP_SKIP_ETC="${OMABACKUP_SKIP_ETC:-0}"
 OMABACKUP_SKIP_TIMERS="${OMABACKUP_SKIP_TIMERS:-0}"
