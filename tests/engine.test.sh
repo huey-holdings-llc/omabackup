@@ -770,18 +770,46 @@ if group 44 "the snapshot commits only its own output, and the staged gate still
   git -C "$FR" show --name-only --format= HEAD | grep -qx 'notes.txt' \
     && bad "notes.txt was swept into the snapshot commit" || ok "notes.txt was NOT committed by the snapshot"
   has "the edit is reported in the run" "$out" "uncommitted edits outside the snapshot"
-  # ...but if a human has STAGED something with a secret in it, the staged gate
-  # must still catch it: it scans exactly what is about to be committed.
+
+  # `git commit` commits the INDEX, not what the last `git add` named, so a
+  # half-finished edit a human had already staged (or the staging a refused
+  # push --confirm left behind) rode into the snapshot commit and was pushed
+  # with it. Unstaging is what keeps the mutation rule true; the edit itself
+  # must survive untouched in the working tree.
+  printf '# staged by hand\n' >> "$FR/allowlist.txt"
+  git -C "$FR" add allowlist.txt
+  printf 'more\n' > "$FH/.config/mytool/more.conf"
+  before44=$(git -C "$FR" rev-parse HEAD)
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -eq 0 ]] && ok "a pre-staged edit does not stop the run" || bad "the run failed with a staged edit (rc=$rc)"
+  [[ "$(git -C "$FR" rev-parse HEAD)" != "$before44" ]] \
+    && ok "the snapshot still commits its own output" || bad "the snapshot committed nothing"
+  if git -C "$FR" show --name-only --format= HEAD | grep -qx 'allowlist.txt'; then
+    bad "the pre-staged allowlist edit was committed by the snapshot"
+  else
+    ok "the pre-staged allowlist edit was NOT committed"
+  fi
+  has "the run says it unstaged the edit" "$out" "unstaging edits that were staged before this run"
+  eq "the edit survives as an unstaged change" \
+    "$(git -C "$FR" status --porcelain -- allowlist.txt)" " M allowlist.txt"
+  git -C "$FR" checkout -q -- allowlist.txt
+
+  # ...and the staged-commit gate is still the authoritative one. normalize
+  # rules rewrite the staging tree AFTER the tree scan has run, so a rule can
+  # inject a token into a file nothing has scanned since; only the scan over
+  # exactly what is about to be committed sees it.
   if command -v gitleaks >/dev/null; then
-    printf 'note: ghp_%s\n' "$(rand_body 36)" > "$FR/notes.txt"
-    git -C "$FR" add notes.txt
+    cp "$FR/normalize.txt" "$T/normalize.bak"
+    printf 'home/.bashrc\ts/EDITOR=nvim/ghp_%s/\n' "$(rand_body 36)" >> "$FR/normalize.txt"
+    git -C "$FR" commit -qam "normalize rule"
     printf 'gate\n' > "$FH/.config/mytool/gate.conf"
     before=$(git -C "$FR" rev-parse HEAD)
     out=$(ob snapshot --no-push); rc=$?
-    [[ $rc -ne 0 ]] && ok "a secret in a pre-staged file blocks the commit" || bad "staged gate did NOT fire (rc=$rc)"
+    [[ $rc -ne 0 ]] && ok "a secret injected after the tree scan blocks the commit" || bad "staged gate did NOT fire (rc=$rc)"
     has "the refusal names the staged commit" "$out" "staged commit"
     eq "no commit created" "$(git -C "$FR" rev-parse HEAD)" "$before"
     git -C "$FR" diff --cached --quiet && ok "the index was reset" || bad "index left staged after the abort"
+    cp "$T/normalize.bak" "$FR/normalize.txt"
   else
     echo "  (gitleaks not installed: skipping the staged-commit gate)"
   fi

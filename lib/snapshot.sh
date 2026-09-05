@@ -382,6 +382,21 @@ snapshot_sync() {
 # anything else dirty is reported here and nagged about at login.
 snapshot_commit() {
   COMMITTED=false
+
+  # `git commit` commits the whole INDEX, not just what the add below staged.
+  # Anything already staged when the run started -- a half-finished
+  # allowlist.txt edit the user ran `git add` on, or the staging a refused
+  # `push --confirm` left behind -- rode into the snapshot commit and was
+  # pushed with it, which is exactly what the mutation rule forbids. Unstage
+  # it: `git reset` leaves the working tree alone, so the edit survives as an
+  # uncommitted change, gets reported below, and still shows in the login nag.
+  if ! git -C "$DATA_REPO" diff --cached --quiet; then
+    local pre
+    pre=$( { git -C "$DATA_REPO" diff --cached --name-only || true; } | awk 'NR<=5' | paste -sd' ' )
+    warn "unstaging edits that were staged before this run (they stay as uncommitted changes): $pre"
+    git -C "$DATA_REPO" reset -q || die "could not unstage pre-existing staged changes"
+  fi
+
   git -C "$DATA_REPO" add -A -- home etc manifests modes.txt || die "git add failed"
 
   # Reconcile: .gitignore is applied at `git add` time, AFTER staging and the
