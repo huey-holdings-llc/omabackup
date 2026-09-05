@@ -240,12 +240,20 @@ lint_etc_allowlist() {
   [[ $JSON == 1 ]] || echo "  $n entries"
 }
 
-# lint_normalize: NOEXPR / BADSED. Every sed expression is tried against the
-# literal `x`, inside an `if`, so a broken rule is caught here rather than the
-# next time it runs for real against a backed-up file.
+# lint_normalize: NOEXPR / BADRULE / BADSED. Every sed expression is tried
+# against the literal `x`, inside an `if`, so a broken rule is caught here
+# rather than the next time it runs for real against a backed-up file.
+#
+# It is tried under `sed --sandbox` (normalize_expr_sandboxed, lib/snapshot.sh)
+# and never bare. This check used to BE the execution site: a rule reading
+# `home/x<TAB>1e touch /path` ran that shell command during a plain
+# `omabackup lint` on a freshly cloned data repo, and lint then printed "lists
+# clean". BADRULE covers both halves of that: a rule sed refuses to compile in
+# sandbox mode (the e, r and w commands), and a path that could expand outside
+# the staging tree. BADSED stays what it always was, a rule with a syntax error.
 lint_normalize() {
   [[ $JSON == 1 ]] || echo "== normalize.txt =="
-  local n=0 npath nexpr
+  local n=0 npath nexpr serr
   while IFS=$'\t' read -r npath nexpr; do
     case "$npath" in ''|'#'*) continue ;; esac
     n=$((n+1))
@@ -253,11 +261,19 @@ lint_normalize() {
       lint_bad "NOEXPR" "$npath" "missing TAB-separated sed expression"
       continue
     fi
-    if ! printf 'x\n' | sed -e "$nexpr" >/dev/null 2>&1; then
-      # BADSED reads "path -> expr", not "path (note)": the failing
-      # expression itself is the useful detail here, not a parenthetical.
-      LINT_PROBLEMS+=("{\"code\":$(jstr BADSED),\"path\":$(jstr "$npath"),\"note\":$(jstr "$nexpr")}")
-      [[ $JSON == 1 ]] || printf '  \033[1;31m%s\033[0m %s -> %s\n' "BADSED" "$npath" "$nexpr"
+    if ! normalize_npath_ok "$npath"; then
+      lint_bad "BADRULE" "$npath" "path must be relative to the staging root, with no '..' segment"
+      continue
+    fi
+    if ! serr=$(normalize_expr_sandboxed "$nexpr"); then
+      if [[ "$serr" == *"sandbox mode"* ]]; then
+        lint_bad "BADRULE" "$npath" "runs commands or reads/writes files (sed e, r, w): $nexpr"
+      else
+        # BADSED reads "path -> expr", not "path (note)": the failing
+        # expression itself is the useful detail here, not a parenthetical.
+        LINT_PROBLEMS+=("{\"code\":$(jstr BADSED),\"path\":$(jstr "$npath"),\"note\":$(jstr "$nexpr")}")
+        [[ $JSON == 1 ]] || printf '  \033[1;31m%s\033[0m %s -> %s\n' "BADSED" "$npath" "$nexpr"
+      fi
     fi
   done < <(grep -vE '^[[:space:]]*(#|$)' "$DATA_REPO/normalize.txt" 2>/dev/null)
   [[ $JSON == 1 ]] || echo "  $n rules"

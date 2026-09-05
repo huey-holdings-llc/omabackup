@@ -1840,5 +1840,54 @@ if group 70 "a filename holding the old note separator names its own drift row";
     '["~/.config/huge.img","(exceeds 8m; NOT backed up)"]'
 fi
 
+if group 71 "normalize rules are data: no command execution, no writes outside the staging tree"; then
+  # normalize.txt lives in the data repo, so it travels with a clone, a pull
+  # and any hand edit. GNU sed's `e` command executes the pattern space as a
+  # shell command, and `omabackup lint` was itself the execution site: it
+  # tried every rule with a bare `sed -e`, so a clean lint of a freshly cloned
+  # repo ran whatever the rule said and then printed "lists clean". The glob
+  # half was expanded unquoted and unconfined too, so `../../victim.txt` had
+  # sed -i rewrite a file two levels above the repo.
+  mk_fixture g71; seed_home; commit_baseline
+  cp "$FR/normalize.txt" "$T/normalize.bak"
+  eq "the shipped normalize.example rules still pass" "$(obj lint --no-walk | jq -r .ok)" "true"
+
+  mark71="$T/PWNED-BY-NORMALIZE"
+  printf 'home/.bashrc\t1e touch %s\n' "$mark71" >> "$FR/normalize.txt"
+  l71=$(obj lint --no-walk)
+  eq "lint refuses a rule that would run a command" "$(jq -r .ok <<<"$l71")" "false"
+  eq "the code is BADRULE" "$(jq -r '[.problems[]|select(.code=="BADRULE")]|length' <<<"$l71")" "1"
+  [[ ! -e "$mark71" ]] && ok "lint never ran the command" || bad "lint executed the rule"
+  s71=$(obj snapshot --no-push)
+  eq "snapshot refuses the same rule" "$(jq -r .ok <<<"$s71")" "false"
+  has "the refusal points at lint" "$(jq -r .error <<<"$s71")" "omabackup lint"
+  [[ ! -e "$mark71" ]] && ok "snapshot never ran the command either" || bad "snapshot executed the rule"
+  cp "$T/normalize.bak" "$FR/normalize.txt"
+
+  # The glob half: $STAGE is $DATA_REPO/.staging, so "../../" is the fixture
+  # root, outside the data repo entirely.
+  printf 'ORIGINAL\n' > "$T/victim.txt"
+  printf '../../victim.txt\ts/ORIGINAL/OWNED-BY-NORMALIZE/\n' >> "$FR/normalize.txt"
+  eq "lint refuses a traversal path as BADRULE" \
+    "$(obj lint --no-walk | jq -r '[.problems[]|select(.code=="BADRULE")]|length')" "1"
+  eq "snapshot refuses the traversal path" "$(obj snapshot --no-push | jq -r .ok)" "false"
+  eq "the file above the data repo is untouched" "$(cat "$T/victim.txt")" "ORIGINAL"
+  cp "$T/normalize.bak" "$FR/normalize.txt"
+
+  printf '/etc/passwd\ts/a/b/\n' >> "$FR/normalize.txt"
+  eq "lint refuses an absolute path as BADRULE" \
+    "$(obj lint --no-walk | jq -r '[.problems[]|select(.code=="BADRULE")]|length')" "1"
+  cp "$T/normalize.bak" "$FR/normalize.txt"
+
+  # A syntax error stays BADSED: the two codes say different things, and only
+  # one of them means "this rule tried to leave its box".
+  printf 'home/.bashrc\ts/unterminated\n' >> "$FR/normalize.txt"
+  b71=$(obj lint --no-walk)
+  eq "a syntax error is still BADSED" "$(jq -r '[.problems[]|select(.code=="BADSED")]|length' <<<"$b71")" "1"
+  eq "and it is not reported as BADRULE" "$(jq -r '[.problems[]|select(.code=="BADRULE")]|length' <<<"$b71")" "0"
+  cp "$T/normalize.bak" "$FR/normalize.txt"
+  eq "the fixture lints clean again" "$(obj lint --no-walk | jq -r .ok)" "true"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

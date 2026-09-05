@@ -267,7 +267,13 @@ path ignores exactly that entry, and `path/**` ignores the whole subtree
 bare ignore still lets the scanner look at the path's children).
 `etc-allowlist.txt` lines are full `/etc/...` paths. `normalize.txt` lines
 are `<staged path glob><TAB><sed expression>`, applied to the staged copy
-before it is hashed and committed.
+before it is hashed and committed. Both halves are treated as data, never as
+a program: the path must be relative to the staging root with no `..` segment
+and is re-checked after the glob expands, and the expression runs under
+`sed --sandbox`, which refuses the `e`, `r` and `w` commands outright, so a
+rule can never run a shell command or read and write a file of its own.
+`omabackup lint` reports either problem as `BADRULE`, and the snapshot
+refuses the run.
 
 ### CLI
 

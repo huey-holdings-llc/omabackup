@@ -320,21 +320,72 @@ snapshot_floor() {
 # Apply normalize.txt: neutralise self-changing values so an unchanged system
 # produces an identical tree and therefore no commit. Adding a newly discovered
 # volatile field is a one-line data edit, not a code change.
+#
+# normalize.txt is DATA, and data is never code. It lives in the data repo, so
+# it travels with a clone, a pull and any hand edit, and both halves of a rule
+# were once trusted completely: GNU sed's `e` command (and the s///e flag)
+# executes the pattern space as a shell command, and the glob half was expanded
+# unquoted and unconfined, so `../../victim.txt` had `sed -i` rewrite a file
+# two levels above the repo. Both halves are checked here and by
+# `omabackup lint` (which was itself the execution site: it tried every rule
+# with a bare `sed -e`, so a clean lint of a freshly cloned repo ran the rule).
+
+# normalize_npath_ok NPATH: 0 when the glob half of a rule can only ever
+# expand inside $STAGE. Empty, absolute and any ".." segment are refused
+# BEFORE the glob runs; the expansion is re-checked against the staging root
+# afterwards, because a glob can still reach a symlink.
+normalize_npath_ok() {
+  local p=$1
+  [[ -n "$p" ]] || return 1
+  case "$p" in
+    /*) return 1 ;;
+    ..|../*|*/..|*/../*) return 1 ;;
+  esac
+  return 0
+}
+
+# normalize_expr_sandboxed EXPR: run EXPR against a literal `x` under GNU
+# sed's --sandbox (4.3+), which rejects exactly the e, r and w commands at
+# compile time, before any of them can run. Prints sed's own message on
+# stdout so the caller can tell a sandbox refusal ("...in sandbox mode") from
+# a plain syntax error; LC_ALL=C keeps that message stable. Always call it in
+# a condition: a rejected rule is an expected outcome, not an abort.
+normalize_expr_sandboxed() {
+  # shellcheck disable=SC2069  # deliberate swap: stderr to the caller's
+  # capture, stdout (the rewritten `x`) discarded. Written the other way round
+  # the message would be lost and only the exit status would survive.
+  printf 'x\n' | LC_ALL=C sed --sandbox -e "$1" 2>&1 >/dev/null
+}
+
 snapshot_normalize() {
   local nf="$DATA_REPO/normalize.txt"
   [[ -r "$nf" ]] || return 0
-  local npath nexpr target
+  local stage_real
+  stage_real=$(realpath -e -- "$STAGE") || die "the staging tree vanished before normalize"
+  local npath nexpr target real serr
   while IFS=$'\t' read -r npath nexpr; do
     case "$npath" in ''|'#'*) continue ;; esac
     [[ -n "${nexpr:-}" ]] || continue
+    normalize_npath_ok "$npath" \
+      || die "normalize rule path escapes the staging tree: $npath (run: omabackup lint)"
+    if ! serr=$(normalize_expr_sandboxed "$nexpr"); then
+      die "normalize rule for $npath refused: ${serr:-sed rejected the expression} (run: omabackup lint)"
+    fi
     for target in "$STAGE"/$npath; do
       [[ -f "$target" ]] || continue
-      [[ -f "$target.prenorm" ]] || cp "$target" "$target.prenorm"
-      sed -i -e "$nexpr" "$target" || warn "normalize failed for $npath"
+      # Re-check after expansion: the glob half is confined above, but a
+      # symlink inside the staging tree would still land the write elsewhere.
+      real=$(realpath -e -- "$target") || continue
+      case "$real" in "$stage_real"/*) ;;
+        *) die "normalize rule for $npath resolves outside the staging tree: $real" ;;
+      esac
+      [[ -f "$real.prenorm" ]] || cp "$real" "$real.prenorm"
+      LC_ALL=C sed --sandbox -i -e "$nexpr" "$real" \
+        || die "normalize rule for $npath failed on ${real#"$stage_real"/}; check normalize.txt"
       # A rule like `d` is valid sed but empties the file. Backing up 0 bytes
       # while the live file has content is silent data loss.
-      [[ -s "$target" ]] || [[ ! -s "$target.prenorm" ]] \
-        || die "normalize rule emptied ${target#"$STAGE/"}; check normalize.txt"
+      [[ -s "$real" ]] || [[ ! -s "$real.prenorm" ]] \
+        || die "normalize rule emptied ${real#"$stage_real"/}; check normalize.txt"
     done
   done < <(grep -vE '^[[:space:]]*(#|$)' "$nf" || true)
 
@@ -361,6 +412,9 @@ snapshot_normalize() {
 snapshot_normalized_json() {
   local g f
   while IFS= read -r g; do
+    # Same confinement as snapshot_normalize: this loop globs a repo-supplied
+    # path too, and its caller rm -f's the .prenorm sibling of every hit.
+    normalize_npath_ok "$g" || continue
     for f in "$STAGE"/$g; do [[ -f "$f" ]] && printf '%s\n' "$f"; done
   done < <(grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null | cut -f1 | grep '\.json$' || true)
 }
