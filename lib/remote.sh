@@ -168,6 +168,19 @@ remote_push_if_ahead() {
     rm -f "$STATE_DIR/diverged.stamp"
     log "Pushed to origin."
   else
+    # @{upstream} is a remote-tracking ref, and a rejected push does not
+    # update it -- nor does anything else in this pipeline, which never
+    # fetches. So a remote advanced on another machine still read as zero
+    # commits behind: DIVERGED never fired, the rejection was classed as a
+    # retryable "the next run will push it", and the same doomed push was
+    # retried every day with no notification. Refresh the ref before counting.
+    # Left of `||` so a fetch that fails (offline, auth, no `timeout` on this
+    # PATH) keeps the old classification instead of killing the run under
+    # errexit, and OMABACKUP_NET=0 keeps this off the wire entirely.
+    if [[ "${OMABACKUP_NET:-1}" != 0 ]]; then
+      timeout 30 git -C "$DATA_REPO" fetch -q origin >/dev/null 2>&1 \
+        || warn "could not fetch origin after the failed push; the divergence check below may be stale"
+    fi
     local behind
     behind=$(git -C "$DATA_REPO" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
     if [[ "${behind:-0}" -gt 0 ]]; then

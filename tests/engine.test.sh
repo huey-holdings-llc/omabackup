@@ -1747,5 +1747,49 @@ if group 68 "restore and verify refuse a data repo whose snapshot output is unco
   eq "committing it lets verify run again" "$(obj verify | jq -r .ok)" "true"
 fi
 
+if group 69 "a remote advanced elsewhere reads as diverged, not as a retryable push failure"; then
+  # The divergence check counted HEAD..@{upstream}, a remote-tracking ref a
+  # rejected push does not update and nothing in the pipeline ever fetched.
+  # A remote advanced on another machine therefore read as zero commits
+  # behind: DIVERGED never fired, the rejection was classed retryable, and
+  # the same doomed push was retried daily with no notification.
+  mk_fixture g69; seed_home; commit_baseline
+  git -C "$FR" push -q -u origin main
+
+  # A second clone stands in for the other machine.
+  git clone -q "$BARE" "$T/other"
+  git -C "$T/other" config user.email t@t; git -C "$T/other" config user.name t
+  git -C "$T/other" commit -q --allow-empty -m "from the other machine"
+  git -C "$T/other" push -q origin main
+  remote_head69=$(git -C "$BARE" rev-parse main)
+
+  # ...and a local commit here, so the push is a real non-fast-forward.
+  printf '\nexport EDITOR=vim\n' >> "$FH/.bashrc"
+  # OMABACKUP_NET=1: the fixture's origin is a local bare path, so nothing
+  # here reaches the network (remote_github_slug finds no slug and no probe
+  # runs), but the fetch that classifies a failed push is only attempted when
+  # the tool is allowed to talk to the remote at all.
+  s69=$(env HOME="$FH" OMABACKUP_NET=1 "$CLI" snapshot --json 2>/dev/null)
+  eq "the snapshot still commits" "$(jq -r .committed <<<"$s69")" "true"
+  eq "the push was rejected" "$(jq -r .pushed <<<"$s69")" "false"
+  eq "the local commit is still there" \
+    "$(git -C "$FR" status --porcelain -- home | grep -c . || true)" "0"
+  st69=$(env HOME="$FH" OMABACKUP_NET=1 "$CLI" status --json 2>/dev/null)
+  eq "the divergence is reported, not hidden behind a retry" "$(jq -r .diverged <<<"$st69")" "true"
+  has "status states the problem in words" "$(jq -r '.problems[]' <<<"$st69")" "diverged"
+  # The one-off notification path: stamped with the remote head it warned
+  # about, so an unresolved divergence does not nag on every run.
+  eq "the divergence notification is stamped once" \
+    "$(cat "$OMABACKUP_STATE_DIR/diverged.stamp" 2>/dev/null)" "$remote_head69"
+
+  # Resolving it clears the stamp on the next successful push.
+  git -C "$FR" pull -q --rebase origin main
+  printf '\nexport VISUAL=vim\n' >> "$FH/.bashrc"
+  eq "the run after a rebase pushes again" \
+    "$(env HOME="$FH" OMABACKUP_NET=1 "$CLI" snapshot --json 2>/dev/null | jq -r .pushed)" "true"
+  [[ ! -f "$OMABACKUP_STATE_DIR/diverged.stamp" ]] \
+    && ok "the divergence stamp is cleared by a successful push" || bad "the stamp outlived the divergence"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
