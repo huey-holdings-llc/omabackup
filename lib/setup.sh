@@ -206,7 +206,20 @@ setup_seed() {
   setup_phase "seeded"
 }
 
-setup_marker() { jq -cn --arg v "$VERSION" '{format:1, createdBy:$v}' > "$DATA_REPO/.omabackup"; }
+# setup_marker: write the marker, NEVER lowering an existing format. setup
+# rewrote it as format:1 on every run, --import included, so a 1.0 engine
+# adopting (or merely rerunning setup against) a repo written by a 1.1 engine
+# silently downgraded the marker and told the newer machine its own repo was
+# older than it is. Writing the number back unchanged costs one read.
+setup_marker() {
+  local prev=0 fmt=1
+  if [[ -f "$DATA_REPO/.omabackup" ]]; then
+    prev=$(jq -r '.format // 0' "$DATA_REPO/.omabackup" 2>/dev/null || echo 0)
+    case "$prev" in ''|*[!0-9]*) prev=0 ;; esac
+  fi
+  [[ "$prev" -le 1 ]] || fmt=$prev
+  jq -cn --arg v "$VERSION" --argjson f "$fmt" '{format:$f, createdBy:$v}' > "$DATA_REPO/.omabackup"
+}
 
 # setup_import DIR: adopt an existing engine repo, one that already carries
 # the lists and tree layout but is missing our marker or a config entry.

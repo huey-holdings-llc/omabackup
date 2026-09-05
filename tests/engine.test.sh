@@ -103,9 +103,12 @@ if group 00 "baseline: version, help, config validation"; then
   fails "unknown verb is usage (exit 2)" "$CLI" bogus
   [[ $("$CLI" bogus >/dev/null 2>&1; echo $?) == 2 ]] && ok "exit code 2 for usage" || bad "usage exit code"
   mk_fixture g00
-  jq '. + {bogus:1}' "$OMABACKUP_CONFIG" > "$T/bad.json"
-  eq "unknown config key refused as JSON" "$(OMABACKUP_CONFIG=$T/bad.json obj status | jq -r .ok)" "false"
-  has "refusal names the key" "$(OMABACKUP_CONFIG=$T/bad.json obj status)" "bogus"
+  # A TYPO of a known key, not a wholly unknown one: a misspelled key is a
+  # threshold the user believes is set and is not, so it still halts. A key
+  # this version has simply never heard of warns instead (group 87).
+  jq '. + {dataRepoo:1}' "$OMABACKUP_CONFIG" > "$T/bad.json"
+  eq "a mistyped config key refused as JSON" "$(OMABACKUP_CONFIG=$T/bad.json obj status | jq -r .ok)" "false"
+  has "refusal names the key" "$(OMABACKUP_CONFIG=$T/bad.json obj status)" "dataRepoo"
   # status and health are special-cased (Task 10): they run without a config
   # and report "not-configured" instead of dying, so this die()-refusal probe
   # uses a verb that still requires config unconditionally.
@@ -2474,6 +2477,53 @@ OLDGL
   eq "the fallback still refuses a secret in a staged list file" "$(jq -r .ok <<<"$p86")" "false"
   has "and names the staged scan" "$p86" "staged secret scan"
   git -C "$FR" checkout -q -- drift-ignore.txt
+fi
+
+if group 87 "a repo or a config from a newer version is refused or ignored, never downgraded"; then
+  # Both halves of the same trap. The marker was equality-checked and rewritten
+  # as format:1 on every setup run, so a 1.0 engine adopting a repo a 1.1
+  # engine wrote silently downgraded it. And config_load died on ANY key it did
+  # not know, so the first time a knob is added, the older machine in a synced
+  # pair refuses to run at all rather than ignoring one field.
+  mk_fixture g87; seed_home; commit_baseline
+
+  # format 0: a marker written before the field existed. Understood completely.
+  printf '{"createdBy":"older"}\n' > "$FR/.omabackup"
+  eq "a marker with no format is accepted" "$(env HOME="$FH" "$CLI" status >/dev/null 2>&1; echo $?)" "0"
+  printf '{"format":0,"createdBy":"older"}\n' > "$FR/.omabackup"
+  eq "format 0 is accepted" "$(env HOME="$FH" "$CLI" status >/dev/null 2>&1; echo $?)" "0"
+
+  # format 2: layout this version may misread. Refused, and NOT rewritten.
+  printf '{"format":2,"createdBy":"newer"}\n' > "$FR/.omabackup"
+  s87=$(obj status)
+  eq "format 2 is refused" "$(jq -r .ok <<<"$s87")" "false"
+  has "the refusal says which way the gap runs" "$(jq -r .error <<<"$s87")" "newer than this version"
+  fails "setup --import cannot adopt it either" \
+    env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
+  eq "and the format:2 marker survives that attempt" "$(jq -r .format "$FR/.omabackup")" "2"
+  printf '{"format":1,"createdBy":"test"}\n' > "$FR/.omabackup"
+  eq "an ordinary format:1 repo still works" "$(env HOME="$FH" "$CLI" status >/dev/null 2>&1; echo $?)" "0"
+
+  # A key from the future loads with a warning; a typo of a known key does not.
+  jq '. + {futureKey:{a:1}}' "$OMABACKUP_CONFIG" > "$T/future.json"
+  f87=$(OMABACKUP_CONFIG=$T/future.json ob status 2>&1)
+  eq "a wholly unknown key still lets the tool run" \
+    "$(OMABACKUP_CONFIG=$T/future.json env HOME="$FH" "$CLI" status >/dev/null 2>&1; echo $?)" "0"
+  has "and says it is ignoring it" "$f87" "ignoring config key(s) this version does not know"
+  has "naming the key" "$f87" "futureKey"
+  jq '. + {maxMisingPct:30}' "$OMABACKUP_CONFIG" > "$T/typo.json"
+  t87=$(OMABACKUP_CONFIG=$T/typo.json obj status)
+  eq "a typo of a known key still halts" "$(jq -r .ok <<<"$t87")" "false"
+  has "and says why it is not being ignored" "$(jq -r .error <<<"$t87")" "typo"
+  jq '. + {DataRepo:"/x"}' "$OMABACKUP_CONFIG" > "$T/case.json"
+  eq "a known key in the wrong case halts too" \
+    "$(OMABACKUP_CONFIG=$T/case.json obj status | jq -r .ok)" "false"
+  # A nested key under a known parent gets the same treatment as a top-level one.
+  jq '.remote.trustd=true' "$OMABACKUP_CONFIG" > "$T/nested.json"
+  eq "a mistyped nested key halts" "$(OMABACKUP_CONFIG=$T/nested.json obj status | jq -r .ok)" "false"
+  jq '.remote.mirrorOf="x"' "$OMABACKUP_CONFIG" > "$T/nested2.json"
+  eq "an unknown nested key from the future does not" \
+    "$(OMABACKUP_CONFIG=$T/nested2.json env HOME="$FH" "$CLI" status >/dev/null 2>&1; echo $?)" "0"
 fi
 
 echo; echo "passed=$pass failed=$fail"
