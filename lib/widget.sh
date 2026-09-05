@@ -293,13 +293,21 @@ cmd_timer() {
       ;;
     run)
       # The proven daily path is the unit; block only long enough to ask
-      # systemd to start it. When the unit is not loaded (or tests ask us to
-      # skip real timer state with OMABACKUP_SKIP_TIMERS), fall back to a
-      # detached snapshot so the popup's button still does something -- the
-      # snapshot itself calls health_write_status when it finishes, which is
-      # how the widget sees the result.
+      # systemd to start it. --no-block is what makes that true: the unit is
+      # Type=oneshot, so a plain `systemctl start` waits for the whole
+      # snapshot (up to TimeoutStartSec=10min) and the popup's button would
+      # hold `busy` for exactly as long as running the snapshot inline. The
+      # run's outcome still reaches the widget: the snapshot calls
+      # health_write_status when it finishes, status.json changes on disk, and
+      # Service.qml's FileView plus the panel's settle timer pick it up. A
+      # unit that is not loaded still fails here immediately, with or without
+      # --no-block, so the fallback below is unaffected.
+      #
+      # When the unit is not loaded (or tests ask us to skip real timer state
+      # with OMABACKUP_SKIP_TIMERS), fall back to a detached snapshot so the
+      # button still does something.
       if [[ "${OMABACKUP_SKIP_TIMERS:-0}" != 1 ]] && have systemctl \
-        && systemctl --user start omabackup-snapshot.service >/dev/null 2>&1; then
+        && systemctl --user start --no-block omabackup-snapshot.service >/dev/null 2>&1; then
         printf '{"ok":true,"started":"unit"}\n'
       else
         have setsid || { widget_reply_fail "setsid is not available"; return 1; }

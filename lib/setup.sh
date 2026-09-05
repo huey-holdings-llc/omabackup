@@ -221,6 +221,15 @@ setup_first_scan() {
 # whether a non-GitHub remote is trusted enough to push to.
 setup_remote() {
   local url=$1 create=$2 trust=$3 yes=$4 have_origin
+  # What the config already decided, read BEFORE anything below changes the
+  # origin. A trust decision belongs to one specific remote, and a rerun
+  # against that same remote must not silently drop it: `setup --yes` used to
+  # rewrite the whole remote object from argv, so every rerun (including the
+  # one the widget's setup card runs) untrusted a remote the operator had
+  # deliberately trusted, and pushes stopped until they noticed.
+  local prior_url prior_trusted
+  prior_url=$(cfg remote.url)
+  prior_trusted=$(cfg remote.trusted)
   have_origin=$(remote_origin_url)
   if [[ -z "$url" && -z "$have_origin" && $create == 0 && $yes == 0 ]]; then
     url=$(ask "Private git remote URL (empty to stay local)" "" 0)
@@ -242,6 +251,14 @@ setup_remote() {
   fi
   url=$(remote_origin_url)
   if [[ -n "$url" && -z "$(remote_github_slug "$url")" ]]; then
+    # Same remote as last time, already trusted: the operator answered this
+    # question once and nothing has changed, so the answer stands. A DIFFERENT
+    # url makes the question live again and falls through to the warning
+    # below, which is the whole point: trust must never carry over to a remote
+    # nobody has vouched for.
+    if [[ $trust == 0 && "$prior_trusted" == true && -n "$prior_url" && "$prior_url" == "$url" ]]; then
+      trust=1
+    fi
     # The trust question is only ever asked interactively: confirm's safe
     # default is no, so an unattended run (--yes, or no tty) leaves a
     # non-GitHub remote untrusted unless --trust-remote said otherwise.

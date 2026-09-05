@@ -1121,8 +1121,11 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
 
   eq "timer run: starts the unit when systemctl accepts it" \
     "$(whp timer run | jq -c '[.ok,.started]')" '[true,"unit"]'
-  grep -qx -- '--user start omabackup-snapshot.service' "$T/sysctl.log" \
-    && ok "timer run: starts the snapshot service" || bad "timer run argv wrong"
+  # --no-block is load-bearing: the unit is Type=oneshot, so a plain start
+  # would block for the whole snapshot and the popup's button would hold busy
+  # exactly as long as running it inline.
+  grep -qx -- '--user start --no-block omabackup-snapshot.service' "$T/sysctl.log" \
+    && ok "timer run: starts the snapshot service without blocking on it" || bad "timer run argv wrong"
 
   # pause/resume are write verbs too: status.json must refresh after each,
   # same as allow/ignore/resolve-gone/push (compared by the "generated"
@@ -1223,12 +1226,16 @@ fi
 
 if group 61 "setup --import adopts an existing engine repo; unattended trust stays opt-in"; then
   mk_fixture g61; seed_home; rm "$FR/.omabackup"
+  # mk_fixture pre-authors a config that already trusts $BARE, and a rerun
+  # against an unchanged remote now keeps a trust decision the operator
+  # already made. Clear it first, so the assertion below tests what it says:
+  # an unattended run must never turn trust ON by itself.
+  jq '.remote.trusted=false' "$OMABACKUP_CONFIG" > "$T/c61" && mv "$T/c61" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
   check "import writes the marker" env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
   eq "marker format 1" "$(jq -r .format "$FR/.omabackup")" "1"
   # $FR's origin is $BARE, a local path: not GitHub. An unattended run
-  # (--yes, no tty, no --trust-remote) must never trust it, even though
-  # mk_fixture's own pre-authored config said trusted:true.
-  eq "unattended import leaves a non-GitHub remote untrusted without --trust-remote" \
+  # (--yes, no tty, no --trust-remote) must never turn trust on for it.
+  eq "unattended import never turns trust ON for a non-GitHub remote" \
     "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "false"
 
   git init -q "$T/notarepo"
@@ -1238,6 +1245,19 @@ if group 61 "setup --import adopts an existing engine repo; unattended trust sta
   # is the only way to flip it to trusted.
   check "setup --remote --trust-remote rerun" env HOME="$FH" "$CLI" setup --data-repo "$FR" --remote "$BARE" --trust-remote --no-timers --yes
   eq "explicit --trust-remote sets remote.trusted true" "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "true"
+
+  # A trust decision belongs to ONE remote. A rerun against that same remote
+  # keeps it, so the widget's setup card cannot silently untrust a remote the
+  # operator vouched for; a different url makes the question live again.
+  check "flagless rerun after --trust-remote" env HOME="$FH" "$CLI" setup --yes --no-timers
+  eq "a rerun against the same remote keeps trusted true" "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "true"
+  eq "the rerun keeps the remote url too" "$(jq -r .remote.url "$OMABACKUP_CONFIG")" "$BARE"
+
+  git init -q --bare "$T/other.git"
+  out61=$(env HOME="$FH" "$CLI" setup --remote "$T/other.git" --yes --no-timers 2>&1)
+  eq "a different remote url resets trusted to false" "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "false"
+  eq "the new remote url is recorded" "$(jq -r .remote.url "$OMABACKUP_CONFIG")" "$T/other.git"
+  has "the reset warns that the new remote is untrusted" "$out61" "left untrusted"
 fi
 
 if group 62 "setup --remove takes back what setup put in, and leaves the data repo alone"; then
