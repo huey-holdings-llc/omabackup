@@ -2294,5 +2294,42 @@ if group 82 "an ERROR row in the drift report is a fault, and the stock tree fol
     "$n82" "$T/no-such-omarchy/config"
 fi
 
+if group 83 "status.json's push_verifiable is the push gate's answer, not git's arithmetic"; then
+  # One key, two meanings, in the same run: lib/remote.sh set it to "the
+  # remote is proven private or explicitly trusted (and gitleaks is here)",
+  # lib/health.sh set it to "git rev-list --count parsed a number". So a
+  # snapshot printed push_verifiable:false on stdout and wrote
+  # push_verifiable:true into status.json, and the first person to wire the
+  # widget's push button to the field would have got the wrong one.
+  mk_fixture g83; seed_home
+  jq '.remote.trusted=false' "$OMABACKUP_CONFIG" > "$T/c" && mv "$T/c" "$OMABACKUP_CONFIG"
+  check "a snapshot against an unverified remote still commits" env HOME="$FH" "$CLI" snapshot
+  git -C "$FR" push -q -u origin main 2>/dev/null || true    # upstream readable, gate still shut
+  s83=$(obj status)
+  eq "the upstream count is readable" "$(jq -r .upstream_readable <<<"$s83")" "true"
+  eq "...and push_verifiable is still false, because the remote is unverified" \
+    "$(jq -r .push_verifiable <<<"$s83")" "false"
+  eq "the reason is the gate's own" "$(jq -r .push_reason <<<"$s83")" "remote-unverified"
+  eq "status.json on disk says the same" \
+    "$(jq -r .push_verifiable "$OMABACKUP_STATE_DIR/status.json")" "false"
+
+  # Trust the remote and the same two fields separate the other way.
+  jq '.remote.trusted=true' "$OMABACKUP_CONFIG" > "$T/c" && mv "$T/c" "$OMABACKUP_CONFIG"
+  check "a snapshot against a trusted remote runs" env HOME="$FH" "$CLI" snapshot
+  eq "the gate now says verifiable" "$(obj status | jq -r .push_verifiable)" "true"
+  eq "with the gate's reason" "$(obj status | jq -r .push_reason)" "trusted"
+
+  # A verdict is an answer ABOUT ONE URL. Point origin somewhere else and the
+  # recorded yes must not carry over, the same rule remote_trust_ok applies.
+  git -C "$FR" remote set-url origin "$T/elsewhere.git"
+  eq "a verdict recorded for another origin does not count" \
+    "$(obj status | jq -r .push_verifiable)" "false"
+  eq "and says so" "$(obj status | jq -r .push_reason)" "unprobed"
+
+  # The two objects status can emit must still carry the same key set.
+  eq "not-configured status carries the same keys as a configured one" \
+    "$(OMABACKUP_CONFIG=/nonexistent obj status | jq -S 'keys')" "$(obj status | jq -S 'keys')"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

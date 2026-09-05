@@ -41,7 +41,8 @@ health_not_configured_json() {
     '{state:"attention", setup:$setup, repo:"", generated:$generated,
       last_run:0, last_run_age_days:-1,
       drift_scan_complete:false, drift_count:0, drift_truncated:false, drift:[],
-      unpushed:0, diverged:false, push_verifiable:false, uncommitted:[],
+      unpushed:0, diverged:false, upstream_readable:false,
+      push_verifiable:false, push_reason:"unprobed", uncommitted:[],
       timers_checked:false, timer_enabled:false, timer_active:false, timer_next:"",
       selftest_enabled:false, selftest_active:false, problems:[]}'
 }
@@ -110,13 +111,22 @@ health_collect() {
   fi
 
   # --- pushed = backed up; a local commit is not off the machine yet.
-  H_UNPUSHED=0; H_DIVERGED=false; H_PUSH_VERIFIABLE=false
+  #
+  # TWO SEPARATE QUESTIONS, and they used to share the name push_verifiable.
+  # H_UPSTREAM_READABLE answers "did git manage to count how far ahead HEAD
+  # is": a local, mechanical question. push_verifiable is the REMOTE GATE's
+  # answer -- gitleaks present and the remote proven private or explicitly
+  # trusted -- which only lib/remote.sh can decide and only while it is
+  # probing. Under one name, a machine with no gitleaks printed
+  # push_verifiable:false from snapshot and wrote push_verifiable:true into
+  # status.json, in the same run.
+  H_UNPUSHED=0; H_DIVERGED=false; H_UPSTREAM_READABLE=false
   if git -C "$DATA_REPO" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
     local ahead behind
     ahead=$(git -C "$DATA_REPO" rev-list --count '@{upstream}..HEAD' 2>/dev/null || true)
-    case "$ahead" in ''|*[!0-9]*) ahead=0 ;; *) H_PUSH_VERIFIABLE=true ;; esac
+    case "$ahead" in ''|*[!0-9]*) ahead=0 ;; *) H_UPSTREAM_READABLE=true ;; esac
     H_UNPUSHED=$ahead
-    [[ "$H_PUSH_VERIFIABLE" == true ]] || H_PROBLEMS+=("cannot verify whether commits are pushed")
+    [[ "$H_UPSTREAM_READABLE" == true ]] || H_PROBLEMS+=("cannot count unpushed commits")
     behind=$(git -C "$DATA_REPO" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
     if [[ "${behind:-0}" -gt 0 ]]; then
       H_DIVERGED=true
@@ -125,6 +135,25 @@ health_collect() {
     [[ "$H_UNPUSHED" -gt 0 ]] && H_PROBLEMS+=("$H_UNPUSHED commit(s) never pushed -- not yet off this machine")
   else
     H_PROBLEMS+=("no upstream configured -- cannot tell if anything is pushed")
+  fi
+
+  # --- the push gate's last recorded answer. Written by remote_probe and
+  # remote_push_if_ahead (lib/remote.sh) to $STATE_DIR/push-verdict.json; read
+  # here rather than re-derived, because re-deriving means probing the network
+  # from a widget refresh. A verdict recorded against a DIFFERENT origin is not
+  # an answer about this one: trust is bound to a URL everywhere else in this
+  # tool, and it is bound to a URL here too.
+  H_PUSH_VERIFIABLE=false; H_PUSH_REASON="unprobed"
+  local verdict="$STATE_DIR/push-verdict.json" v_url v_ok v_reason cur_url
+  if [[ -r "$verdict" ]]; then
+    cur_url=$(remote_origin_url)
+    v_url=$(jq -r '.url // ""' "$verdict" 2>/dev/null || true)
+    if [[ -n "$cur_url" && "$v_url" == "$cur_url" ]]; then
+      v_ok=$(jq -r 'if .verifiable == true then "true" else "false" end' "$verdict" 2>/dev/null || echo false)
+      v_reason=$(jq -r '.reason // ""' "$verdict" 2>/dev/null || true)
+      H_PUSH_VERIFIABLE=$v_ok
+      [[ -z "$v_reason" ]] || H_PUSH_REASON=$v_reason
+    fi
   fi
 
   # --- edits the timer will not commit (bin/, lists, README -- deliberately
@@ -197,7 +226,9 @@ health_status_json() {
     --argjson drift_truncated "$H_DRIFT_TRUNCATED" \
     --argjson unpushed "$H_UNPUSHED" \
     --argjson diverged "$H_DIVERGED" \
+    --argjson upstream_readable "$H_UPSTREAM_READABLE" \
     --argjson push_verifiable "$H_PUSH_VERIFIABLE" \
+    --arg push_reason "$H_PUSH_REASON" \
     --argjson uncommitted "[$H_UNCOMMITTED_JSON]" \
     --argjson timers_checked "$H_TIMERS_CHECKED" \
     --argjson timer_enabled "$H_TIMER_ENABLED" \
@@ -210,7 +241,8 @@ health_status_json() {
       last_run:$last_run, last_run_age_days:$age,
       drift_scan_complete:$scan_complete, drift_count:$drift_count,
       drift_truncated:$drift_truncated, drift:$drift,
-      unpushed:$unpushed, diverged:$diverged, push_verifiable:$push_verifiable,
+      unpushed:$unpushed, diverged:$diverged, upstream_readable:$upstream_readable,
+      push_verifiable:$push_verifiable, push_reason:$push_reason,
       uncommitted:$uncommitted,
       timers_checked:$timers_checked, timer_enabled:$timer_enabled, timer_active:$timer_active,
       timer_next:$timer_next, selftest_enabled:$selftest_enabled, selftest_active:$selftest_active,

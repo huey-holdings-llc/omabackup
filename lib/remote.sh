@@ -98,6 +98,33 @@ remote_github_slug() {
   return 0
 }
 
+# remote_verdict_write VERIFIABLE REASON: record the push gate's last answer,
+# against the URL it was an answer about.
+#
+# `push_verifiable` used to mean two unrelated things in one run: here, "the
+# remote is proven private or explicitly trusted"; in lib/health.sh, "git
+# rev-list --count parsed a number". On a machine with no gitleaks, one
+# `snapshot --json` printed push_verifiable:false on stdout and wrote
+# push_verifiable:true into status.json. The gate's answer lives in this
+# process, and `status` is a different process that must never re-derive it
+# (re-probing would put the widget's refresh on the wire), so it is persisted:
+# health reads it back, and reads it as false unless the recorded URL is still
+# the URL origin points at. Atomic rename, for the same reason status.json is.
+remote_verdict_write() {
+  local url; url=$(remote_origin_url)
+  # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
+  mkdir -m 700 -p "$STATE_DIR" || return 0
+  local tmp
+  tmp=$(mktemp "$STATE_DIR/.push-verdict.XXXXXX") || return 0
+  if jq -cn --argjson v "$1" --arg r "$2" --arg u "$url" --argjson at "$(date +%s)" \
+       '{verifiable:$v, reason:$r, url:$u, at:$at}' > "$tmp" && chmod 600 "$tmp"; then
+    mv -f "$tmp" "$STATE_DIR/push-verdict.json"
+  else
+    rm -f "$tmp"
+  fi
+  return 0
+}
+
 # remote_probe: sets PUSH_VERIFIABLE (true|false) and PUSH_REASON. GitHub only
 # -- a non-GitHub remote (or none at all) cannot be probed this way, so it is
 # only ever pushed to when the operator has explicitly marked it trusted.
@@ -110,6 +137,10 @@ remote_github_slug() {
 # origin. Both are about the same failure -- proving one URL safe and then
 # writing to another.
 remote_probe() {
+  remote_probe_derive
+  remote_verdict_write "$PUSH_VERIFIABLE" "${PUSH_REASON:-unknown}"
+}
+remote_probe_derive() {
   PUSH_VERIFIABLE=false; PUSH_REASON=""
   local url slug code pu
   url=$(remote_origin_url)
@@ -174,10 +205,14 @@ remote_push_allowed() {
 remote_push_if_ahead() {
   PUSHED=false; SKIP_PUSH=0; DIVERGED=false
   if ! remote_push_allowed; then
+    # The gate's real answer, gitleaks included: status.json reports THIS, not
+    # health's own "the unpushed count parsed".
+    remote_verdict_write false "${PUSH_REASON:-unknown}"
     SKIP_PUSH=1
     warn "push not verifiable ($PUSH_REASON); commit(s) kept locally, not pushed"
     return 0
   fi
+  remote_verdict_write true "${PUSH_REASON:-verified}"
   git -C "$DATA_REPO" remote get-url origin >/dev/null 2>&1 || return 0
   local no_upstream=0
   git -C "$DATA_REPO" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1 || no_upstream=1
