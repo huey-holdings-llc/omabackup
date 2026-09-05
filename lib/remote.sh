@@ -16,6 +16,27 @@
 # (git remote set-url) must be respected without a config edit.
 remote_origin_url() { git -C "$DATA_REPO" remote get-url origin 2>/dev/null || true; }
 
+# remote_push_urls: every URL `git push origin` would actually write to, one
+# per line. `remote.origin.pushurl` overrides the fetch URL for pushes only, so
+# reading the fetch URL alone probes one remote and pushes to another: a
+# private fetch URL with a public pushurl passed the probe and then published
+# the config. With no pushurl set, git prints the fetch URL here, so the
+# caller's comparison is a no-op in the normal case.
+remote_push_urls() { git -C "$DATA_REPO" remote get-url --push --all origin 2>/dev/null || true; }
+
+# remote_trust_ok URL: 0 when the operator's trust decision still applies to
+# the URL git would push to right now. Trust is recorded against ONE remote
+# (remote.url in the config); a later `git remote set-url origin` by hand
+# leaves that yes attached to a remote nobody has vouched for, which is how a
+# trusted private mirror silently becomes a public one. Warns and refuses
+# instead of carrying the stale answer over.
+remote_trust_ok() {
+  [[ "$CFG_REMOTE_TRUSTED" == true ]] || return 1
+  [[ "$CFG_REMOTE_URL" != "$1" ]] || return 0
+  warn "origin has changed since it was trusted (trusted: ${CFG_REMOTE_URL:-none}); rerun: omabackup setup --trust-remote"
+  return 1
+}
+
 # remote_github_slug URL: print "owner/repo" for a GitHub remote, else print
 # nothing. Only these four forms are recognized; anything else (a self-hosted
 # Forgejo, a bare local path) is not GitHub and is not probed -- see
@@ -45,21 +66,36 @@ remote_github_slug() {
 # (or not-yet-created) and is verifiable; everything else (403 rate-limited,
 # 429, 5xx, a connection failure) proves nothing either way and must not
 # abort the run -- it just means "commit locally, don't push yet".
+# Two things are checked before any of that: that git pushes where it fetches
+# (no pushurl), and that a recorded trust decision still names the current
+# origin. Both are about the same failure -- proving one URL safe and then
+# writing to another.
 remote_probe() {
   PUSH_VERIFIABLE=false; PUSH_REASON=""
-  local url slug code
+  local url slug code pu
   url=$(remote_origin_url)
   [[ -n "$url" ]] || { PUSH_REASON="no-remote"; return 0; }
+  # Fail closed on a pushurl that is not the URL everything below probes and
+  # trusts. There is no safe way to verify two destinations from one answer,
+  # and the fix is one command for the user: git remote set-url --push --delete.
+  while IFS= read -r pu; do
+    [[ -n "$pu" && "$pu" != "$url" ]] || continue
+    warn "origin pushes to a different URL than it fetches from ($pu); refusing until the pushurl is removed"
+    PUSH_REASON="pushurl-differs"
+    return 0
+  done < <(remote_push_urls)
   # `|| true`: belt-and-braces alongside the `return 0` inside
   # remote_github_slug itself -- a bare assignment here must never be able to
   # take the whole process down under errexit, no matter what the callee does.
   slug=$(remote_github_slug "$url" || true)
   if [[ -z "$slug" ]]; then
-    if [[ "$CFG_REMOTE_TRUSTED" == true ]]; then PUSH_VERIFIABLE=true; PUSH_REASON="trusted"; else PUSH_REASON="remote-unverified"; fi
+    if remote_trust_ok "$url"; then PUSH_VERIFIABLE=true; PUSH_REASON="trusted"; else PUSH_REASON="remote-unverified"; fi
     return 0
   fi
   if [[ "${OMABACKUP_NET:-1}" == 0 ]]; then
-    if [[ "$CFG_REMOTE_TRUSTED" == true ]]; then PUSH_VERIFIABLE=true; PUSH_REASON="trusted"; else PUSH_REASON="net-disabled"; fi
+    if remote_trust_ok "$url"; then PUSH_VERIFIABLE=true; PUSH_REASON="trusted"
+    elif [[ "$CFG_REMOTE_TRUSTED" == true ]]; then PUSH_REASON="remote-unverified"
+    else PUSH_REASON="net-disabled"; fi
     return 0
   fi
   # A Persistent= timer fires the moment the user manager starts at login,

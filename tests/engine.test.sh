@@ -1533,5 +1533,53 @@ if group 66 "guards that had no proving assertion"; then
   wait "$lockpid66" 2>/dev/null || true
 fi
 
+if group 67 "the push target itself is verified: no pushurl, and trust bound to the current origin"; then
+  mk_fixture g67; seed_home
+
+  # A pushurl is where git ACTUALLY writes. The probe read the fetch URL, so a
+  # private fetch URL with a public pushurl passed every check and published
+  # the config to the public one.
+  git init -q --bare "$T/elsewhere.git"
+  git -C "$FR" remote set-url --push origin "$T/elsewhere.git"
+  s67=$(obj snapshot)
+  eq "the snapshot still commits with a pushurl set" "$(jq -r .committed <<<"$s67")" "true"
+  eq "but it does not push" "$(jq -r .pushed <<<"$s67")" "false"
+  eq "and it names the pushurl as the reason" "$(jq -r .push_reason <<<"$s67")" "pushurl-differs"
+  eq "nothing reached the fetch remote" "$(git -C "$BARE" rev-list --count --all)" "0"
+  eq "nothing reached the push remote" "$(git -C "$T/elsewhere.git" rev-list --count --all)" "0"
+  p67=$(obj push)
+  eq "push refuses outright while a pushurl is set" "$(jq -r .ok <<<"$p67")" "false"
+  has "the refusal names the pushurl" "$p67" "pushurl-differs"
+
+  # `remote set-url --push --delete` refuses to remove the last pushurl, so
+  # the documented undo is the config key itself.
+  git -C "$FR" config --unset remote.origin.pushurl
+  eq "removing the pushurl restores the push" "$(obj push | jq -r .ok)" "true"
+  [[ $(git -C "$BARE" rev-list --count --all) -ge 1 ]] && ok "the commit reached the trusted remote" || bad "not pushed after the pushurl was removed"
+
+  # Trust belongs to ONE remote. `git remote set-url origin` by hand left the
+  # old yes attached to a remote nobody vouched for.
+  git -C "$FR" remote set-url origin "$T/elsewhere.git"
+  q67=$(obj push)
+  eq "a repointed origin refuses the push" "$(jq -r .ok <<<"$q67")" "false"
+  has "the refusal names the unverified remote" "$q67" "remote-unverified"
+  jq --arg u "$T/elsewhere.git" '.remote.url=$u' "$OMABACKUP_CONFIG" > "$T/c67" \
+    && mv "$T/c67" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  eq "recording the new remote makes the trust decision live again" "$(obj push | jq -r .ok)" "true"
+
+  # The same binding on the GitHub-with-no-network branch, which trusted the
+  # config flag on its own too. --no-push keeps this off the network entirely;
+  # remote_probe still runs and reports.
+  git -C "$FR" remote set-url origin "https://github.com/someone/omabackup-data.git"
+  printf 'note\n' >> "$FH/.bashrc"
+  eq "a stale trust decision does not cover a GitHub remote either" \
+    "$(obj snapshot --no-push | jq -r .push_reason)" "remote-unverified"
+  jq --arg u "https://github.com/someone/omabackup-data.git" '.remote.url=$u' "$OMABACKUP_CONFIG" > "$T/c67b" \
+    && mv "$T/c67b" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  printf 'note2\n' >> "$FH/.bashrc"
+  eq "recording that url restores trust on the offline branch" \
+    "$(obj snapshot --no-push | jq -r .push_reason)" "trusted"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
