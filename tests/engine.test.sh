@@ -2208,5 +2208,57 @@ if group 80 "a mass disappearance halts the run even when every entry is optiona
   has "it is reported as GONE, not as a refusal" "$(cat "$FR/manifests/drift.txt")" "GONE"
 fi
 
+if group 81 "a pacman whose wording changed is an error, never a clean /etc scan"; then
+  # Both /etc sections read pacman's prose, not an API: the field name
+  # `Backup Files` in -Qii and the literal `error: No package owns <path>` on
+  # -Qqo's stderr. A reword makes both parses empty, which was byte-identical
+  # to "nothing drifted" -- while the # drift-scan-complete sentinel still
+  # printed, so the pipeline committed and every dashboard read clean. That is
+  # the exact fail-open this tool exists to prevent.
+  mk_fixture g81; seed_home
+  mkdir -p "$T/etcroot/sysctl.d"
+  printf 'vm.swappiness=10\n' > "$T/etcroot/sysctl.d/99-omabackup-probe.conf"
+  mkdir -p "$T/fakebin"
+
+  # A pacman that works, in the wording the parsers were written against.
+  cat > "$T/fakebin/pacman" <<'FAKEOK'
+#!/bin/sh
+case "$1" in
+  -Qii) printf 'Name            : fakepkg\nBackup Files    :\n/etc/fstab [modified]\n'; exit 0 ;;
+  -Qqo) shift; for f in "$@"; do echo "error: No package owns $f" >&2; done; exit 1 ;;
+esac
+exit 0
+FAKEOK
+  chmod +x "$T/fakebin/pacman"
+  d81() { env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_SKIP_ETC=0 OMABACKUP_ETC_ROOT="$T/etcroot" "$CLI" drift; }
+  ok81=$(d81)
+  has "the expected wording still reports a modified backup file" "$ok81" "NEW        /etc/fstab"
+  has "the expected wording still reports an unowned drop-in" "$ok81" "/etc/sysctl.d/99-omabackup-probe.conf"
+  eq "and says nothing about being unable to parse" "$(grep -c '# ERROR' <<<"$ok81" || true)" "0"
+
+  # The same machine after pacman rewords both messages. Nothing here is
+  # broken from pacman's point of view: it exits the same way and prints the
+  # same information, in different words.
+  cat > "$T/fakebin/pacman" <<'FAKEDE'
+#!/bin/sh
+case "$1" in
+  -Qii) printf 'Name             : fakepkg\nSicherungsdateien :\n/etc/fstab [geaendert]\n'; exit 0 ;;
+  -Qqo) shift; for f in "$@"; do echo "Fehler: kein Paket besitzt $f" >&2; done; exit 1 ;;
+esac
+exit 0
+FAKEDE
+  chmod +x "$T/fakebin/pacman"
+  bad81=$(d81)
+  has "a reworded -Qii is an explicit parse error" "$bad81" "cannot parse pacman backup-file output"
+  has "a reworded -Qqo stderr is an explicit parse error" "$bad81" "cannot parse pacman ownership output"
+  eq "the scan still finishes, so the error is carried, not lost" \
+    "$(tail -1 <<<"$bad81")" "# drift-scan-complete"
+  eq "neither section reported zero drift" "$(grep -c '# clean:' <<<"$bad81" || true)" "0"
+  # The two ERROR rows are drift items like any other, so they reach status.
+  ej81=$(env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_SKIP_ETC=0 OMABACKUP_ETC_ROOT="$T/etcroot" "$CLI" drift --json 2>/dev/null)
+  eq "both parse failures parse back out as ERROR items" \
+    "$(jq -r '[.items[] | select(.type=="ERROR")] | length' <<<"$ej81")" "2"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

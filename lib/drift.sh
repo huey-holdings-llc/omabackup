@@ -394,23 +394,34 @@ drift_scan() {
   # Re-run pacman's own modified-backup-file scan and diff it against what we
   # keep. OMABACKUP_SKIP_ETC=1 is used by the test fixtures so a synthetic
   # fixture is not swamped by this machine's real /etc state.
-  local etc_skip etc_live etc_known f
+  local etc_skip etc_live etc_known etc_qii f
   etc_skip='/etc/(passwd|group|subuid|subgid|shells|resolv\.conf|pacman\.d/mirrorlist|cups/cups-browsed\.conf|nsswitch\.conf|plymouth/plymouthd\.conf|security/faillock\.conf|skel/\.bashrc)$'
   if [ "${OMABACKUP_SKIP_ETC:-0}" != "1" ]; then
-  # A failing pacman used to yield an empty result indistinguishable from "no
-  # /etc drift", while the completion sentinel still printed. Check the producer.
-  if ! LC_ALL=C pacman -Qii >/dev/null 2>&1; then
+  # PRODUCER CONTRACT. This section reads pacman's human-readable prose, not an
+  # API: the field name `Backup Files` and the literal marker ` [modified]`.
+  # LC_ALL=C pins the locale but not the wording, and the day either changes,
+  # an empty parse is byte-identical to "no /etc drift" while the completion
+  # sentinel still prints and every dashboard reads clean. So: a failing pacman
+  # is an ERROR (it always was), and so now is a pacman that ran fine and
+  # emitted nothing this parser recognises. Zero modified files is only ever
+  # concluded from output that had at least one `Backup Files` line in it.
+  etc_qii=""
+  if ! etc_qii=$(LC_ALL=C pacman -Qii 2>/dev/null); then
     echo "# ERROR: pacman query failed; /etc drift NOT checked"
     found=$((found+1))
+  elif ! grep -qF 'Backup Files' <<<"$etc_qii"; then
+    echo "# ERROR: cannot parse pacman backup-file output; /etc drift NOT checked"
+    found=$((found+1))
+  else
+    etc_live=$(grep -F '[modified]' <<<"$etc_qii" \
+      | sed -E 's/^(Backup Files *: *)?[[:space:]]*//; s/ \[modified\]//' | sort -u)
+    etc_known=$(read_list "$DATA_REPO/etc-allowlist.txt" | sort -u)
+    while IFS= read -r f; do
+      [ -z "$f" ] && continue
+      echo "$f" | grep -qE "$etc_skip" && continue
+      grep -qxF "$f" <<<"$etc_known" || _drift_report NEW "$f"
+    done <<<"$etc_live"
   fi
-  etc_live=$(LC_ALL=C pacman -Qii 2>/dev/null | grep -F '[modified]' \
-    | sed -E 's/^(Backup Files *: *)?[[:space:]]*//; s/ \[modified\]//' | sort -u)
-  etc_known=$(read_list "$DATA_REPO/etc-allowlist.txt" | sort -u)
-  while IFS= read -r f; do
-    [ -z "$f" ] && continue
-    echo "$f" | grep -qE "$etc_skip" && continue
-    grep -qxF "$f" <<<"$etc_known" || _drift_report NEW "$f"
-  done <<<"$etc_live"
   fi
 
   # --- 5b. hand-authored /etc drop-ins ----------------------------------------
@@ -447,17 +458,31 @@ X11/xorg.conf.d fonts/conf.d"
     while IFS= read -r f; do dropin_files+=("$f"); done < <(find "$dir" -maxdepth 1 -type f 2>/dev/null | sort)
   done
   if [ ${#dropin_files[@]} -gt 0 ]; then
-    # One pacman call for all of them; unowned files come back on stderr.
-    unowned=$(LC_ALL=C pacman -Qqo "${dropin_files[@]}" 2>&1 >/dev/null \
-              | sed -nE 's/^error: No package owns (.*)$/\1/p')
-    while IFS= read -r f; do
-      [ -z "$f" ] && continue
-      real="/etc/${f#$ETC_DROPIN_ROOT/}"          # allowlist/ignore are written as /etc/...
-      echo "$real" | grep -qE "$etc_skip" && continue
-      grep -qxF "$real" <<<"$etc_known" && continue
-      is_ignored "$real" && continue
-      _drift_report NEW "$real"
-    done <<<"$unowned"
+    # One pacman call for all of them; unowned files come back on stderr as the
+    # literal `error: No package owns <path>`.
+    #
+    # PRODUCER CONTRACT, the same one section 5 has: stderr that this parser
+    # turns into nothing is only "every drop-in is owned by a package" when
+    # there was no stderr at all. Any other stderr (a reworded message, a
+    # locale that slipped through, a pacman that changed how it reports this)
+    # used to read as a clean scan, which is how a hand-written
+    # /etc/modprobe.d/*.conf goes unbacked while every monitor says fine.
+    local unowned_err
+    unowned_err=$(LC_ALL=C pacman -Qqo "${dropin_files[@]}" 2>&1 >/dev/null)
+    unowned=$(sed -nE 's/^error: No package owns (.*)$/\1/p' <<<"$unowned_err")
+    if [ -n "$unowned_err" ] && [ -z "$unowned" ]; then
+      echo "# ERROR: cannot parse pacman ownership output; /etc drop-ins NOT checked"
+      found=$((found+1))
+    else
+      while IFS= read -r f; do
+        [ -z "$f" ] && continue
+        real="/etc/${f#$ETC_DROPIN_ROOT/}"          # allowlist/ignore are written as /etc/...
+        echo "$real" | grep -qE "$etc_skip" && continue
+        grep -qxF "$real" <<<"$etc_known" && continue
+        is_ignored "$real" && continue
+        _drift_report NEW "$real"
+      done <<<"$unowned"
+    fi
   fi
   fi
 
