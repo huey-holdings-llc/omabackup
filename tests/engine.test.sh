@@ -1886,6 +1886,27 @@ if group 70 "a filename the report cannot name never renames someone else's row"
   eq "a TAB-separated note parses into path and note" \
     "$(obj status | jq -c '[.drift[0].path,.drift[0].note]')" \
     '["~/.config/huge.img","(exceeds 8m; NOT backed up)"]'
+  # A NEWLINE in a filename, deep enough to reach the full-depth walkers. They
+  # ran `find -print` and read the result a line at a time, so one path split
+  # into two fragments before any producer saw it: the row named
+  # `~/.local/share/deep/bad` (a path that is not a file) and a second row
+  # named `~/name` (a path in an entirely different part of $HOME, which the
+  # widget would then happily allow). NUL-delimited end to end now, so the
+  # whole name reaches _drift_report and becomes one ERROR row.
+  mkdir -p "$FH/.local/share/deep"
+  printf 'x\n' > "$FH/.local/share/deep/bad"$'\n'"name"
+  d70=$(ob drift)
+  eq "the newline name yields exactly one ERROR row" \
+    "$(grep -c 'unrepresentable path' <<<"$d70" || true)" "1"
+  eq "the ERROR row names the directory it is in" \
+    "$(grep -c 'unrepresentable path under .*/.local/share/deep' <<<"$d70" || true)" "1"
+  eq "no row claims the truncated fragment is a file" \
+    "$(grep -cx 'NEW        ~/.local/share/deep/bad' <<<"$d70" || true)" "0"
+  eq "and no row names a path in someone else's part of \$HOME" \
+    "$(grep -cx 'NEW        ~/name' <<<"$d70" || true)" "0"
+  eq "the scan still finishes" "$(tail -1 <<<"$d70")" "# drift-scan-complete"
+  rm -f "$FH/.local/share/deep/bad"$'\n'"name"
+
 fi
 
 if group 71 "normalize rules are data: no command execution, no writes outside the staging tree"; then

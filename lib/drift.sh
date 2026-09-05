@@ -228,9 +228,15 @@ drift_scan() {
     # deepest first, so a subtree is decided before the directories that
     # contain it. All counts are loaded before any decision: the float-up
     # below reads parents.
+    # $list is NUL-delimited (find -print0), so RS is a NUL here: a newline in
+    # a FILENAME would otherwise be a record separator and one file would be
+    # counted as two, in two different directories. The output records stay
+    # newline-terminated -- they are "depth<TAB>count<TAB>dir" for sort(1), and
+    # a directory name holding a newline is refused by _drift_report anyway.
     while IFS= read -r a; do
       rows+=("$a"); count["${a#*$'\t'}"]="${a%%$'\t'*}"
     done < <(awk -v home="$HOME/" '
+      BEGIN { RS = "\0" }
       { p = $0; if (index(p, home) == 1) p = substr(p, length(home) + 1)
         while ((i = match(p, /\/[^\/]*$/)) > 0) { p = substr(p, 1, i - 1); count[p]++ } }
       END { for (d in count) { depth = gsub(/\//, "/", d); print depth "\t" count[d] "\t" d } }
@@ -256,7 +262,7 @@ drift_scan() {
       if ! is_covered "$top" && ! is_ignored_subtree "$top"; then
         _drift_report NEW "~/$top/" ">$MAX_SCAN_FILES files: too large to scan; allowlist it, or add a dated .../** line to drift-ignore.txt"
       fi
-      printf '%s/%s/\n' "$HOME" "$top" >> "$excl"
+      printf '%s/%s/\0' "$HOME" "$top" >> "$excl"
       a="$rel"
       while [ "${a%/*}" != "$a" ]; do a="${a%/*}"; excluded[$a]=$(( ${excluded[$a]:-0} + residual )); done
     done
@@ -266,16 +272,24 @@ drift_scan() {
   _drift_walk_tree() {
     local root="$1" mode="$2" f rel
     local list="$_dtmp/files" excl="$_dtmp/excl"
-    find "$root" "${PRUNE[@]}" -type f -print 2>/dev/null > "$list"
+    # NUL-DELIMITED END TO END. With `-print` and a line-oriented read, a
+    # newline in a filename split one path into two fragments before any
+    # producer saw it: `~/.local/share/deep/bad<LF>name` was reported as
+    # `NEW ~/.local/share/deep/bad` AND `NEW ~/name`, two rows, neither of
+    # which is a file, and the second of which names a path in someone else's
+    # part of $HOME. The path reaches _drift_report whole now, which turns it
+    # into an ERROR row (drift_path_representable) instead.
+    find "$root" "${PRUNE[@]}" -type f -print0 2>/dev/null > "$list"
     _drift_collapse_huge_dirs "$list" "$excl" "$root"
-    while IFS= read -r f; do
+    while IFS= read -r -d '' f; do
       rel="${f#$HOME/}"
       is_covered "$rel" && continue
       [ "$mode" = tree ] && is_ignored_subtree "$rel" && continue
       is_ignored "$rel" && continue
       _drift_report NEW "~/$rel"
     done < <(awk -v exclfile="$excl" '
-      BEGIN { while ((getline p < exclfile) > 0) if (p != "") ex[++n] = p }
+      BEGIN { RS = "\0"; ORS = "\0"
+              while ((getline p < exclfile) > 0) if (p != "") ex[++n] = p }
       { for (i = 1; i <= n; i++) if (index($0, ex[i]) == 1) next; print }
     ' "$list")
   }
