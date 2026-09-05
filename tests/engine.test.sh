@@ -2377,5 +2377,47 @@ if group 84 "the wizard's own first snapshot uses the remote the wizard just con
   eq "a later status agrees" "$(obj status | jq -r .setup)" "ready"
 fi
 
+if group 85 "timer.calendar and timer.jitter are validated, substituted safely, and compared with the unit"; then
+  # These two were the only config values that reached a FILE unchecked. They
+  # went into the unit templates through `sed s|@CALENDAR@|<value>|`, so a `|`
+  # in the value terminated the s command and the rest became more sed script:
+  # `daily|; s|ExecStart=.*|ExecStart=/bin/sh -c "curl ..."|` rewrites the unit
+  # that runs daily as the user. An innocent typo corrupted it just as well.
+  mk_fixture g85; seed_home
+  jq '.timer={calendar:"daily|; s|ExecStart=.*|ExecStart=/bin/sh -c evil|", jitter:"30m"}' \
+    "$OMABACKUP_CONFIG" > "$T/bad.json"
+  b85=$(OMABACKUP_CONFIG=$T/bad.json obj status)
+  eq "a calendar carrying a sed delimiter is refused at load" "$(jq -r .ok <<<"$b85")" "false"
+  has "the refusal names the key" "$(jq -r .error <<<"$b85")" "timer.calendar"
+  jq '.timer={calendar:"daily", jitter:"every other tuesday"}' "$OMABACKUP_CONFIG" > "$T/bad2.json"
+  eq "a jitter systemd cannot parse is refused too" \
+    "$(OMABACKUP_CONFIG=$T/bad2.json obj status | jq -r .ok)" "false"
+  has "the refusal names that key" \
+    "$(OMABACKUP_CONFIG=$T/bad2.json obj status | jq -r .error)" "timer.jitter"
+  # A perfectly ordinary calendar with spaces and asterisks still loads, and
+  # lands in the unit verbatim: the substitution must not be doing anything
+  # clever with the value.
+  jq '.timer={calendar:"Mon *-*-* 04:00:00", jitter:"45m"}' "$OMABACKUP_CONFIG" > "$T/c" && mv "$T/c" "$OMABACKUP_CONFIG"
+  check "a real OnCalendar expression loads" env HOME="$FH" "$CLI" status
+  check "setup writes the units" env HOME="$FH" "$CLI" setup --data-repo "$FR" --yes
+  eq "the calendar reaches the unit verbatim" \
+    "$(grep '^OnCalendar=' "$FH/.config/systemd/user/omabackup-snapshot.timer")" "OnCalendar=Mon *-*-* 04:00:00"
+  eq "and so does the jitter" \
+    "$(grep '^RandomizedDelaySec=' "$FH/.config/systemd/user/omabackup-snapshot.timer")" "RandomizedDelaySec=45m"
+  eq "an installed unit matching the config is not a problem" \
+    "$(obj status | jq -r '[.problems[] | select(contains("installed snapshot timer"))] | length')" "0"
+
+  # Editing config.json has no effect until setup is rerun, so the two can
+  # disagree indefinitely with nothing saying so.
+  jq '.timer.calendar="weekly"' "$OMABACKUP_CONFIG" > "$T/c" && mv "$T/c" "$OMABACKUP_CONFIG"
+  m85=$(obj status)
+  has "a config the installed unit does not match is reported" \
+    "$(jq -r '.problems[]' <<<"$m85")" "installed snapshot timer"
+  has "the problem quotes the unit's value" "$(jq -r '.problems[]' <<<"$m85")" "04:00:00"
+  has "and the config's" "$(jq -r '.problems[]' <<<"$m85")" "config says 'weekly'"
+  has "and names the fix" "$(jq -r '.problems[]' <<<"$m85")" "omabackup setup"
+  eq "the mismatch is a fault, not a footnote" "$(jq -r .state <<<"$m85")" "fault"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

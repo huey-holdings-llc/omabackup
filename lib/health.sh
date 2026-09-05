@@ -181,6 +181,21 @@ health_collect() {
     { [[ "$H_SELFTEST_ENABLED" == true ]] && [[ "$H_SELFTEST_ACTIVE" == true ]]; } || H_PROBLEMS+=("self-test timer is not armed")
   fi
 
+  # --- the INSTALLED timer against the config that is supposed to describe it.
+  # Editing timer.calendar in config.json has no effect until setup is rerun,
+  # so the two could disagree indefinitely with nothing saying so: a user who
+  # set "weekly" went on believing the backup ran weekly while the unit still
+  # said daily, or the other way round. Read the unit file rather than
+  # systemctl, because the file is what setup wrote and the comparison must
+  # work with the timer skipped (fixtures) as well as with it armed.
+  local snap_unit="$HOME/.config/systemd/user/omabackup-snapshot.timer" unit_cal
+  if [[ -r "$snap_unit" ]]; then
+    unit_cal=$(sed -nE 's/^[[:space:]]*OnCalendar[[:space:]]*=[[:space:]]*(.*)$/\1/p' "$snap_unit" 2>/dev/null | tail -1)
+    if [[ -n "$unit_cal" && -n "${CFG_TIMER_CALENDAR:-}" && "$unit_cal" != "$CFG_TIMER_CALENDAR" ]]; then
+      H_PROBLEMS+=("the installed snapshot timer runs '$unit_cal' but config says '$CFG_TIMER_CALENDAR'; run: omabackup setup")
+    fi
+  fi
+
   # --- guard-weakening OMABACKUP_* hooks found in the ambient environment.
   # lib/config.sh already ignored them (they only work under the test suite's
   # own marker), but a value that reached the daily timer and did nothing is

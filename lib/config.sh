@@ -100,6 +100,24 @@ config_load() {
     [[ "$n" =~ ^[0-9]+$ ]] || die "config: staleDays, maxMissingPct and maxScanFiles must be integers"
   done
   [[ "$CFG_MAX_FILE_SIZE" =~ ^[0-9]+[kmg]?$ ]] || die "config: maxFileSize must look like 8m"
+  # timer.* was the one pair of config values that reached a FILE unchecked:
+  # both are substituted into the shipped unit templates, and a `|` used to
+  # terminate the sed `s` command and let the rest of the value become more sed
+  # script (`daily|; s|ExecStart=.*|ExecStart=...|` rewrites the unit that runs
+  # daily as the user). The substitution no longer uses sed, but a value
+  # systemd cannot parse still produces a unit systemd refuses to load, which
+  # is a backup that silently stops. Ask systemd itself; it is the only
+  # authority on its own grammar. Skipped, loudly, where systemd-analyze is not
+  # installed -- refusing every verb over a missing diagnostic tool would be a
+  # worse failure than the one being prevented.
+  if have systemd-analyze; then
+    systemd-analyze calendar -- "$CFG_TIMER_CALENDAR" >/dev/null 2>&1 \
+      || die "config: timer.calendar is not a systemd OnCalendar expression: $CFG_TIMER_CALENDAR"
+    systemd-analyze timespan -- "$CFG_TIMER_JITTER" >/dev/null 2>&1 \
+      || die "config: timer.jitter is not a systemd time span: $CFG_TIMER_JITTER"
+  else
+    warn "systemd-analyze not found: timer.calendar and timer.jitter were not validated"
+  fi
   export DATA_REPO STAGE
 }
 

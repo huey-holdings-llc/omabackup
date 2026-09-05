@@ -346,9 +346,25 @@ setup_remote() {
 setup_units() {
   local dst="$HOME/.config/systemd/user"
   mkdir -p "$dst"
-  local f
+  local f cal jit
+  cal=$(cfg timer.calendar); jit=$(cfg timer.jitter)
   for f in "$PLUGIN_DIR"/share/units/*; do
-    sed -e "s|@CALENDAR@|$(cfg timer.calendar)|" -e "s|@JITTER@|$(cfg timer.jitter)|" "$f" > "$dst/$(basename "$f")"
+    # Placeholder-safe substitution. This was a sed `s|...|...|` with the
+    # config value as the replacement text, so a `|` in the value terminated
+    # the command and the rest of it became further sed script, and an `&`
+    # expanded to the match. config_load now refuses a value systemd cannot
+    # parse, which closes that door; this closes the frame too, by never
+    # letting the value be read as syntax at all. index/substr rather than
+    # awk's own gsub, whose replacement string gives `&` the same meaning
+    # sed's did.
+    awk -v cal="$cal" -v jit="$jit" '
+      function rep(s, tok, val,   out, i) {
+        out = ""
+        while ((i = index(s, tok)) > 0) { out = out substr(s, 1, i - 1) val; s = substr(s, i + length(tok)) }
+        return out s
+      }
+      { print rep(rep($0, "@CALENDAR@", cal), "@JITTER@", jit) }
+    ' "$f" > "$dst/$(basename "$f")"
   done
   if [[ "${OMABACKUP_SKIP_TIMERS:-0}" != 1 ]]; then
     systemctl --user daemon-reload
