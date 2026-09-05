@@ -26,20 +26,26 @@ cmd_setup() {
   done
   [[ -n "$import" && -n "$data" ]] && usage_die "setup: --import and --data-repo are exclusive"
 
-  # Read the phase a PRIOR run reached before anything below touches config,
-  # so a rerun can skip setup_first_scan instead of repeating it. An
-  # unparsable existing config counts as "no prior phase": config_load
-  # below will refuse it properly once it is actually loaded.
-  local prior_phase=""
+  # Read the phase a PRIOR run reached, and the data repo it chose, before
+  # anything below touches config: a rerun can then skip setup_first_scan
+  # instead of repeating it, and a FLAGLESS rerun defaults to the repo that
+  # is already configured. Without the second read, `setup --yes` (which is
+  # what the widget's setup card runs) pointed the config at the hardcoded
+  # default, orphaned a repo the user had put anywhere else, and then wrote
+  # the new, remote-less repo's origin over remote.url. An unparsable
+  # existing config counts as "no prior anything": config_load below will
+  # refuse it properly once it is actually loaded.
+  local prior_phase="" prior_repo=""
   if config_exists; then
     prior_phase=$(jq -r '.setupPhase // ""' "$CONFIG_FILE" 2>/dev/null) || prior_phase=""
+    prior_repo=$(jq -r '.dataRepo // ""' "$CONFIG_FILE" 2>/dev/null) || prior_repo=""
   fi
 
   setup_tools
   if [[ -n "$import" ]]; then
     setup_import "$import"
   else
-    setup_data_repo "${data:-$HOME/.local/share/omabackup/data}" "$yes"
+    setup_data_repo "${data:-${prior_repo:-$HOME/.local/share/omabackup/data}}" "$yes"
     setup_seed
   fi
   config_load
@@ -125,6 +131,12 @@ setup_data_repo() {
   dir=${dir/#\~/$HOME}
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
   mkdir -m 700 -p "$dir"
+  # Store an ABSOLUTE path. A relative --data-repo (or a relative answer to
+  # the gum prompt) resolved against whatever directory setup happened to run
+  # in, so the timer, which runs from /, then looked for the repo somewhere
+  # else entirely. config_load refuses a relative dataRepo outright; this is
+  # the write side of the same rule.
+  dir=$(cd "$dir" && pwd -P) || die "could not resolve the data repo path: $1"
   [[ -d "$dir/.git" ]] || git -C "$dir" init -q -b main
   # A rerun MERGES into whatever config already exists (remote.trusted,
   # shellNag, timer.* and setupPhase must all survive); only a first-ever
@@ -169,14 +181,19 @@ setup_marker() { jq -cn --arg v "$VERSION" '{format:1, createdBy:$v}' > "$DATA_R
 setup_import() {
   local dir=${1/#\~/$HOME}
   [[ -d "$dir/.git" ]] || die "$dir is not a git repository"
+  # Spec section 6: the five list files and the three trees. modes.txt and
+  # etc/ were missing from this check, so a repo without them was adopted and
+  # then failed later, in the snapshot, with a much worse message.
   local f
-  for f in allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt; do
+  for f in allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt modes.txt; do
     [[ -f "$dir/$f" ]] || die "$dir has no $f, not an engine repo"
   done
   local d
-  for d in home manifests; do
+  for d in home etc manifests; do
     [[ -d "$dir/$d" ]] || die "$dir has no $d/"
   done
+  # Absolute, for the same reason setup_data_repo resolves its own directory.
+  dir=$(cd "$dir" && pwd -P) || die "could not resolve the data repo path: $1"
   if config_exists; then
     config_write "$(jq -c --argjson d "$CONFIG_DEFAULTS" --arg r "$dir" '$d * . + {dataRepo:$r}' "$CONFIG_FILE")"
   else
@@ -187,6 +204,7 @@ setup_import() {
   DATA_REPO=$dir
   # shellcheck disable=SC2034  # STAGE: read by later libs (lib/config.sh), not this file
   STAGE="$dir/.staging"
+  [[ -f "$DATA_REPO/.gitignore" ]] || cp "$PLUGIN_DIR/share/data.gitignore" "$DATA_REPO/.gitignore"
   [[ -f "$DATA_REPO/.gitleaks.toml" ]] || cp "$PLUGIN_DIR/share/gitleaks.toml" "$DATA_REPO/.gitleaks.toml"
   setup_marker
   setup_phase "imported"
@@ -256,16 +274,58 @@ setup_cli_link() {
   setup_phase "link"
 }
 
+# The two lines setup_shell_nag appends, named once so setup_remove can take
+# back exactly what setup put in and nothing else.
+NAG_COMMENT='# OmaBackup login check'
+NAG_LINE='command -v omabackup >/dev/null && omabackup health'
+
 # setup_shell_nag YES: opt in when config already carries shellNag, or
 # (interactively) on confirm; --yes never turns it on by itself.
 setup_shell_nag() {
   local yes=$1
-  local rc="$HOME/.bashrc" line='command -v omabackup >/dev/null && omabackup health'
+  local rc="$HOME/.bashrc"
   if [[ $(cfg shellNag) == true ]] || { [[ $yes == 0 ]] && confirm "Add a login check to ~/.bashrc that prints only when the backup needs attention?" 0; }; then
-    grep -qF "$line" "$rc" 2>/dev/null || printf '\n# OmaBackup login check\n%s\n' "$line" >> "$rc"
+    grep -qF "$NAG_LINE" "$rc" 2>/dev/null || printf '\n%s\n%s\n' "$NAG_COMMENT" "$NAG_LINE" >> "$rc"
     config_write "$(jq '.shellNag=true' "$CONFIG_FILE")"
   fi
   setup_phase "nag"
+}
+
+# setup_unnag: take the login check back out of ~/.bashrc. Exactly the block
+# setup_shell_nag wrote (the blank line, the comment, the command) and nothing
+# else: the file is a user's own, so this rewrites it through a temp file next
+# to it, keeping its mode, and leaves every other line byte for byte alone.
+# Never fatal -- a .bashrc this cannot rewrite must not stop the uninstall.
+setup_unnag() {
+  local rc="$HOME/.bashrc" tmp
+  [[ -f "$rc" ]] || return 0
+  grep -qxF -e "$NAG_LINE" -e "$NAG_COMMENT" "$rc" 2>/dev/null || return 0
+  tmp=$(mktemp "$(dirname "$rc")/.bashrc.omabackup.XXXXXX") || { warn "could not rewrite $rc; remove the OmaBackup login check by hand"; return 0; }
+  if awk -v cmt="$NAG_COMMENT" -v cmd="$NAG_LINE" '
+      { lines[NR] = $0 }
+      END {
+        out = 0
+        for (i = 1; i <= NR; i++) {
+          # The whole block, in the shape setup wrote it: drop the blank line
+          # we added in front of it too, so the file goes back to what it was.
+          if (lines[i] == cmt && i < NR && lines[i+1] == cmd) {
+            if (out > 0 && buf[out] == "") out--
+            i++
+            continue
+          }
+          # A half-edited block: still ours, still goes.
+          if (lines[i] == cmt || lines[i] == cmd) continue
+          buf[++out] = lines[i]
+        }
+        for (j = 1; j <= out; j++) print buf[j]
+      }' "$rc" > "$tmp" \
+    && chmod --reference="$rc" "$tmp" 2>/dev/null \
+    && mv -f "$tmp" "$rc"; then
+    log "Removed the OmaBackup login check from ~/.bashrc"
+  else
+    rm -f "$tmp"
+    warn "could not rewrite $rc; remove the OmaBackup login check by hand"
+  fi
 }
 
 setup_first_snapshot() {
@@ -350,12 +410,16 @@ setup_check() {
 setup_remove() {
   local yes=0
   [[ "${1:-}" == --yes ]] && yes=1
-  confirm "Remove OmaBackup timers, CLI link and config? The data repo stays." "$yes" || die "cancelled"
+  confirm "Remove OmaBackup timers, CLI link, the ~/.bashrc login check and config? The data repo stays." "$yes" || die "cancelled"
   if [[ "${OMABACKUP_SKIP_TIMERS:-0}" != 1 ]]; then
     systemctl --user disable --now omabackup-snapshot.timer omabackup-selftest.timer 2>/dev/null || true
   fi
   rm -f "$HOME/.config/systemd/user"/omabackup-*.{service,timer} "$HOME/.local/bin/omabackup"
   [[ "${OMABACKUP_SKIP_TIMERS:-0}" != 1 ]] && systemctl --user daemon-reload || true
+  # Step 8 of the setup wizard, undone. Spec section 6 says --remove reverses
+  # steps 6, 7 and 8; the .bashrc line was the one it never took back, so an
+  # uninstalled OmaBackup kept printing "command not found" at every login.
+  setup_unnag
   rm -f "$CONFIG_FILE"
   if [[ $JSON == 1 ]]; then
     jq -cn '{ok:true, removed:true}'

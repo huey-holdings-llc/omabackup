@@ -50,6 +50,10 @@ config_load() {
   CFG_JSON=$(jq -c --argjson d "$CONFIG_DEFAULTS" '$d * .' "$CONFIG_FILE")
   DATA_REPO=$(cfg dataRepo); DATA_REPO=${DATA_REPO/#\~/$HOME}
   [[ -n "$DATA_REPO" && "$DATA_REPO" != null ]] || die "config has no dataRepo"
+  # Absolute only. A relative dataRepo resolves against the caller's working
+  # directory, so the same config means one repo from a terminal and another
+  # from the timer (which runs from /). Refuse rather than pick one.
+  [[ "$DATA_REPO" == /* ]] || die "config dataRepo must be an absolute path, got: $DATA_REPO. Run: omabackup setup --data-repo <absolute dir>"
   STAGE="$DATA_REPO/.staging"
   CFG_REMOTE_URL=$(cfg remote.url); CFG_REMOTE_TRUSTED=$(cfg remote.trusted)
   CFG_MAX_FILE_SIZE=$(cfg maxFileSize); CFG_STALE_DAYS=$(cfg staleDays)
