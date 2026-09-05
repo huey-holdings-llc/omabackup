@@ -49,17 +49,41 @@ rel_from_tilde() {
   printf '%s' "$p"
 }
 
+# DRIFT_TARGET_DIR: 1 when the row (or folder) the gate below matched names a
+# DIRECTORY, 0 when it names a single file. Set by drift_names_target, read by
+# cmd_ignore. The trailing slash used to carry this, and it cannot any more:
+# the popup sends the path exactly as the JSON gives it, and the JSON strips
+# the slash. Without this, ignoring a collapsed ">2000 files" row wrote a bare
+# entry, which by drift-ignore's own documented semantics means "look inside",
+# so the next scan enumerated the whole tree the row existed to collapse.
+DRIFT_TARGET_DIR=0
+
 # drift_has WANT TYPES: does the current drift report name this exact path
 # under one of the pipe-separated TYPES? The line is split by
 # drift_line_split (lib/drift.sh), the same function that builds the JSON the
 # popup renders: this gate and the row the user clicked must recover the same
 # path from the same line, or a crafted filename lets one click widen the
 # allowlist to a directory the scan never reported.
+#
+# The comparison is made on both sides with one trailing slash stripped, which
+# is exactly what drift_items_json does before the path reaches the widget
+# ("a directory's trailing / is report display flourish"). It used to compare
+# the slashless argument the popup sends against the slashed report line, so
+# EVERY whole-directory row -- a new ~/.config/<app>/, a new dot-directory, a
+# tree collapsed for being over the scan cap, which is most of what a real
+# machine reports -- refused both buttons with "the drift report does not name
+# that path; refresh and retry", and refreshing never helped.
 drift_has() {
   local want=$1 types=$2 line
+  local w=${want%/}
   while IFS= read -r line; do
     drift_line_split "$line" || continue
-    [[ "$DRIFT_PATH" == "$want" ]] && return 0
+    [[ "${DRIFT_PATH%/}" == "$w" ]] || continue
+    # Either side saying "directory" makes it one: the report's own slash is
+    # the authority, and a user who typed the slash on the CLI meant it too.
+    case "$DRIFT_PATH" in */) DRIFT_TARGET_DIR=1 ;; esac
+    case "$want"       in */) DRIFT_TARGET_DIR=1 ;; esac
+    return 0
   done < <(grep -E "^($types)" "$DATA_REPO/manifests/drift.txt" 2>/dev/null)
   return 1
 }
@@ -72,7 +96,9 @@ drift_has_under() {
   case "${want#\~/}" in */*/*) ;; *) return 1 ;; esac    # "seg/" is depth 1
   while IFS= read -r line; do
     drift_line_split "$line" || continue
-    case "$DRIFT_PATH" in "$want"?*) return 0 ;; esac
+    # Same normalisation as drift_has: a collapsed child row ("~/a/b/c/")
+    # lies under "~/a/b/" whether or not its own slash survived the report.
+    case "${DRIFT_PATH%/}" in "$want"?*) DRIFT_TARGET_DIR=1; return 0 ;; esac
   done < <(grep -E "^($types)" "$DATA_REPO/manifests/drift.txt" 2>/dev/null)
   return 1
 }
@@ -81,6 +107,7 @@ drift_has_under() {
 # an exact drift line, or a folder prefix with drifting children.
 drift_names_target() {
   local tilde=$1 types=$2
+  DRIFT_TARGET_DIR=0
   drift_has "$tilde" "$types" && return 0
   case "$tilde" in */) drift_has_under "$tilde" "$types" && return 0 ;; esac
   return 1
@@ -165,7 +192,13 @@ cmd_ignore() {
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
   drift_names_target "$raw" 'MODIFIED|NEW|EXCLUDED|TOOBIG' \
     || { widget_reply_fail "the drift report does not name that path (or the folder is too broad); refresh and retry"; return 1; }
-  case "$rel" in */) entry="${rel%/}/**" ;; *) entry=$rel ;; esac
+  # A directory becomes the explicit /** subtree form drift-ignore.txt
+  # documents, whether or not the argument carried the trailing slash: the
+  # popup sends the JSON path, which never does. A bare entry on a directory
+  # means "silence the directory, keep checking its children" (lib/lists.sh),
+  # which on a collapsed ">2000 files" row would replace one row with
+  # thousands.
+  if [[ "$DRIFT_TARGET_DIR" == 1 ]]; then entry="${rel%/}/**"; else entry=$rel; fi
   reason=${reason:-"triaged from widget"}
   # Exact-entry comparison (comments stripped), not a regex: ignore entries
   # are globs, and escaping them for grep -E is exactly the kind of code that

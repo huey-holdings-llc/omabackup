@@ -1167,6 +1167,35 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
     "$(obj ignore "$(tp .config/)" | jq -r .ok)" "false"
   cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
 
+  # WHOLE-DIRECTORY ROWS, ADDRESSED THE WAY THE POPUP ACTUALLY ADDRESSES THEM.
+  # drift_items_json strips a report row's trailing slash, and the QML passes
+  # that JSON path straight back to allow/ignore -- so these verbs are given
+  # "~/.mozilla", never "~/.mozilla/". Every such row (a new ~/.config/<app>/,
+  # a new dot-directory, a tree collapsed for being over the scan cap) used to
+  # be refused by both buttons, which is most of what a real machine reports.
+  mkdir -p "$FH/.mozilla/profile" "$FH/.config/appdir/sub" "$FH/.local/share/bigq"
+  printf 'm\n' > "$FH/.mozilla/profile/prefs.js"
+  printf 'a\n' > "$FH/.config/appdir/sub/a.toml"
+  printf 'q\n' > "$FH/.local/share/bigq/f1"
+  { printf 'NEW        ~/.mozilla/\n'
+    printf 'NEW        ~/.config/appdir/\n'
+    printf 'NEW        ~/.local/share/bigq/\t(>2000 files: too large to scan; add or ignore wholesale)\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  # shellcheck disable=SC2088  # expected literal string, not a path to expand
+  eq "a directory row reaches the widget with no trailing slash" \
+    "$(obj status | jq -r '[.drift[].path] | join(",")')" '~/.mozilla,~/.config/appdir,~/.local/share/bigq'
+  eq "allow: takes a directory row exactly as the JSON names it" \
+    "$(obj allow "$(tp .config/appdir)" | jq -c '[.ok,.added]')" '[true,".config/appdir"]'
+  grep -qx '.config/appdir' "$FR/allowlist.txt" && ok "allow: the directory entry was written" || bad "directory allow entry missing"
+  # And the ignore it writes is still the SUBTREE form: a bare entry means
+  # "silence the directory, keep checking its children", which would replace
+  # one collapsed row with every file under it.
+  eq "ignore: takes a directory row and still records the subtree form" \
+    "$(obj ignore "$(tp .local/share/bigq)" 'huge store' | jq -c '[.ok,.ignored]')" '[true,".local/share/bigq/**"]'
+  eq "ignore: a top-level directory row is taken too" \
+    "$(obj ignore "$(tp .mozilla)" 'browser profile' | jq -c '[.ok,.ignored]')" '[true,".mozilla/**"]'
+  cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
+
   # A file OLDER than the last snapshot is the normal allow case: it cannot be
   # in home/ until the next snapshot runs, so the write gate must not fail the
   # completeness walk (that stays the standalone/weekly lint's job).
