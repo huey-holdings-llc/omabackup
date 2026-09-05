@@ -151,10 +151,18 @@ cmd_verify() {
     VERIFY_SINCE=$(git -C "$DATA_REPO" log -1 --format=%ct 2>/dev/null) || VERIFY_SINCE=0
   fi
 
-  local compared=0 skip_norm=0 skip_changed=0 absent=0 rel live rest
-  while IFS= read -r rel; do
+  # Symlinks are enumerated alongside files. `-type f` skipped them entirely,
+  # so a live link repointed since the snapshot was never compared and verify
+  # called the backup faithful. A link is compared by its target, not by its
+  # content: cmp follows it, so a link and its restored copy read as identical
+  # whenever the file behind them is. NUL-delimited with the type in front,
+  # the same shape restore.sh walks.
+  local compared=0 skip_norm=0 skip_changed=0 absent=0 rel live rest rec vty same want got_l
+  while IFS= read -r -d '' rec; do
+    vty="${rec%% *}"; rel="${rec#* }"
+    [[ -n "$rel" ]] || continue
     live="$live_home/$rel"; rest="$R/$rel"
-    if [[ ! -e "$live" ]]; then
+    if [[ ! -e "$live" && ! -L "$live" ]]; then
       # Backed up but not on the live machine: not a fidelity bug (restore
       # only ever adds), and not comparable either. Counted for the human
       # summary only -- the JSON schema has no field for it.
@@ -162,17 +170,27 @@ cmd_verify() {
       continue
     fi
     compared=$((compared+1))
-    if cmp -s "$live" "$rest"; then
+    same=0
+    if [[ "$vty" == l ]]; then
+      want=$(readlink -- "$rest" 2>/dev/null || true)
+      got_l=$(readlink -- "$live" 2>/dev/null || true)
+      if [[ -L "$live" && -n "$want" && "$want" == "$got_l" ]]; then same=1; fi
+    elif cmp -s "$live" "$rest"; then
+      same=1
+    fi
+    if [[ "$same" == 1 ]]; then
       :
     elif verify_is_normalized "$rel"; then
       skip_norm=$((skip_norm+1))
     elif verify_changed_since "$live"; then
+      # stat does not dereference, so a link is judged by its own mtime here,
+      # which is what `ln -sfn` updates when a link is repointed.
       skip_changed=$((skip_changed+1))
     else
       # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
       verify_mismatch "~/$rel"
     fi
-  done < <(cd "$R" && find . -type f -printf '%P\n')
+  done < <(cd "$R" && find . \( -type f -o -type l \) -printf '%y %P\0')
 
   # Permissions must survive too -- git checks files/dirs out with its own
   # defaults, and only the modes.txt replay inside restore_stage_configs

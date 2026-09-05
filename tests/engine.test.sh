@@ -647,6 +647,33 @@ if group 31 "restore fidelity"; then
   touch -d "@$((since_t + 1))" "$FH/.bashrc"
   eq "a file edited after the content epoch but before the later mtime is excused" \
     "$(obj verify | jq -c '[.ok,.skipped_changed]')" '[true,1]'
+
+  # Symlinks were never compared at all: the enumeration was `-type f`, so a
+  # live link repointed after the snapshot read as verified.
+  pre31=$(obj verify | jq -r .compared)
+  mkdir -p "$FH/.config/linky"
+  printf 'A\n' > "$FH/.config/linky/a.conf"; printf 'B\n' > "$FH/.config/linky/b.conf"
+  ln -s a.conf "$FH/.config/linky/current.conf"
+  allow '.config/linky'
+  check "snapshot stores the link" env HOME="$FH" "$CLI" snapshot --no-push
+  l31=$(obj verify)
+  eq "a matching link still verifies" "$(jq -r .ok <<<"$l31")" "true"
+  eq "the link itself counts in compared" "$(( $(jq -r .compared <<<"$l31") - pre31 ))" "3"
+  # Repoint it and backdate the link. `touch -h` times the link, not its
+  # target, so the changed-since exception cannot excuse the difference.
+  ln -sfn b.conf "$FH/.config/linky/current.conf"
+  touch -h -d '1 hour ago' "$FH/.config/linky/current.conf"
+  m31=$(obj verify)
+  eq "a repointed link is a fidelity mismatch" "$(jq -r .ok <<<"$m31")" "false"
+  # shellcheck disable=SC2088  # literal "~/" prefix inside a jq filter/expected value, not a path to expand
+  eq "the mismatch names the link" \
+    "$(jq -r '.mismatched[] | select(. == "~/.config/linky/current.conf")' <<<"$m31")" \
+    "~/.config/linky/current.conf"
+  # ...and one repointed since the last run is excused like any other changed
+  # file, rather than reported as a fidelity bug.
+  touch -h "$FH/.config/linky/current.conf"
+  eq "a link repointed since the last run is skipped as changed" \
+    "$(obj verify | jq -c '[.ok,.skipped_changed]')" '[true,1]'
 fi
 if [[ "${OMABACKUP_REAL_REPO:-0}" == 1 ]] && group 31R "restore fidelity against the REAL backup"; then
   unset OMABACKUP_CONFIG OMABACKUP_STATE_DIR OMABACKUP_STOCK_DIR OMABACKUP_SKIP_ETC
