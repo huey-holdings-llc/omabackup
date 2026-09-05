@@ -356,10 +356,26 @@ if group 12 "mid-merge repo is refused"; then
 fi
 if group 13 "filename that looks like a credential"; then
   mk_fixture g13; seed_home; allow '.config/mytool'; commit_baseline
-  printf 'x\n' > "$FH/.config/mytool/ghp_$(rand_body 20).txt"
+  ghp13="$FH/.config/mytool/ghp_$(rand_body 20).txt"
+  printf 'x\n' > "$ghp13"
   out=$(ob snapshot --no-push); rc=$?
   [[ $rc -ne 0 ]] && ok "snapshot refuses a ghp_ filename" || bad "a credential-looking filename was staged"
   has "the refusal names the filename gate" "$out" "credential-looking filename"
+  rm -f "$ghp13"
+
+  # The name class must cover the same set share/data.gitignore does: `id_*`
+  # minus `id_*.pub`. A rotated or archived private key keeps a suffix
+  # (id_rsa.old, id_rsa_backup, id_ecdsa-sk), and the old `^id_[a-z0-9]+$`
+  # matched none of them.
+  printf 'PRIVATE KEY BODY\n' > "$FH/.config/mytool/id_rsa.old"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "snapshot refuses id_rsa.old" || bad "id_rsa.old passed the filename gate"
+  has "the id_rsa.old refusal names the filename gate" "$out" "credential-looking filename"
+  rm -f "$FH/.config/mytool/id_rsa.old"
+
+  # ...and the public half is the one documented exemption.
+  printf 'ssh-ed25519 AAAA comment\n' > "$FH/.config/mytool/id_ed25519.pub"
+  check "a public key is not treated as a credential" env HOME="$FH" "$CLI" snapshot --no-push
 fi
 if group 14 "allowlist entry that became a symlink"; then
   mk_fixture g14; seed_home; allow '.config/mytool'
@@ -434,6 +450,14 @@ if group 21 "list hygiene"; then
   sed -i '$d' "$FR/drift-ignore.txt"
   printf '.config/nonexistent-dir\n' >> "$FR/allowlist.txt"
   has "a required entry that resolves to nothing is MISSING" "$(ob lint; true)" "MISSING"
+  sed -i '$d' "$FR/allowlist.txt"
+  # An allowlist entry is copied in BOTH directions, so a parent-traversal
+  # segment or an absolute path is a hard failure, not a note.
+  printf '.config/../../etc\n' >> "$FR/allowlist.txt"
+  eq "a '..' segment is TRAVERSAL" "$(obj lint | jq -r '[.problems[].code] | index("TRAVERSAL") != null')" "true"
+  sed -i '$d' "$FR/allowlist.txt"
+  printf '/etc/passwd\n' >> "$FR/allowlist.txt"
+  eq "an absolute entry is ABSOLUTE" "$(obj lint | jq -r '[.problems[].code] | index("ABSOLUTE") != null')" "true"
   sed -i '$d' "$FR/allowlist.txt"
   echo new > "$FH/.local/bin/late"; printf '.local/bin\n' >> "$FR/allowlist.txt"
   check "a file newer than the last run is pending, not NOTBACKEDUP" env HOME="$FH" "$CLI" lint
@@ -898,6 +922,27 @@ if group 50 "status: JSON for the bar widget"; then
   jq '.remote.trusted=true' "$OMABACKUP_CONFIG" > "$T/c2" && mv "$T/c2" "$OMABACKUP_CONFIG"
   eq "health exits 0 and prints nothing when ok" "$(ob health)" ""
 
+  # `health --json` is a verb like any other: exactly one JSON object on
+  # stdout, especially when it is refusing. It used to print a coloured ANSI
+  # line (or nothing at all) and leave a --json caller with nothing to parse.
+  hj=$(obj health)
+  eq "health --json on a healthy repo is one object with ok true" \
+    "$(jq -c '[.ok,.state,(.problems|length)]' <<<"$hj")" '[true,"ok",0]'
+  rm -f "$FR/manifests/drift.txt"
+  hj=$(obj health); hrc=$?
+  eq "health --json with no drift report says ok false" "$(jq -c '[.ok,.state]' <<<"$hj")" '[false,"fault"]'
+  has "the problems array names the missing report" "$(jq -r '.problems[]' <<<"$hj")" "no drift report"
+  eq "the problem names this tool's timer, not a foreign script" \
+    "$(jq -r '.problems[]' <<<"$hj" | grep -c 'snapshot\.sh')" "0"
+  eq "an unhealthy health --json still exits 1" "$hrc" "1"
+  eq "not-configured health --json is one object with ok false" \
+    "$(OMABACKUP_CONFIG=/nonexistent obj health | jq -r .ok)" "false"
+  eq "not-configured health --json is exactly one object" \
+    "$(OMABACKUP_CONFIG=/nonexistent obj health | jq -s 'length')" "1"
+  eq "not-configured health --json still exits 1" \
+    "$(OMABACKUP_CONFIG=/nonexistent ob health --json >/dev/null 2>&1; echo $?)" "1"
+  printf '# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+
   # setup=not-configured must be reportable even with no config at all: the
   # dispatcher skips config_load for status/health only in that case.
   eq "not-configured status reports setup" "$(OMABACKUP_CONFIG=/nonexistent obj status | jq -r .setup)" "not-configured"
@@ -1195,12 +1240,29 @@ if group 61 "setup --import adopts an existing engine repo; unattended trust sta
   eq "explicit --trust-remote sets remote.trusted true" "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "true"
 fi
 
-if group 62 "setup --remove leaves the data repo alone"; then
+if group 62 "setup --remove takes back what setup put in, and leaves the data repo alone"; then
   mk_fixture g62; seed_home
+  cp "$FH/.bashrc" "$T/bashrc.before"
+  # shellNag=true is all setup_shell_nag needs to install the login check
+  # unattended (--yes alone deliberately never opts you in).
+  jq '.shellNag=true' "$OMABACKUP_CONFIG" > "$T/cfg.tmp" && mv "$T/cfg.tmp" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  check "a full setup run installs units, the CLI link and the login check" \
+    env HOME="$FH" "$CLI" setup --data-repo "$FR" --yes
+  if grep -qxF '# OmaBackup login check' "$FH/.bashrc"; then ok "the .bashrc comment line was added"; else bad "the .bashrc comment line is missing"; fi
+  if grep -qxF 'command -v omabackup >/dev/null && omabackup health' "$FH/.bashrc"; then ok "the .bashrc check line was added"; else bad "the .bashrc check line is missing"; fi
+  [[ -L "$FH/.local/bin/omabackup" ]] && ok "the CLI symlink was created" || bad "no CLI symlink"
+  [[ -f "$FH/.config/systemd/user/omabackup-snapshot.timer" ]] && ok "unit files were installed" || bad "no unit files"
+
   out62=$(obj setup --remove --yes); rc62=$?
   eq "remove --json exits 0" "$rc62" "0"
   eq "remove --json prints exactly one JSON object" "$(jq -c '[.ok,.removed]' <<<"$out62")" "[true,true]"
   [[ ! -f "$OMABACKUP_CONFIG" ]] && ok "config removed" || bad "config still there"
+  [[ ! -e "$FH/.local/bin/omabackup" ]] && ok "CLI symlink removed" || bad "CLI symlink survived --remove"
+  [[ ! -e "$FH/.config/systemd/user/omabackup-snapshot.timer" ]] && ok "snapshot unit removed" || bad "snapshot unit survived --remove"
+  [[ ! -e "$FH/.config/systemd/user/omabackup-selftest.timer" ]] && ok "selftest unit removed" || bad "selftest unit survived --remove"
+  if grep -q 'OmaBackup login check' "$FH/.bashrc"; then bad "the .bashrc comment survived --remove"; else ok "the .bashrc comment was removed"; fi
+  if grep -q 'omabackup health' "$FH/.bashrc"; then bad "the .bashrc check line survived --remove"; else ok "the .bashrc check line was removed"; fi
+  if cmp -s "$T/bashrc.before" "$FH/.bashrc"; then ok ".bashrc is byte-identical to before setup"; else bad ".bashrc differs from before setup" "$(diff "$T/bashrc.before" "$FH/.bashrc" | head -5)"; fi
   [[ -f "$FR/allowlist.txt" ]] && ok "data repo untouched" || bad "data repo damaged"
 fi
 
@@ -1237,6 +1299,158 @@ if group 63 "a huge drift report does not blow the jq ARG_MAX"; then
     "$(jq -e . "$OMABACKUP_STATE_DIR/status.json" >/dev/null 2>&1 && echo ok || echo bad)" "ok"
   eq "status.json on disk has the same drift length" \
     "$(jq -r '.drift | length' "$OMABACKUP_STATE_DIR/status.json")" "2000"
+fi
+
+if group 64 "a flagless setup rerun keeps the configured data repo, remote and path shape"; then
+  T="$ROOT/g64"; FH="$T/home"; mkdir -p "$FH" "$T/state"
+  export OMABACKUP_CONFIG="$T/cfg.json" OMABACKUP_STATE_DIR="$T/state" OMABACKUP_STOCK_DIR="$STOCK_SRC" \
+    OMABACKUP_NET=0 OMABACKUP_NOTIFY=0 OMABACKUP_SKIP_ETC=1 OMABACKUP_SKIP_TIMERS=1
+  export OMABACKUP_MIN_FILES=1 OMABACKUP_MIN_ALLOWLIST=1
+  TABS="$(cd "$T" && pwd -P)"
+  git init -q --bare "$T/remote.git"
+
+  # A data repo that is NOT the hardcoded default, with a remote the operator
+  # explicitly trusted.
+  check "setup with a non-default data repo and a trusted remote" \
+    env HOME="$FH" "$CLI" setup --data-repo "$T/elsewhere" --remote "$T/remote.git" --trust-remote --no-timers --yes
+  eq "dataRepo is the non-default directory" "$(jq -r .dataRepo "$OMABACKUP_CONFIG")" "$TABS/elsewhere"
+  eq "remote.url recorded" "$(jq -r .remote.url "$OMABACKUP_CONFIG")" "$T/remote.git"
+  eq "remote.trusted recorded" "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "true"
+
+  # The regression: a FLAGLESS rerun (what the widget's setup card runs) must
+  # not repoint dataRepo at the hardcoded default, and must not blank the
+  # remote by reading a brand-new repo's missing origin.
+  check "flagless setup rerun" env HOME="$FH" "$CLI" setup --yes --no-timers
+  eq "the rerun leaves dataRepo alone" "$(jq -r .dataRepo "$OMABACKUP_CONFIG")" "$TABS/elsewhere"
+  eq "the rerun leaves remote.url alone" "$(jq -r .remote.url "$OMABACKUP_CONFIG")" "$T/remote.git"
+  [[ ! -d "$FH/.local/share/omabackup/data" ]] && ok "the rerun created no repo at the default location" \
+    || bad "the rerun created a second data repo at the default location"
+
+  # And the widget's own rerun (Panel.qml's remote-unverified card) flips
+  # trust without moving anything else.
+  check "setup --trust-remote --yes rerun" env HOME="$FH" "$CLI" setup --trust-remote --yes --no-timers
+  eq "the trust rerun still keeps dataRepo" "$(jq -r .dataRepo "$OMABACKUP_CONFIG")" "$TABS/elsewhere"
+  eq "the trust rerun still keeps remote.url" "$(jq -r .remote.url "$OMABACKUP_CONFIG")" "$T/remote.git"
+  eq "the trust rerun flips remote.trusted" "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "true"
+
+  # A relative --data-repo is stored resolved: the timer runs from /, so a
+  # path relative to the terminal setup happened to run in means nothing.
+  ( cd "$T" && env HOME="$FH" OMABACKUP_CONFIG="$T/rel.json" "$CLI" setup --data-repo relrepo --no-timers --yes ) >/dev/null 2>&1
+  eq "a relative --data-repo is stored absolute" "$(jq -r .dataRepo "$T/rel.json")" "$TABS/relrepo"
+
+  # And a hand-written relative dataRepo is refused rather than resolved
+  # against whatever directory the caller happened to be in.
+  jq -n '{dataRepo:"relative/data"}' > "$T/badrel.json"
+  relout=$(env HOME="$FH" OMABACKUP_CONFIG="$T/badrel.json" "$CLI" status --json 2>/dev/null)
+  eq "a relative dataRepo in config is refused" "$(jq -r .ok <<<"$relout")" "false"
+  has "the refusal names dataRepo" "$relout" "dataRepo"
+fi
+
+if group 65 "push --confirm runs the staged secret gate"; then
+  # The push button stages the five watched list files and commits them. That
+  # path had NO content scan at all, so a token pasted into .gitleaks.toml (or
+  # any other list) was committed and then pushed by the very next line.
+  mk_fixture g65; seed_home; commit_baseline
+  git -C "$FR" push -q -u origin main 2>/dev/null || true
+  if command -v gitleaks >/dev/null; then
+    before65=$(git -C "$FR" rev-parse HEAD)
+    key65="sk-ant-api03-$(rand_body 90)AA"
+    # drift-ignore.txt, not .gitleaks.toml: gitleaks' own default config
+    # allowlists paths named gitleaks.toml, so a token planted there proves
+    # nothing about this gate.
+    printf '\n# pasted by accident: %s\n' "$key65" >> "$FR/drift-ignore.txt"
+    p65=$(obj push --confirm)
+    eq "push --confirm refuses a secret in a watched list file" "$(jq -r .ok <<<"$p65")" "false"
+    has "the refusal names the staged scan" "$p65" "staged secret scan"
+    eq "nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$before65"
+    eq "the staging was undone" "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
+    git -C "$FR" checkout -q -- drift-ignore.txt
+    # And a clean list edit still commits, so the gate is not just refusing
+    # everything.
+    printf '\n# clean note\n' >> "$FR/drift-ignore.txt"
+    eq "a clean list edit still commits" "$(obj push --confirm | jq -r .ok)" "true"
+    eq "the clean edit is committed" "$(git -C "$FR" status --porcelain -- drift-ignore.txt | grep -c . || true)" "0"
+  else
+    echo "  (gitleaks not installed: skipping the staged gate on push)"
+  fi
+fi
+
+if group 66 "guards that had no proving assertion"; then
+  mk_fixture g66; seed_home; commit_baseline
+
+  # data_repo_require: the marker IS the contract for "this is our repo".
+  mv "$FR/.omabackup" "$T/marker.json"
+  eq "a data repo with no marker is refused" "$(obj status | jq -r .ok)" "false"
+  has "the refusal names the marker" "$(obj status)" ".omabackup"
+  printf '{"format":2,"createdBy":"a newer omabackup"}\n' > "$FR/.omabackup"
+  eq "an unsupported data repo format is refused" "$(obj status | jq -r .ok)" "false"
+  has "the refusal names the format" "$(obj status)" "format 2"
+  cp "$T/marker.json" "$FR/.omabackup"
+
+  # repo_assert_clean: a detached HEAD has no branch to commit onto.
+  git -C "$FR" checkout -q --detach HEAD
+  d66=$(obj snapshot --no-push)
+  eq "a detached HEAD refuses the snapshot" "$(jq -r .ok <<<"$d66")" "false"
+  has "the refusal names the detached HEAD" "$d66" "detached HEAD"
+  git -C "$FR" checkout -q main
+
+  # The allowlist entry-count floor: a truncated list must never be allowed to
+  # shrink the backup.
+  f66=$(env HOME="$FH" OMABACKUP_MIN_ALLOWLIST=99 "$CLI" snapshot --no-push --json 2>/dev/null)
+  eq "an allowlist below the floor refuses the run" "$(jq -r .ok <<<"$f66")" "false"
+  has "the refusal names the floor" "$f66" "floor 99"
+
+  # snapshot_normalize: a rule like `d` is valid sed and empties the file.
+  # Backing up 0 bytes while the live file has content is silent data loss.
+  cp "$FR/normalize.txt" "$T/normalize.bak"
+  printf 'home/.bashrc\td\n' >> "$FR/normalize.txt"
+  n66=$(obj snapshot --no-push)
+  eq "a normalize rule that empties a file refuses the run" "$(jq -r .ok <<<"$n66")" "false"
+  has "the refusal names the emptied file" "$n66" "normalize rule emptied"
+  cp "$T/normalize.bak" "$FR/normalize.txt"
+
+  # ...and a rule that leaves a staged .json unparsable, when it parsed before.
+  if command -v python3 >/dev/null; then
+    printf '{"a":1}\n' > "$FH/.config/mytool/settings.json"
+    printf '.config/mytool/settings.json\n' >> "$FR/allowlist.txt"
+    git -C "$FR" commit -qam "allow settings.json"
+    printf 'home/.config/mytool/settings.json\ts/1/oops/\n' >> "$FR/normalize.txt"
+    j66=$(obj snapshot --no-push)
+    eq "a normalize rule that breaks JSON refuses the run" "$(jq -r .ok <<<"$j66")" "false"
+    has "the refusal names the invalid JSON" "$j66" "invalid JSON"
+    cp "$T/normalize.bak" "$FR/normalize.txt"
+  else
+    echo "  (python3 not installed: skipping the normalize JSON re-parse guard)"
+  fi
+
+  # remote_push_allowed: no gitleaks, no push, ever -- otherwise a machine
+  # with no scanner would scan nothing and still push. Proved with a PATH
+  # holding symlinks to everything the CLI needs EXCEPT gitleaks.
+  mkdir -p "$T/nogl"
+  for b66 in bash sh env jq git rsync flock date cat grep sed awk find mktemp stat chmod \
+             mv rm cp ln cut sort tr head tail wc cksum paste readlink dirname basename \
+             touch mkdir sleep comm uniq xargs diff cmp; do
+    p66=$(command -v "$b66" 2>/dev/null) || continue
+    ln -sf "$p66" "$T/nogl/$b66"
+  done
+  if [[ -e "$T/nogl/gitleaks" ]]; then bad "the no-gitleaks PATH still carries gitleaks"; else ok "the no-gitleaks PATH carries no gitleaks"; fi
+  eq "the restricted PATH still runs the CLI" \
+    "$(env HOME="$FH" PATH="$T/nogl" "$CLI" version)" "$MANIFEST_VERSION"
+  g66=$(env HOME="$FH" PATH="$T/nogl" "$CLI" push --json 2>/dev/null)
+  eq "push refuses outright when gitleaks is not installed" "$(jq -r .ok <<<"$g66")" "false"
+  has "the refusal names gitleaks" "$g66" "gitleaks-missing"
+
+  # The snapshot lock timeout: warn, exit 0, and commit nothing. A manual run
+  # overlapping the timer must queue briefly and then step aside, never fail.
+  l66=$(git -C "$FR" rev-parse HEAD)
+  ( flock -x 9; sleep 5 ) 9>"$FR/.lock" &
+  lockpid66=$!
+  sleep 1
+  lo66=$(ob snapshot --no-push); lrc66=$?
+  eq "a held repo lock skips the run instead of failing" "$lrc66" "0"
+  has "the skip says another run held the lock" "$lo66" "held the lock"
+  eq "the skipped run committed nothing" "$(git -C "$FR" rev-parse HEAD)" "$l66"
+  wait "$lockpid66" 2>/dev/null || true
 fi
 
 echo; echo "passed=$pass failed=$fail"
