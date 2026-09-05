@@ -297,6 +297,38 @@ if group 06 "restore --configs: dry run touches nothing, --apply backs up and ne
   eq "--etc never writes under the \$FH-mapped etc root, even with --apply" "$after_etc" "$before_etc"
   has "the comparison reports the missing file" "$etc_out" "MISSING"
   has "the comparison names the file" "$etc_out" "/etc/ssh/sshd_config"
+
+  # --- a symlink whose target moved since the snapshot. The safety-copy loop
+  # only enumerated -type f, so rsync -a replaced a live link with the
+  # snapshot's with nothing copied aside and no mention in the dry run. ---
+  mkdir -p "$FH/.config/linky"
+  printf 'A\n' > "$FH/.config/linky/a.conf"; printf 'B\n' > "$FH/.config/linky/b.conf"
+  ln -s a.conf "$FH/.config/linky/current.conf"
+  allow '.config/linky'
+  check "snapshot stores the symlink" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the repo holds the link itself, not a copy of its target" \
+    "$(readlink "$FR/home/.config/linky/current.conf")" "a.conf"
+  ln -sfn b.conf "$FH/.config/linky/current.conf"
+  # shellcheck disable=SC2088  # literal "~/" prefix inside a jq filter/expected value, not a path to expand
+  eq "a dry run lists the repointed link under would_write" \
+    "$(obj restore --configs | jq -r '.would_write[] | select(. == "~/.config/linky/current.conf")')" \
+    "~/.config/linky/current.conf"
+  lout=$(obj restore --configs --apply)
+  eq "the link is restored to its snapshot target" "$(readlink "$FH/.config/linky/current.conf")" "a.conf"
+  lbak=$(find "$FH/.config/linky" -maxdepth 1 -name 'current.conf.bak.*' -print -quit 2>/dev/null)
+  [ -n "$lbak" ] && ok "the repointed link left a .bak.<epoch> safety copy" \
+    || bad "no safety copy for a repointed symlink"
+  [ -L "$lbak" ] && ok "the safety copy is a link, not a dereferenced copy" \
+    || bad "the safety copy dereferenced the link"
+  eq "the safety copy still points where the live link did" "$(readlink "$lbak" 2>/dev/null)" "b.conf"
+  # shellcheck disable=SC2088  # literal "~/" prefix inside a jq filter/expected value, not a path to expand
+  eq "json names the link in backed_up[]" \
+    "$(jq -r '.backed_up[] | select(. == "~/.config/linky/current.conf")' <<<"$lout")" \
+    "~/.config/linky/current.conf"
+  # An unchanged link must not collect a .bak on every run.
+  lout2=$(obj restore --configs --apply)
+  eq "an unchanged link is not backed up again" \
+    "$(jq -r '[.backed_up[] | select(. == "~/.config/linky/current.conf")] | length' <<<"$lout2")" "0"
 fi
 if group 17 "restore refuses a hollow snapshot"; then
   mk_fixture g17; seed_home; commit_baseline

@@ -78,12 +78,35 @@ restore_stage_configs() {
   # Per-file safety copy: anything about to be overwritten with different
   # content is copied aside first, preserving its mode. .gitkeep is a git-side
   # placeholder for an otherwise-empty directory and must never land in $HOME.
-  while IFS= read -r rel; do
+  #
+  # Symlinks are enumerated too. `-type f` skipped them, and rsync -a below
+  # replaces a live link whose target has changed since the snapshot with no
+  # .bak.<epoch> beside it and no mention in a dry run: a repointed
+  # ~/.config/something -> elsewhere was overwritten silently. A link is
+  # compared by its target, not its content (cmp follows it, so a link and its
+  # snapshot copy read as identical whenever the file behind them is), and
+  # backed up with cp -P, which copies the link itself.
+  local rty want live_l same
+  while IFS= read -r -d '' rec; do
+    rty="${rec%% *}"; rel="${rec#* }"
+    [[ -n "$rel" ]] || continue
     case "$rel" in */.gitkeep|.gitkeep) continue ;; esac
     tgt="$HOME/$rel"
     if [[ "$apply" == 1 ]]; then
-      if [[ -e "$tgt" ]] && ! cmp -s "$DATA_REPO/home/$rel" "$tgt" 2>/dev/null; then
-        if cp -p "$tgt" "$tgt.bak.$epoch" 2>/dev/null; then
+      same=0
+      if [[ "$rty" == l ]]; then
+        want=$(readlink -- "$DATA_REPO/home/$rel" 2>/dev/null || true)
+        live_l=$(readlink -- "$tgt" 2>/dev/null || true)
+        if [[ -L "$tgt" && -n "$want" && "$want" == "$live_l" ]]; then same=1; fi
+      elif cmp -s "$DATA_REPO/home/$rel" "$tgt" 2>/dev/null; then
+        same=1
+      fi
+      if [[ -e "$tgt" || -L "$tgt" ]] && [[ "$same" == 0 ]]; then
+        # cp -P on a link copies the link, never what it points at; cp -p on a
+        # regular file keeps its mode.
+        local -a cpargs=(-p)
+        [[ "$rty" != l ]] || cpargs=(-P)
+        if cp "${cpargs[@]}" "$tgt" "$tgt.bak.$epoch" 2>/dev/null; then
           # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
           RESTORE_BACKED_UP+=("$(jstr "~/$rel")")
         else
@@ -96,7 +119,7 @@ restore_stage_configs() {
       # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
       RESTORE_WOULD+=("$(jstr "~/$rel")")
     fi
-  done < <(cd "$DATA_REPO/home" && find . -type f -printf '%P\n')
+  done < <(cd "$DATA_REPO/home" && find . \( -type f -o -type l \) -printf '%y %P\0')
 
   if [[ "$apply" == 1 ]]; then
     # --delete is deliberately NOT used: never remove a $HOME file absent
