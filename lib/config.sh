@@ -58,8 +58,12 @@ if [[ "$_ob_in_suite" != 1 ]]; then
   done
   unset _ob_hook
 fi
+# Kept (not unset) so the rest of the tool can tell a test run from a real one
+# without re-deriving the rule. Assigned unconditionally here, so setting it in
+# the environment achieves nothing.
+OMABACKUP_SUITE_ACTIVE=$_ob_in_suite
 unset _ob_in_suite
-export OMABACKUP_OVERRIDES_IGNORED OMABACKUP_SUITE_MARKER_STRAY
+export OMABACKUP_OVERRIDES_IGNORED OMABACKUP_SUITE_MARKER_STRAY OMABACKUP_SUITE_ACTIVE
 
 OMABACKUP_SKIP_ETC="${OMABACKUP_SKIP_ETC:-0}"
 OMABACKUP_SKIP_TIMERS="${OMABACKUP_SKIP_TIMERS:-0}"
@@ -145,8 +149,11 @@ config_load() {
     [[ -n "$k" ]] || continue
     # A nested key under a top-level key that is itself unrecognised is already
     # covered by the warning about its parent; only judge the ones whose parent
-    # is known.
-    case "$unknown_top" in *"${k%%.*}"*) continue ;; esac
+    # is known. Whole line against whole line: a substring test on the
+    # newline-joined list read "known parent" for any name that merely appeared
+    # inside another one, so `remote.x` was skipped whenever an unrelated
+    # `remotely` key happened to be present in the same config.
+    if grep -qxF -- "${k%%.*}" <<<"$unknown_top"; then continue; fi
     if config_key_near_miss "$k" "$CONFIG_KNOWN_DOTTED"; then typos+=("$k"); else novel+=("$k"); fi
   done <<<"$unknown_nested"
   [[ ${#typos[@]} -eq 0 ]] \

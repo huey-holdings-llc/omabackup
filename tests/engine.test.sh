@@ -2520,6 +2520,16 @@ if group 82 "an ERROR row in the drift report is a fault, and the stock tree fol
   n82=$(env -u OMABACKUP_STOCK_DIR HOME="$FH" OMARCHY_PATH="$T/no-such-omarchy" "$CLI" drift)
   has "and a bad OMARCHY_PATH is reported against that path, not the hardcoded one" \
     "$n82" "$T/no-such-omarchy/config"
+
+  # A stock tree pointed somewhere other than the installed one changes what
+  # drift MEANS, so status says which tree the answers came from -- outside a
+  # test run, whose whole point is a stock stand-in.
+  r82=$(env -u OMABACKUP_IN_SUITE HOME="$FH" "$CLI" status --json 2>/dev/null)
+  has "a redirected stock tree is reported" "$(jq -r '.problems[]' <<<"$r82")" \
+    "not the installed Omarchy tree"
+  has "naming the tree it used" "$(jq -r '.problems[]' <<<"$r82")" "$STOCK"
+  eq "and the suite's own runs say nothing of the kind" \
+    "$(obj status | jq -r '[.problems[] | select(contains("installed Omarchy tree"))] | length')" "0"
 fi
 
 if group 83 "status.json's push_verifiable is the push gate's answer, not git's arithmetic"; then
@@ -2690,8 +2700,10 @@ if group 86 "the gitleaks rules and the staged scan survive an older or a newer 
   has "the rules file states the version it needs" "$(cat "$HERE/../share/gitleaks.toml")" 'minVersion = "8.19.0"'
   eq "no deprecated singular rule allowlist is left" \
     "$(grep -c '^\s*\[rules\.allowlist\]' "$HERE/../share/gitleaks.toml" || true)" "0"
+  # At least one: the count is not the point, the singular form's absence is,
+  # and a second scoped allowlist on a future rule must not fail this.
   eq "the scoped allowlist is the plural form" \
-    "$(grep -c '^\s*\[\[rules\.allowlists\]\]' "$HERE/../share/gitleaks.toml" || true)" "1"
+    "$(( $(grep -c '^\s*\[\[rules\.allowlists\]\]' "$HERE/../share/gitleaks.toml" || true) >= 1 ))" "1"
   if command -v gitleaks >/dev/null; then
     mkdir -p "$T/glempty"
     g86=$(gitleaks dir "$T/glempty" -c "$HERE/../share/gitleaks.toml" --no-banner 2>&1 || true)

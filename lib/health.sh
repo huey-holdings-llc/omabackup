@@ -234,6 +234,15 @@ health_collect() {
   # redirection every fixture uses, which no real install does.
   [[ "${OMABACKUP_SUITE_MARKER_STRAY:-0}" != 1 ]] \
     || H_PROBLEMS+=("OMABACKUP_IN_SUITE is set outside a test run")
+  # Section 1 of the drift scan compares ~/.config against the stock tree, and
+  # it is the biggest detector there is. A STOCK_DIR pointed somewhere else is
+  # therefore a change to what "drift" even means, and it comes from the
+  # environment, exactly like the ignored hooks above. Say which tree the
+  # answers came from. Not during a test run, whose whole point is a stock
+  # stand-in -- the same exemption the hooks above get, from the same gate.
+  if [[ "${OMABACKUP_SUITE_ACTIVE:-0}" != 1 && "$STOCK_DIR" != /usr/share/omarchy ]]; then
+    H_PROBLEMS+=("drift is being compared against $STOCK_DIR, not the installed Omarchy tree")
+  fi
 
   H_SETUP=$(health_setup_state)
 }
