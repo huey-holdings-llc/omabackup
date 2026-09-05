@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Secret gates. The filename gate always runs; gitleaks runs when installed.
-# Ported from hp-laptop-config/bin/snapshot.sh:488-512 (staging pass) and
+# Ported from the source engine, bin/snapshot.sh:488-512 (staging pass) and
 # 614-623 (the staged-commit pass, "AUTHORITATIVE GATE" in the engine).
 # The rules file is always $PLUGIN_DIR/share/gitleaks.toml, never a copy that
 # lives inside the mutable data repo -- the engine preferred a repo-local
@@ -9,7 +9,16 @@
 # path here means the data repo cannot blind its own gate.
 # shellcheck shell=bash
 
-SECRET_NAME_RE='(ghp_|gho_|github_pat_|AKIA[0-9A-Z]{16}|sk-ant-|BEGIN.*PRIVATE|^id_[a-z0-9]+$|\.pem$|\.key$|\.kdbx$|^hosts\.yml$)'
+# `^id_[a-z0-9]+$` was narrower than the rule share/data.gitignore states
+# (`id_*` minus `id_*.pub`): it matched id_rsa and id_ed25519 but not
+# id_rsa_backup, id_ecdsa-sk or id_rsa.old, which are exactly the names a
+# private key acquires when someone rotates or archives one. The class now
+# covers the same set as the gitignore, and the public half is exempted
+# structurally in secrets_filename_gate below (ERE has no lookahead).
+SECRET_NAME_RE='(ghp_|gho_|github_pat_|AKIA[0-9A-Z]{16}|sk-ant-|BEGIN.*PRIVATE|^id_[A-Za-z0-9._-]+$|\.pem$|\.key$|\.kdbx$|^hosts\.yml$)'
+# Public keys are meant to be shared and are the one documented exemption
+# (share/data.gitignore's `!id_*.pub`).
+SECRET_NAME_EXEMPT_RE='\.pub$'
 RULES_FILE="$PLUGIN_DIR/share/gitleaks.toml"
 
 gitleaks_available() { have gitleaks; }
@@ -20,7 +29,9 @@ gitleaks_available() { have gitleaks; }
 # 141 so the `if` never fired (snapshot.sh:502-508).
 secrets_filename_gate() {
   local hits
-  hits=$(find "$1" -type f -printf '%f\n' 2>/dev/null | grep -E "$SECRET_NAME_RE" || true)
+  hits=$(find "$1" -type f -printf '%f\n' 2>/dev/null \
+    | grep -E "$SECRET_NAME_RE" \
+    | grep -vE "$SECRET_NAME_EXEMPT_RE" || true)
   [[ -z "$hits" ]] || die "credential-looking filename(s) in the staging tree: $(head -3 <<<"$hits" | tr '\n' ' ')"
 }
 

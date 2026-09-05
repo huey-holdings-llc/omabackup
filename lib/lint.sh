@@ -7,7 +7,7 @@
 # is how a "clean" drift report starts lying. This turns those chores into a
 # lint failure instead of something nobody notices for a year.
 #
-# Ported from hp-laptop-config/bin/lint-lists.sh. Sourced by bin/omabackup;
+# Ported from the source engine, bin/lint-lists.sh. Sourced by bin/omabackup;
 # never executed.
 #
 # ERREXIT DISCIPLINE: every command whose exit status is inspected sits on
@@ -41,8 +41,8 @@ lint_note() {
   fi
 }
 
-# lint_allowlist: DUP / TRAILSPACE / QMARK / MISSING / ABSENT. Fills the
-# global LINT_AL array, reused by lint_completeness below.
+# lint_allowlist: DUP / TRAILSPACE / QMARK / TRAVERSAL / ABSOLUTE / MISSING /
+# ABSENT. Fills the global LINT_AL array, reused by lint_completeness below.
 lint_allowlist() {
   [[ $JSON == 1 ]] || echo "== allowlist.txt =="
   mapfile -t LINT_AL < <(read_list "$DATA_REPO/allowlist.txt")
@@ -58,6 +58,17 @@ lint_allowlist() {
     # '?' anywhere but the first character is almost certainly a typo.
     case "${raw#\?}" in
       *'?'*) lint_note "QMARK" "$raw" "a '?' after the first char is a glob, not the optional marker" ;;
+    esac
+    # Defence in depth. rsync already refuses a ".." segment, and every entry
+    # is joined to $HOME, so neither of these can currently walk out; they are
+    # a hard lint failure anyway, because an allowlist entry is a path this
+    # tool copies in BOTH directions and "rsync happens to refuse it" is not a
+    # property worth depending on.
+    case "/$e/" in
+      *'/../'*) lint_bad "TRAVERSAL" "$raw" "a '..' path segment is never a valid entry" ;;
+    esac
+    case "$e" in
+      /*) lint_bad "ABSOLUTE" "$raw" "entries are relative to \$HOME; drop the leading /" ;;
     esac
     # Does it actually resolve? A typo'd path aborts the snapshot entirely;
     # this is the one edit most likely to halt the whole backup if it slips

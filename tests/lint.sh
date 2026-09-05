@@ -30,6 +30,14 @@ command -v omarchy-plugin-validate >/dev/null && { omarchy-plugin-validate . >/d
 step "QML hygiene"
 if grep -nE '"bash", *"-c"|"sh", *"-c"|bash -c' -- *.qml ui/*.qml; then bad "shell strings built in QML"; else ok "no shell strings in QML"; fi
 if grep -nE '"/tmp' -- *.qml ui/*.qml bin/omabackup lib/*.sh; then bad "/tmp referenced"; else ok "no /tmp paths"; fi
+# A bare `mktemp` (or `mktemp -d`) lands in $TMPDIR, i.e. /tmp: scratch must
+# name its own directory under the data repo's .staging or $STATE_DIR, both
+# of which are ours and 0700. Calls that pass a template are fine.
+if grep -nE 'mktemp( +-[a-zA-Z]+)* *(\)|;|\||&|$)' bin/omabackup lib/*.sh; then
+  bad "mktemp with no path template (scratch must live in the data repo or \$STATE_DIR, never /tmp)"
+else
+  ok "every mktemp names its own directory"
+fi
 for f in *.qml ui/*.qml; do [[ -s "$f" ]] || bad "$f empty"; done
 if command -v qmllint >/dev/null; then qmllint --version >/dev/null 2>&1 && ok "qmllint available (imports need the shell; not run)"; fi
 # The whole design: every process launch site must name the CLI (or the one

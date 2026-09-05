@@ -2,7 +2,7 @@
 # The drift scan: compare the live $HOME (and, unless skipped, /etc) against
 # Omarchy's stock defaults and the allowlist/drift-ignore lists, and report
 # whatever falls through, config that looks user-authored but is NOT backed
-# up. Ported from hp-laptop-config/bin/drift.sh, which learned most of these
+# up. Ported from the source engine, bin/drift.sh, which learned most of these
 # rules the hard way; read the comments before changing the matching.
 #
 # Silence an entry by adding it to drift-ignore.txt with a dated reason.
@@ -92,7 +92,26 @@ drift_scan() {
   # container we are meant to look inside (partially covered, or
   # bare-ignored), in which case the decision is deferred to its children.
   # Only the leftover files are matched per-file.
-  local _dtmp; _dtmp=$(mktemp -d)
+  # Scratch for the two-phase walk. Never /tmp: a bare `mktemp -d` put the
+  # full listing of every file under $HOME (paths are themselves private) in a
+  # world-readable directory. It goes in the data repo's own .staging when a
+  # repo is configured, and $STATE_DIR for a standalone drift run that has
+  # none; both are 0700 and both are ours.
+  #
+  # DRIFT_TMP is deliberately NOT `local`: the trap below fires when the whole
+  # process exits, by which point this call frame is gone, and referencing a
+  # local under `set -u` would be an unbound-variable error (the same lesson
+  # as VERIFY_R in lib/verify.sh). bin/omabackup runs one verb per process, so
+  # a plain global is exactly as scoped as the trap is.
+  local _dscratch="${STAGE:-$STATE_DIR}"
+  # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
+  mkdir -m 700 -p "$_dscratch" || { echo "# ERROR drift: cannot create scratch under $_dscratch"; return 1; }
+  DRIFT_TMP=$(mktemp -d "$_dscratch/.drift.XXXXXX") \
+    || { echo "# ERROR drift: cannot create a scratch directory under $_dscratch"; return 1; }
+  trap 'rm -rf "${DRIFT_TMP:-}" 2>/dev/null || true' EXIT
+  trap 'rm -rf "${DRIFT_TMP:-}" 2>/dev/null; exit 130' INT
+  trap 'rm -rf "${DRIFT_TMP:-}" 2>/dev/null; exit 143' TERM
+  local _dtmp="$DRIFT_TMP"
 
   # Reads absolute file paths from $1, writes the prefixes to exclude to $2
   # and reports each over-full directory that has no other explanation. $3 is
@@ -388,7 +407,7 @@ X11/xorg.conf.d fonts/conf.d"
   else
     echo "# $found item(s) unbacked. Add to allowlist.txt, or to drift-ignore.txt with a reason."
   fi
-  rm -rf "$_dtmp"
+  rm -rf "$_dtmp"; DRIFT_TMP=""
   [ "$_nullglob_was_on" = 1 ] || shopt -u nullglob
   # Sentinel. The daily pipeline refuses to commit without this line, so a
   # scan that dies partway through can no longer be mistaken for a clean report.

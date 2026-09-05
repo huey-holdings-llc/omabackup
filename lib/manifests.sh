@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Manifests: everything about this machine that is NOT a file under $HOME.
-# Ported from hp-laptop-config/bin/snapshot.sh:288-476 (phase 3 of the daily
+# Ported from the source engine, bin/snapshot.sh:288-476 (phase 3 of the daily
 # pipeline). Sourced by bin/omabackup; never executed.
 #
 # Two rules govern this whole file, both learned the hard way by the engine:
@@ -21,10 +21,16 @@
 # shellcheck disable=SC2034  # MAN_DRIFT_PREV, DRIFT_N, TOOBIG_N, EXCLUDED_N are read by lib/snapshot.sh
 
 # Manifests whose previous copy is carried forward when regeneration fails.
-# versions.txt, groups.txt and drift.txt are deliberately absent: they are
-# generated from data that is always available, so a change in them is real.
+# versions.txt and drift.txt are deliberately absent: they are generated from
+# data that is always available, so a change in them is real.
+#
+# groups.txt used to be in that "always available" set on the strength of
+# `id -nG` never failing. It can: in a container, mid-NSS-outage, or with a
+# broken sssd, it returns nothing, and an empty groups.txt then replaced the
+# real one under `rsync --delete`. Carrying it forward costs nothing and is
+# the same fail-closed rule every other machine fact already gets.
 MANIFESTS_CARRIED=(
-  install-history.tsv systemd-user.txt systemd-system.txt systemd-user-off.txt
+  install-history.tsv systemd-user.txt systemd-system.txt systemd-user-off.txt groups.txt
   dconf.txt pacman-native.txt pacman-aur.txt omarchy-plugins.tsv
   omarchy-plugins.json network.txt printers.txt fingerprint.txt
   vscode-extensions.txt timezone.txt locale.txt stock-fingerprint.txt
