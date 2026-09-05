@@ -114,20 +114,33 @@ snapshot_assert_allowlist() {
     GONE=(${still[@]+"${still[@]}"})
   fi
 
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    # DEFAULT IS SOFT. Halting every backup because one uninstalled app left an
-    # allowlist entry behind is too brittle for a machine whose apps churn: it
-    # happened for real, and unrelated config went uncaptured for weeks while
-    # the lists were argued about.
-    #
-    # A LARGE fraction missing is a different animal: wrong $HOME, an unmounted
-    # partition, a bad edit. Committing then would destroy the backup. So many
-    # missing dies, a few are recorded as GONE and the run carries on.
-    local pct=$(( ${#missing[@]} * 100 / (entry_count > 0 ? entry_count : 1) ))
+  # DEFAULT IS SOFT. Halting every backup because one uninstalled app left an
+  # allowlist entry behind is too brittle for a machine whose apps churn: it
+  # happened for real, and unrelated config went uncaptured for weeks while
+  # the lists were argued about.
+  #
+  # A LARGE fraction missing is a different animal: wrong $HOME, an unmounted
+  # partition, a bad edit. Committing then would destroy the backup. So many
+  # vanished dies, a few are recorded as GONE and the run carries on.
+  #
+  # VANISHED IS missing PLUS GONE. This percentage counted `missing` alone,
+  # and every entry in share/allowlist.example carries the optional `?` marker,
+  # so on a stock install `missing` is permanently empty and maxMissingPct --
+  # the guard whose stated purpose is "wrong $HOME, or an unmounted partition?"
+  # -- could never fire. The only thing left between an unmounted $HOME and an
+  # `rsync --delete` over a good backup was the halved-file floor, which lets
+  # ~49% of the backup go. An optional entry still does not halt the run on its
+  # own; a MASS vanishing now halts it whether the entries were optional or not.
+  local vanished=$(( ${#missing[@]} + ${#GONE[@]} ))
+  if [[ $vanished -gt 0 ]]; then
+    local pct=$(( vanished * 100 / (entry_count > 0 ? entry_count : 1) ))
     if [[ "$pct" -ge "${CFG_MAX_MISSING_PCT:-25}" ]]; then
-      printf '  missing: %s\n' "${missing[@]}" >&2
-      die "${#missing[@]} of $entry_count allowlist entries ($pct%) no longer exist; refusing to run. Wrong \$HOME, or an unmounted partition?"
+      printf '  vanished: %s\n' ${missing[@]+"${missing[@]}"} ${GONE[@]+"${GONE[@]}"} >&2
+      die "$vanished of $entry_count allowlist entries ($pct%) no longer exist; refusing to run. Wrong \$HOME, or an unmounted partition?"
     fi
+  fi
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
     for entry in "${missing[@]}"; do
       GONE+=("$entry")
       warn "allowlist entry absent (uninstalled?): $entry"

@@ -2176,5 +2176,37 @@ if group 79 "a restore stage that fails still leaves one JSON object and a relea
   check "the next locking verb takes the lock straight away" env HOME="$FH" "$CLI" snapshot --no-push
 fi
 
+if group 80 "a mass disappearance halts the run even when every entry is optional"; then
+  # maxMissingPct is the "wrong \$HOME, or an unmounted partition?" guard, and
+  # it counted REQUIRED entries only. Every entry in share/allowlist.example
+  # carries the optional `?` marker, so on a stock install the count it looked
+  # at was permanently empty and the guard could never fire: an unmounted home
+  # subvolume would have committed, rsync --delete'd the backup down to
+  # whatever survived, and reported it as ordinary GONE rows at "attention".
+  mk_fixture g80
+  mkdir -p "$FH/.config/opt"
+  for i in 1 2 3 4 5 6; do printf 'setting=%d\n' "$i" > "$FH/.config/opt/f$i.conf"; done
+  for i in 1 2 3 4 5 6; do printf '?.config/opt/f%d.conf\n' "$i" >> "$FR/allowlist.txt"; done
+  git -C "$FR" commit -qam "six optional entries"
+  check "the baseline run commits with all six present" env HOME="$FH" "$CLI" snapshot --no-push
+
+  # Two of six is 33%, over the default maxMissingPct of 25.
+  rm -f "$FH/.config/opt/f1.conf" "$FH/.config/opt/f2.conf"
+  m80=$(obj snapshot --no-push)
+  eq "a third of the allowlist vanishing refuses the run" "$(jq -r .ok <<<"$m80")" "false"
+  has "the refusal is the maxMissingPct one" "$(jq -r .error <<<"$m80")" "no longer exist; refusing to run"
+  has "the refusal names the wrong-\$HOME case" "$(jq -r .error <<<"$m80")" "unmounted partition"
+  eq "the count is of everything that vanished, optional included" \
+    "$(jq -r .error <<<"$m80" | grep -c '^2 of 6 allowlist entries (33%)')" "1"
+  eq "nothing was committed by the refused run" \
+    "$(git -C "$FR" log --oneline | grep -c 'snapshot:' || true)" "1"
+
+  # ...and one optional entry vanishing is still soft, so the guard has not
+  # simply become "any GONE halts the backup".
+  printf 'setting=1\n' > "$FH/.config/opt/f1.conf"
+  check "one vanished optional entry still runs" env HOME="$FH" "$CLI" snapshot --no-push
+  has "it is reported as GONE, not as a refusal" "$(cat "$FR/manifests/drift.txt")" "GONE"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
