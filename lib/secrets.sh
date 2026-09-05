@@ -9,13 +9,56 @@
 # path here means the data repo cannot blind its own gate.
 # shellcheck shell=bash
 
-# `^id_[a-z0-9]+$` was narrower than the rule share/data.gitignore states
-# (`id_*` minus `id_*.pub`): it matched id_rsa and id_ed25519 but not
+# SECRET_NAME_GLOBS: the credential filename classes, written in gitignore
+# shape. This list and share/data.gitignore are two halves of ONE list, and
+# tests/lint.sh fails when they disagree: the gate used to miss `.env`,
+# `*.p12`, `*.pfx`, `.credentials.json` and `Cookies*`, all of which the
+# project's own data.gitignore already treated as dangerous. That matters most
+# on a machine with no gitleaks, where this filename check is the ONLY gate
+# before `git commit` (push is refused, but the secret is already in local
+# history and in every later clone of the repo).
+#
+# `.env.*` deliberately covers `.env.example` too: a template that has been
+# filled in is indistinguishable from a real one by name, and the cost of a
+# false refusal here is renaming one file.
+# shellcheck disable=SC2034  # read by tests/lint.sh, which sources this file
+SECRET_NAME_GLOBS='id_*
+*.pem
+*.key
+*.p12
+*.pfx
+*.kdbx
+*.ovpn
+*.jks
+*.asc
+.env
+.env.*
+.netrc
+.git-credentials
+.npmrc
+.pypirc
+.credentials.json
+credentials
+Cookies*
+hosts.yml'
+
+# The regex half of the same list, plus the token prefixes no filename glob
+# expresses. `^id_[a-z0-9]+$` was narrower than the rule share/data.gitignore
+# states (`id_*` minus `id_*.pub`): it matched id_rsa and id_ed25519 but not
 # id_rsa_backup, id_ecdsa-sk or id_rsa.old, which are exactly the names a
 # private key acquires when someone rotates or archives one. The class now
 # covers the same set as the gitignore, and the public half is exempted
 # structurally in secrets_filename_gate below (ERE has no lookahead).
-SECRET_NAME_RE='(ghp_|gho_|github_pat_|AKIA[0-9A-Z]{16}|sk-ant-|BEGIN.*PRIVATE|^id_[A-Za-z0-9._-]+$|\.pem$|\.key$|\.kdbx$|^hosts\.yml$)'
+#
+# The four original token classes stay unanchored, as they always were. The
+# ones added here are anchored at the start of the basename, because that is
+# what "prefix" means and unanchored they would refuse ordinary files:
+# `SG\.` alone matches MSG.txt, and `npm_` matches npm_debug-anything.
+SECRET_NAME_RE='(ghp_|gho_|github_pat_|AKIA[0-9A-Z]{16}|sk-ant-|BEGIN.*PRIVATE'\
+'|^glpat-|^xox[baprs]-|^AIza|^sk-proj-|^hf_|^npm_|^dop_v1_|^SG\.'\
+'|^id_[A-Za-z0-9._-]+$|\.pem$|\.key$|\.p12$|\.pfx$|\.kdbx$|\.ovpn$|\.jks$|\.asc$'\
+'|^\.env$|^\.env\.|^\.netrc$|^\.git-credentials$|^\.npmrc$|^\.pypirc$'\
+'|^\.credentials\.json$|^credentials$|^Cookies|^hosts\.yml$)'
 # The one documented exemption, and it belongs to the `id_` class ALONE:
 # share/data.gitignore says `id_*` then `!id_*.pub`, nothing wider. A bare
 # `\.pub$` here would have exempted every other class too, so ghp_token.pub,

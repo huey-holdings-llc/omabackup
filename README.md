@@ -34,12 +34,20 @@ ever staged, and the drift scan exists to report what those lists omit, not
 to back anything up on its own.
 
 * **Two secret gates.** A filename gate always runs on the staging tree,
-  refusing credential-looking basenames (`ghp_`, `gho_`, `github_pat_`,
-  `AKIA...`, `sk-ant-...`, a private-key header, `id_*`, `*.pem`, `*.key`,
-  `*.kdbx`, `hosts.yml`). When gitleaks is installed, it also scans the
-  staging tree and the staged commit with a project rules file covering
-  Anthropic and Claude Code tokens, current OpenAI keys, WireGuard and NaCl
-  keys, NetworkManager pre-shared keys and credential-embedded URLs. Either
+  refusing credential-looking basenames: the classes
+  `share/data.gitignore` names (`id_*` except `id_*.pub`, `*.pem`, `*.key`,
+  `*.p12`, `*.pfx`, `*.kdbx`, `*.ovpn`, `*.jks`, `*.asc`, `.env`, `.env.*`,
+  `.netrc`, `.git-credentials`, `.npmrc`, `.pypirc`, `.credentials.json`,
+  `credentials`, `Cookies*`, `hosts.yml`) plus token prefixes (`ghp_`,
+  `gho_`, `github_pat_`, `AKIA...`, `sk-ant-`, `sk-proj-`, `glpat-`, `xoxb-`
+  and friends, `AIza`, `hf_`, `npm_`, `dop_v1_`, `SG.`, and a private-key
+  header). `.env.*` covers `.env.example` on purpose: a template that has
+  been filled in is indistinguishable from a real one by name, and the cost
+  of a wrong refusal is renaming one file. When gitleaks is installed, it
+  also scans the staging tree and the staged commit with a project rules file
+  covering Anthropic and Claude Code tokens, current OpenAI keys, WireGuard
+  and NaCl keys, NetworkManager pre-shared keys and credential-embedded URLs.
+  Either
   gate finding something stops the commit before it happens.
 * **A visibility probe before every push.** For a GitHub remote, OmaBackup
   asks `https://api.github.com/repos/OWNER/REPO`, unauthenticated, after

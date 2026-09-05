@@ -49,6 +49,32 @@ while IFS=: read -r qf qln _; do
 done < <(grep -nE 'command:|execDetached\(' -- *.qml ui/*.qml | grep -vE 'omabackup|svc\.cli|Service\.cli|root\.cli|omarchy-launch-floating-terminal-with-presentation|wl-copy')
 [[ $qml_process_bad == 0 ]] && ok "all processes route through omabackup"
 
+step "secret filename classes"
+# lib/secrets.sh's SECRET_NAME_GLOBS, its SECRET_NAME_RE and
+# share/data.gitignore are three views of ONE list of credential filename
+# classes, and the gate is only as good as the narrowest of them: it used to
+# miss .env, *.p12, *.pfx, .credentials.json and Cookies*, all of which
+# data.gitignore already named. Fail when they disagree.
+# shellcheck disable=SC2034  # PLUGIN_DIR is read by lib/secrets.sh, sourced below
+PLUGIN_DIR=.
+# shellcheck source=../lib/secrets.sh
+. lib/secrets.sh
+sec_bad=0
+while IFS= read -r glob; do
+  [[ -n "$glob" ]] || continue
+  grep -qxF -- "$glob" share/data.gitignore \
+    || { bad "share/data.gitignore does not name the secret class: $glob"; sec_bad=1; }
+  # A sample basename of that shape must actually reach the gate. `*` becomes
+  # one ordinary character, which is enough to exercise every class here.
+  sample=${glob//\*/x}
+  if ! printf '%s\n' "$sample" | grep -qE "$SECRET_NAME_RE"; then
+    bad "SECRET_NAME_RE does not cover the class $glob (sample: $sample)"; sec_bad=1
+  fi
+done <<<"$SECRET_NAME_GLOBS"
+[[ $sec_bad == 0 ]] && ok "SECRET_NAME_GLOBS, SECRET_NAME_RE and share/data.gitignore agree"
+printf 'id_ed25519.pub\n' | grep -qE "$SECRET_KEY_PUB_RE" \
+  && ok "the documented id_*.pub exemption still applies" || bad "id_*.pub is no longer exempt"
+
 step "copy"
 if grep -rn -- $'\xe2\x80\x94' README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md bin/omabackup share/units *.qml ui/*.qml 2>/dev/null; then bad "em dash in user-facing text"; else ok "no em dashes"; fi
 if grep -nE '\beval\b' bin/omabackup lib/*.sh; then bad "eval in the engine"; else ok "no eval"; fi

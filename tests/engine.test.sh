@@ -2019,5 +2019,29 @@ if group 74 "guard-weakening OMABACKUP_* hooks need the suite marker, and status
   eq "under the marker the floor override is honoured" "$(obj snapshot --no-push | jq -r .ok)" "true"
 fi
 
+if group 75 "the filename gate covers the credential classes data.gitignore already names"; then
+  # With gitleaks absent this is the ONLY gate before `git commit`: push is
+  # refused, but the secret is already in local history and in every later
+  # clone of the repo. It missed .env, *.p12, *.pfx, .credentials.json and
+  # Cookies* while share/data.gitignore named all five.
+  mk_fixture g75; seed_home; allow '.config/mytool'; commit_baseline
+  # gate75 NAME: stage a file called NAME and report whether the run survived.
+  gate75() {
+    printf 'x\n' > "$FH/.config/mytool/$1"
+    local r
+    r=$(env HOME="$FH" "$CLI" snapshot --no-push --json 2>/dev/null | jq -r .ok)
+    rm -f "$FH/.config/mytool/$1"
+    printf '%s' "$r"
+  }
+  eq "a staged .netrc is refused" "$(gate75 '.netrc')" "false"
+  eq "a staged .git-credentials is refused" "$(gate75 '.git-credentials')" "false"
+  eq "a staged *.p12 is refused" "$(gate75 'client.p12')" "false"
+  # A filled-in template is indistinguishable from a real one by name, so the
+  # .env.* class deliberately covers .env.example (README says so).
+  eq "a staged .env.example is refused too" "$(gate75 '.env.example')" "false"
+  # ...and the one documented exemption still holds: id_*.pub is a PUBLIC key.
+  eq "a staged id_ed25519.pub is still allowed" "$(gate75 'id_ed25519.pub')" "true"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
