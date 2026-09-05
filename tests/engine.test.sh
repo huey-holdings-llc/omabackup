@@ -1712,5 +1712,40 @@ if group 67 "the push target itself is verified: no pushurl, and trust bound to 
     "$(obj snapshot --no-push | jq -r .push_reason)" "trusted"
 fi
 
+if group 68 "restore and verify refuse a data repo whose snapshot output is uncommitted"; then
+  # Restore copies from the WORKING TREE. If snapshot_sync ran and the commit
+  # after it did not, home/ holds output nobody committed: restore writes it
+  # back over the live machine, and verify compares the live files against
+  # that same uncommitted tree and reports ok, while HEAD still names the
+  # older state. Both must refuse instead.
+  mk_fixture g68; seed_home; commit_baseline
+  eq "a clean data repo restores" "$(obj restore --configs | jq -r .ok)" "true"
+  eq "a clean data repo verifies" "$(obj verify | jq -r .ok)" "true"
+
+  # Exactly the "snapshot_sync ran, the commit did not" signature: home/ holds
+  # a faithful copy of the live file, but HEAD does not.
+  printf 'export PAGER=less\n' >> "$FH/.bashrc"
+  printf 'export PAGER=less\n' >> "$FR/home/.bashrc"
+  before68=$(find "$FH" -type f -exec md5sum {} + 2>/dev/null | sort | md5sum)
+
+  r68=$(obj restore --configs --apply)
+  eq "restore refuses while home/ is uncommitted" "$(jq -r .ok <<<"$r68")" "false"
+  has "the refusal says the last run did not commit" "$r68" "the last run did not commit"
+  eq "the refusal is exactly one JSON object" "$(jq -s length <<<"$r68")" "1"
+  eq "the refusal wrote nothing into \$HOME" \
+    "$(find "$FH" -type f -exec md5sum {} + 2>/dev/null | sort | md5sum)" "$before68"
+  [[ $(obj restore --configs --apply >/dev/null 2>&1; echo $?) == 1 ]] \
+    && ok "the refusal exits 1" || bad "restore did not exit 1 on the refusal"
+
+  v68=$(obj verify)
+  eq "verify refuses the same way" "$(jq -r .ok <<<"$v68")" "false"
+  has "verify names the uncommitted snapshot output" "$v68" "uncommitted changes in the data repo"
+  eq "verify's refusal is one JSON object too" "$(jq -s length <<<"$v68")" "1"
+
+  git -C "$FR" commit -qam "the snapshot output the last run never committed"
+  eq "committing it lets restore run again" "$(obj restore --configs | jq -r .ok)" "true"
+  eq "committing it lets verify run again" "$(obj verify | jq -r .ok)" "true"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

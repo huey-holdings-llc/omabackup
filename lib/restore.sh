@@ -28,6 +28,22 @@ restore_skip() { RESTORE_SKIPPED+=("{\"path\":$(jstr "$1"),\"reason\":$(jstr "$2
 restore_stage_configs() {
   local apply=$1 min_restore="${OMABACKUP_MIN_RESTORE:-50}"
 
+  # This stage copies from the WORKING TREE, not from HEAD. When snapshot_sync
+  # has run but the commit after it has not (the staged secret gate refused,
+  # the process was killed), home/ holds output nobody committed -- and this
+  # would write it back over the live machine while `git log` still shows the
+  # older state, with verify comparing the live files against that same
+  # uncommitted tree and reporting ok. Fail closed. The widget's push
+  # --confirm stages only the lists, so a dirty home/ is exactly the
+  # "the commit did not happen" signature, never a user edit.
+  # cmd_verify calls this too, so the guard covers both verbs from here.
+  local pending
+  pending=$( { git -C "$DATA_REPO" status --porcelain -- home etc manifests modes.txt || true; } | awk 'NR<=5' )
+  if [[ -n "$pending" ]]; then
+    printf '%s\n' "$pending" | sed 's/^/    /' >&2
+    die "snapshot output has uncommitted changes in the data repo (the last run did not commit); run omabackup snapshot, then retry"
+  fi
+
   if [[ ! -d "$DATA_REPO/home" ]]; then
     restore_warn "no home/ directory in the repo -- nothing to restore"
     restore_skip "home" "no home/ directory in the repo"

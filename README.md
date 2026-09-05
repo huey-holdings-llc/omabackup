@@ -140,8 +140,11 @@ to back anything up on its own.
   `--apply` writes, nothing is ever deleted, and anything about to be
   overwritten is copied aside first. `--etc` only ever diffs, never writes.
 * **Verify**: `omabackup verify` restores the committed backup into a
-  throwaway directory and compares every file and mode against the live
-  one, honouring the normalize exceptions.
+  throwaway directory and compares every file, symlink target and mode
+  against the live one, honouring the normalize exceptions. Both `verify` and
+  `restore --configs` read the data repo's working tree, so both refuse while
+  `home`, `etc`, `manifests` or `modes.txt` hold uncommitted changes: that is
+  the signature of a run that copied your config in and never committed it.
 * **Self-test**: a weekly timer re-runs the black-box test suite end to end;
   `--real` also runs `lint` and `verify` against your actual data repo.
 
