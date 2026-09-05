@@ -249,11 +249,11 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     Accessible.role: Accessible.Button
-    Accessible.name: "Config backup: " + root.stateText
+    Accessible.name: "OmaBackup: " + root.stateText
     text: root.barGlyph + root.barLabel
     active: root.sysState === "fault"
     fontSize: root.barLabel ? Style.font.bodySmall : Style.bar.iconFont
-    tooltipText: "Config backup: " + root.stateText
+    tooltipText: "OmaBackup: " + root.stateText
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.refresh()
       else root.toggle()
@@ -304,7 +304,7 @@ Panel {
             id: hero
             readonly property string heroState: root.sysState
             width: parent.width
-            title: "Config Backup"
+            title: "OmaBackup"
             meta: root.stateText
             foreground: root.foreground
             fontFamily: root.fontFamily

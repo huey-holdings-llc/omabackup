@@ -5,7 +5,7 @@
 # the drift report all reason about what SHOULD be there -- this checks what
 # actually comes back.
 #
-# Ported from hp-laptop-config/bin/verify-restore.sh (all 100 lines). Sourced
+# Ported from the source engine, bin/verify-restore.sh (all 100 lines). Sourced
 # by bin/omabackup; never executed.
 #
 # Expected differences are declared in normalize.txt (fields the snapshot

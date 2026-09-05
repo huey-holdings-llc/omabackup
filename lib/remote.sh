@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The remote model: is it safe to push? Ported from
-# hp-laptop-config/bin/snapshot.sh:537-580 (the visibility probe) and 582-616,
+# the source engine, bin/snapshot.sh:537-580 (the visibility probe) and 582-616,
 # 649-681 (push_if_ahead and the post-commit push, folded into one function
 # here since both were ever just "push if @{upstream}..HEAD is nonempty").
 # Sourced by bin/omabackup; never executed.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Allowlist and drift-ignore predicates. Sourced by bin/omabackup; never
-# executed. Ported from hp-laptop-config/bin/drift.sh, which figured these
+# executed. Ported from the source engine, bin/drift.sh, which figured these
 # semantics out the hard way: read the comments before changing the matching.
 # shellcheck shell=bash
 

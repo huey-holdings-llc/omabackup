@@ -89,7 +89,16 @@ QtObject {
     }
   }
 
-  function snapshotNow() { act(["snapshot"], function () { svc.refresh() }) }
+  // The proven daily path is the systemd unit, so the button asks for that
+  // first ("timer run"). The engine replies {ok:false, problems:[...]} when it
+  // could start neither the unit nor a detached run (no systemd session, no
+  // setsid); only then does the panel run the snapshot itself and wait on it.
+  function snapshotNow() {
+    act(["timer", "run"], function (o) {
+      if (o && o.ok === true) { svc.refresh(); return }
+      act(["snapshot"], function () { svc.refresh() })
+    })
+  }
   function pushOrConfirm(confirm, onDone) { act(confirm ? ["push", "--confirm"] : ["push"], function (o) { svc.refresh(); if (onDone) onDone(o) }) }
   function timer(verb) { act(["timer", verb], function () { svc.refresh() }) }
   function allow(path, onDone) { act(["allow", path], function (o) { svc.refresh(); if (onDone) onDone(o) }) }

@@ -4,7 +4,7 @@
 # $HOME -- an overwritten file or a type-conflicting item is always moved
 # aside to a "<path>.bak.<epoch>" sibling first.
 #
-# Ported from hp-laptop-config/bin/restore.sh (all 308 lines). Sourced by
+# Ported from the source engine, bin/restore.sh (all 308 lines). Sourced by
 # bin/omabackup; never executed.
 #
 # ERREXIT DISCIPLINE: every command whose exit status is inspected sits on

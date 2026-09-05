@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The daily pipeline. Ten phases, each a function, in the engine's order.
-# Ported from hp-laptop-config/bin/snapshot.sh:79-108 (floors), 112-199
+# Ported from the source engine, bin/snapshot.sh:79-108 (floors), 112-199
 # (assert), 200-287 (stage), 477-487 (modes), 488-512 (scan), 513-520 (floor),
 # 521-536 (sync), 581-648 (commit), 649-681 (push). Sourced by bin/omabackup;
 # never executed.

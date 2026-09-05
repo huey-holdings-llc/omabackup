@@ -61,10 +61,10 @@ to back anything up on its own.
   (`~/.config/omabackup/config.json`) and state files; the five unit files
   it installs into `~/.config/systemd/user/`; the `~/.local/bin/omabackup`
   symlink; one opt-in line appended to `~/.bashrc`, offered at setup and
-  added only if you say yes (`setup --remove` disables the timers and
-  deletes the symlink and config, but it does not touch `~/.bashrc`; that
-  line is yours to remove by hand if you added it); and your `$HOME` itself,
-  but only when you run `restore --apply`.
+  added only if you say yes (`setup --remove` takes that line back out again,
+  along with the timers, the symlink and the config, and leaves the rest of
+  your `.bashrc` byte for byte as it was); and your `$HOME` itself, but only
+  when you run `restore --apply`.
 
 ## Prior art and thanks
 
@@ -141,22 +141,55 @@ to back anything up on its own.
 
 ## Requirements
 
-Every external tool the CLI calls, with the package that provides it. All of
-them ship with Omarchy 4 except gitleaks and `gh`, which are both optional.
+Four tools are hard requirements: without `git`, `rsync`, `jq` or `flock` the
+CLI refuses to set up at all. Everything else below is used when it is there
+and skipped, or reported, when it is not.
+
+**Required**
 
 | Tool | Package | Used for | In Omarchy 4 |
 |---|---|---|---|
 | `git` | `git` | the data repo: commits, remotes, pushes | yes |
 | `rsync` | `rsync` | staging config into the repo and restoring it back | yes |
 | `jq` | `jq` | every JSON object the CLI reads or writes | yes |
-| `gum` | `gum` | the setup wizard's prompts | yes |
-| `systemd` (`systemctl`) | `systemd` | the snapshot and self-test timers | yes |
 | `flock` | `util-linux` | one snapshot (or lint, or verify) at a time | yes |
-| `gitleaks` | `gitleaks` | the content secret scan; gates push only | no, `pacman -S gitleaks` |
-| `gh` | `github-cli` | `setup --create-private` | no, optional |
 
-`omabackup setup check` names anything missing and the package that provides
-it.
+**Strongly recommended**
+
+| Tool | Package | Used for | In Omarchy 4 |
+|---|---|---|---|
+| `gitleaks` | `gitleaks` | the content secret scan. Without it nothing is ever pushed | no, `pacman -S gitleaks` |
+| `systemd` (`systemctl`) | `systemd` | the snapshot and self-test timers, and the services manifest | yes |
+| `gum` | `gum` | the setup wizard's prompts (without it every prompt takes its default) | yes |
+
+**Used when present**
+
+| Tool | Package | Used for | In Omarchy 4 |
+|---|---|---|---|
+| `curl` | `curl` | the GitHub visibility probe: is the remote really private? | yes |
+| `nm-online` | `networkmanager` | waiting briefly for the network before that probe | yes |
+| `fuser` | `psmisc` | proving an abandoned `.git/index.lock` really is abandoned | yes |
+| `setsid` | `util-linux` | starting a snapshot, or a terminal, detached from the widget | yes |
+| `python3` | `python` | re-parsing a normalized JSON file to prove the rule did not break it | yes |
+| `xdg-terminal-exec` or `omarchy-launch-floating-terminal-with-presentation` | `xdg-terminal-exec`, Omarchy | the popup's "open a terminal in the data repo" button | yes |
+| `wl-copy` | `wl-clipboard` | copying the gitleaks install command from the setup card | yes |
+| `omarchy-notification-send` or `notify-send` | Omarchy, `libnotify` | desktop notifications for a failed or diverged run | yes |
+| `gh` | `github-cli` | `setup --create-private` only | no, optional |
+
+**Manifest generators.** The daily run records facts about the machine using
+`pacman`, `dconf`, `nmcli`, `lpstat`, `timedatectl`, `localectl`,
+`fprintd-list`, `code`, `uv` and `npm`. Every one of them is optional: a tool
+that is not installed writes a documented placeholder, and the previous
+committed copy is carried forward rather than deleted.
+
+**`restore --packages --apply` runs a package manager as root.** It calls
+`sudo pacman -S --needed` for native packages and `yay -S --needed` for AUR
+packages, and prompts you the way those tools normally do. Nothing else in
+OmaBackup ever uses `sudo`; the dry run (no `--apply`) only prints what it
+would install.
+
+`omabackup setup check` names anything missing from the first two tables and
+the package that provides it.
 
 ## Install
 
@@ -183,10 +216,12 @@ omarchy plugin remove io.github.huey-holdings-llc.omabackup
 omabackup setup --remove
 ```
 
-`omarchy plugin remove` alone leaves the config, the timers and the CLI
-symlink behind; `setup --remove` disables and deletes the timers, the
-`~/.local/bin/omabackup` symlink and `~/.config/omabackup/config.json`. Your
-data repo and its remote are never touched by either command.
+`omarchy plugin remove` alone leaves the config, the timers, the CLI symlink
+and the `~/.bashrc` login check behind; `setup --remove` disables and deletes
+the timers, the `~/.local/bin/omabackup` symlink,
+`~/.config/omabackup/config.json`, and the two-line login check it added to
+`~/.bashrc` (nothing else in that file is touched). Your data repo and its
+remote are never touched by either command.
 
 ## Use
 
@@ -356,11 +391,16 @@ on `lib/` internals. Test-only environment hooks, documented here because
 they only ever matter to that harness: `OMABACKUP_CONFIG`,
 `OMABACKUP_STATE_DIR`, `OMABACKUP_STOCK_DIR` (a stand-in for
 `/usr/share/omarchy`), `OMABACKUP_NET=0` (skip the visibility probe's
-network wait), `OMABACKUP_NOTIFY=0`, `OMABACKUP_MIN_FILES` and
-`OMABACKUP_MIN_ALLOWLIST` (override the derived floors), `OMABACKUP_SKIP_ETC=1`
-and `OMABACKUP_ETC_ROOT` (keep the real `/etc` out of a fixture),
-`OMABACKUP_SKIP_TIMERS=1` (never touch the real `systemctl --user`), and
-`OMABACKUP_LOCK_WAIT`.
+network wait) and `NET_WAIT` (how many seconds `nm-online` may wait when it
+does run), `OMABACKUP_NOTIFY=0`, `OMABACKUP_MIN_FILES` and
+`OMABACKUP_MIN_ALLOWLIST` (override the derived snapshot floors),
+`OMABACKUP_MIN_RESTORE` (override the floor `restore --configs` refuses
+below; this one lowers a data-safety guard, so it belongs in a fixture and
+nowhere else), `OMABACKUP_SKIP_ETC=1` and `OMABACKUP_ETC_ROOT` (keep the real
+`/etc` out of a fixture), `OMABACKUP_SKIP_DROPINS=1` (skip only the `/etc`
+drop-in half of the drift scan, defaulting to whatever `OMABACKUP_SKIP_ETC`
+says), `OMABACKUP_SKIP_TIMERS=1` (never touch the real `systemctl --user`),
+and `OMABACKUP_LOCK_WAIT`.
 
 Design docs: [docs/superpowers/specs/2026-09-03-omabackup-design.md](docs/superpowers/specs/2026-09-03-omabackup-design.md)
 and [docs/superpowers/plans/2026-09-03-omabackup-1.0.md](docs/superpowers/plans/2026-09-03-omabackup-1.0.md).
