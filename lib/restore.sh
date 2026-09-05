@@ -23,6 +23,27 @@ restore_warn() { warn "$*"; RESTORE_FAILURES=$((RESTORE_FAILURES+1)); }
 # not attempted.
 restore_skip() { RESTORE_SKIPPED+=("{\"path\":$(jstr "$1"),\"reason\":$(jstr "$2")}"); }
 
+# restore_mode_target BASE REL: print the path a modes.txt record names,
+# resolved, or fail when it is not a real path lying directly under BASE.
+#
+# The record itself was validated (mode digits, a "home/" prefix, no ".."
+# segment, the final component not a symlink) and then resolved through
+# whatever the freshly-rsynced tree happened to contain. A hostile repo
+# shipping `home/link -> /home/you/.ssh` plus a record for
+# `home/link/id_ed25519` therefore got a chmod on the real key (600 to 644,
+# proven), and the restore still printed "completed with no failures".
+# Comparing the RESOLVED path against BASE + REL rejects a symlinked
+# component anywhere along the path, not just at the end, and confines the
+# result to BASE in the same comparison. Used by verify's own mode check too,
+# with the throwaway as BASE.
+restore_mode_target() {
+  local base=$1 rel=$2 base_real real
+  base_real=$(realpath -e -- "$base" 2>/dev/null) || return 1
+  real=$(realpath -e -- "$base/$rel" 2>/dev/null) || return 1
+  [[ "$real" == "$base_real/$rel" ]] || return 1
+  printf '%s' "$real"
+}
+
 # ---------------------------------------------------------- configs
 # restore_stage_configs APPLY: copy $DATA_REPO/home back into $HOME.
 restore_stage_configs() {
@@ -159,7 +180,15 @@ restore_stage_configs() {
         case "$path" in *..*) restore_warn "suspicious modes.txt path, skipping: $path"; continue ;; esac
         [[ -e "$DATA_REPO/$path" ]] || continue
         tgt="$HOME/${path#home/}"
+        # Absent here is routine (.gitkeep is excluded from the restore), so
+        # it stays a silent skip; a path that EXISTS but resolves somewhere
+        # else is the attack, and that is reported.
+        [[ -e "$tgt" || -L "$tgt" ]] || continue
         [[ -L "$tgt" ]] && continue
+        if ! tgt=$(restore_mode_target "$HOME" "${path#home/}"); then
+          restore_warn "refusing to replay a mode through a symlinked path: $path"
+          continue
+        fi
         if [[ -f "$tgt" || -d "$tgt" ]]; then chmod "$mode" "$tgt"; fi
       done < "$DATA_REPO/modes.txt"
     fi

@@ -1943,5 +1943,39 @@ if group 72 "a GitHub remote is recognised whatever the URL spelling, and is nev
   eq "the scp-like spelling is refused too" "$(obj setup --trust-remote --yes --no-timers | jq -r .ok)" "false"
 fi
 
+if group 73 "a modes.txt record never chmods through a symlinked path"; then
+  # The replay validated the RECORD (mode digits, a "home/" prefix, no ".."
+  # segment, the final component not a symlink) and then resolved it through
+  # whatever the freshly-rsynced tree contained. A repo shipping
+  # "home/link -> ~/.ssh" plus a record for "home/link/id_ed25519" got a chmod
+  # on the real key, and restore printed "completed with no failures".
+  mk_fixture g73; seed_home; commit_baseline
+  mkdir -p "$FH/.ssh"; printf 'PRIVATE KEY\n' > "$FH/.ssh/id_ed25519"; chmod 600 "$FH/.ssh/id_ed25519"
+  ln -sfn "$FH/.ssh" "$FR/home/link"
+  printf '644 home/link/id_ed25519\0' >> "$FR/modes.txt"
+  git -C "$FR" add -A >/dev/null && git -C "$FR" commit -qm "a repo carrying a symlinked mode record"
+
+  r73=$(ob restore --configs --apply)
+  eq "the real key keeps mode 600" "$(stat -c %a "$FH/.ssh/id_ed25519")" "600"
+  has "the restore says it refused the record" "$r73" "refusing to replay a mode through a symlinked path"
+  j73=$(obj restore --configs --apply)
+  eq "the refusal counts as a failure, not a clean run" "$(jq -r .ok <<<"$j73")" "false"
+  eq "the key is still 600 after the JSON run too" "$(stat -c %a "$FH/.ssh/id_ed25519")" "600"
+
+  # verify reads modes.txt the same way, against its own throwaway.
+  v73=$(obj verify)
+  eq "verify refuses the record instead of reading a mode from outside" "$(jq -r .ok <<<"$v73")" "false"
+  has "verify names the symlinked path" "$(jq -r '.mismatched[]' <<<"$v73")" "resolves outside"
+
+  # An ordinary record still replays: the guard must not disarm the feature.
+  rm -f "$FR/home/link"
+  : > "$FR/modes.txt"
+  printf '600 home/.bashrc\0' >> "$FR/modes.txt"
+  git -C "$FR" add -A >/dev/null && git -C "$FR" commit -qm "an ordinary mode record"
+  chmod 644 "$FH/.bashrc"
+  check "restore --apply runs" env HOME="$FH" "$CLI" restore --configs --apply
+  eq "an ordinary record still replays" "$(stat -c %a "$FH/.bashrc")" "600"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

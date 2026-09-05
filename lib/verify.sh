@@ -205,7 +205,19 @@ cmd_verify() {
       case "$path" in *..*) continue ;; esac
       rel="${path#home/}"
       tgt="$R/$rel"
+      [[ -e "$tgt" || -L "$tgt" ]] || continue
       [[ -L "$tgt" ]] && continue
+      # Same confinement as the replay in restore_stage_configs: a record
+      # whose path resolves through a symlinked component names a file
+      # outside the throwaway entirely, so its mode says nothing about the
+      # backup and reading it as agreement would hide a real fidelity gap.
+      if ! tgt=$(restore_mode_target "$R" "$rel"); then
+        # shellcheck disable=SC2088  # literal "~/" prefix, not a path to expand
+        verify_mismatch "~/$rel (modes.txt path resolves outside the restored copy or through a symlink)"
+        badmode=$((badmode+1))
+        [[ "$badmode" -ge 20 ]] && break
+        continue
+      fi
       [[ -f "$tgt" || -d "$tgt" ]] || continue
       got=$(stat -c %a "$tgt" 2>/dev/null) || got=""
       if [[ "$got" != "$mode" ]]; then
