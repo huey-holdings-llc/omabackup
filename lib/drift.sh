@@ -576,13 +576,40 @@ cmd_drift() {
 # set at file scope and leaked into every other verb for the rest of the
 # process, the same class of leak Task 5 fixed for nullglob.
 drift_items_json() {
-  local items=() path line
+  local items=() path line opt rel
+  drift_optional_load
   while IFS= read -r line; do
     drift_line_split "$line" || continue
     path=${DRIFT_PATH%/}   # a directory's trailing "/" is report display flourish, not part of the path
-    items+=("{\"type\":$(jstr "$DRIFT_TYPE"),\"path\":$(jstr "$path"),\"note\":$(jstr "$DRIFT_NOTE")}")
+    # `optional` is only ever meaningful on a GONE row, and it is false
+    # everywhere else rather than absent: the popup reads one shape for every
+    # row, and a typed QML property must never be assigned undefined.
+    opt=false
+    if [[ "$DRIFT_TYPE" == GONE ]]; then
+      rel=${path#\~/}
+      [[ -z "${DRIFT_OPTIONAL[$rel]:-}" ]] || opt=true
+    fi
+    items+=("{\"type\":$(jstr "$DRIFT_TYPE"),\"path\":$(jstr "$path"),\"note\":$(jstr "$DRIFT_NOTE"),\"optional\":$opt}")
   done
   jjoin "${items[@]}"
+}
+
+# DRIFT_OPTIONAL: the allowlist entries carrying the '?' optional marker,
+# keyed by entry. Filled by drift_optional_load, read by drift_items_json.
+#
+# Every seed entry ships optional, and a fresh machine has none of the apps
+# they name, so day one is a column of GONE rows. "Mark optional" on one of
+# those changed nothing and still replied ok, so the row vanished from the
+# popup and came back at the next snapshot. The popup can only hide that
+# button if the engine tells it which rows are already optional; this is that
+# fact, derived from the allowlist rather than guessed at in QML.
+declare -A DRIFT_OPTIONAL=()
+drift_optional_load() {
+  DRIFT_OPTIONAL=()
+  local e
+  while IFS= read -r e; do
+    case "$e" in \?*) DRIFT_OPTIONAL[${e#\?}]=1 ;; esac
+  done < <(read_list "$DATA_REPO/allowlist.txt")
 }
 # drift_parse FILE: emit JSON items from a saved report file, honouring the sentinel.
 drift_parse() { drift_items_json < "$1"; }

@@ -1228,6 +1228,28 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
   printf '.config/gonezo\n' >> "$FR/allowlist.txt"
   eq "resolve-gone optional: accepted" "$(obj resolve-gone "$(tp .config/gonezo)" optional | jq -r .ok)" "true"
   grep -qx '?.config/gonezo' "$FR/allowlist.txt" && ok "resolve-gone optional: '?' prefixed" || bad "optional marker missing"
+  # Twice is the case a fresh machine hits first: every seed entry ships
+  # optional, so day one is a column of GONE rows whose "Mark optional" button
+  # reprinted the line unchanged, replied ok, and let the popup mark the row
+  # handled -- then the next snapshot brought it straight back.
+  out51=$(obj resolve-gone "$(tp .config/gonezo)" optional)
+  eq "resolve-gone optional: refused on an already-optional entry" "$(jq -r .ok <<<"$out51")" "false"
+  has "the refusal points at Remove" "$(jq -r '.problems[0]' <<<"$out51")" "already optional"
+  eq "resolve-gone optional: the allowlist still carries exactly one entry" \
+    "$(grep -cx '?.config/gonezo' "$FR/allowlist.txt")" "1"
+  # The popup can only hide that button if the engine says which rows are
+  # already optional, so the GONE item carries the fact.
+  eq "the GONE item reports that its entry is optional" \
+    "$(obj status | jq -r '.drift[] | select(.type == "GONE") | .optional')" "true"
+  eq "and a NEW row carries the field as false rather than leaving it out" \
+    "$(obj status | jq -r '.drift[] | select(.type == "NEW") | .optional' | sort -u)" "false"
+  # A REQUIRED entry that vanished is a GONE row too, and marking that one
+  # optional is the whole point of the button.
+  sed -i 's/^?\.config\/gonezo$/.config\/gonezo/' "$FR/allowlist.txt"
+  eq "a required entry's GONE row is not reported as optional" \
+    "$(obj status | jq -r '.drift[] | select(.type == "GONE") | .optional')" "false"
+  eq "resolve-gone optional: still accepted on a required entry" \
+    "$(obj resolve-gone "$(tp .config/gonezo)" optional | jq -r .ok)" "true"
   eq "resolve-gone: refuses a path drift does not list as GONE" \
     "$(obj resolve-gone "$(tp .config/appz/z.toml)" remove | jq -r .ok)" "false"
 

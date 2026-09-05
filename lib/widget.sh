@@ -224,6 +224,18 @@ cmd_resolve_gone() {
   case "$verb" in remove|optional) ;; *) widget_reply_fail "usage: resolve-gone <path> remove|optional"; return 1 ;; esac
   drift_has "$raw" 'GONE' \
     || { widget_reply_fail "the drift report does not list that path as GONE"; return 1; }
+  # "Mark optional" on an entry that is ALREADY optional used to reprint the
+  # line unchanged and still reply ok, so the popup marked the row handled, it
+  # disappeared, and the next snapshot brought it straight back. Every seed
+  # entry ships optional and a fresh machine has none of the apps they name,
+  # so that was the first thing a new user clicked. Say what actually helps.
+  if [[ "$verb" == optional ]] && awk -v rel="$rel" '
+      { line=$0; sub(/[ \t]+#.*$/,"",line); sub(/[ \t]+$/,"",line) }
+      line=="?"rel { found=1; exit }
+      END { exit !found }' "$DATA_REPO/allowlist.txt"; then
+    widget_reply_fail "already optional; use Remove to drop the entry"
+    return 1
+  fi
   _widget_edit_gone() {
     local tmp
     tmp=$(mktemp "$DATA_REPO/.allowlist.widget-tmp.XXXXXX") || return 1

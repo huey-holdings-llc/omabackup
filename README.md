@@ -139,9 +139,10 @@ to back anything up on its own.
 * **Popup triage**: `NEW` files grouped by folder, biggest first; one click
   Allows or Ignores a whole directory (folder targets are refused at depth
   one, so `~/.config/` can never be silenced by accident), a caret expands a
-  folder to single files, `GONE` rows offer Remove or Mark-optional, and a
-  notes toggle switches Ignore between a dated default reason and asking for
-  one.
+  folder to single files, `GONE` rows offer Remove or Mark-optional (the
+  second only while the entry is not already optional; every seed entry is,
+  so on a fresh machine those rows offer Remove alone), and a notes toggle
+  switches Ignore between a dated default reason and asking for one.
 * **Fail-closed guards**: a large fraction of allowlist entries vanishing at
   once (a few missing is recorded as `GONE` and the run continues; at or
   above `maxMissingPct` it refuses, counting every entry this repo has ever

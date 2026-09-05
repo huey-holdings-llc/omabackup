@@ -21,6 +21,9 @@ Item {
 
   readonly property bool isNew: entry.type === "NEW"
   readonly property bool isGone: entry.type === "GONE"
+  // An entry that is already optional cannot be marked optional again: the
+  // engine refuses it now, and the button that always did nothing goes away.
+  readonly property bool alreadyOptional: entry.optional === true
 
   implicitHeight: Math.max(tag.implicitHeight, actions.implicitHeight)
 
@@ -84,7 +87,7 @@ Item {
       onClicked: root.goneRequested(root.entry.path, "remove")
     }
     AccessibleActionButton {
-      visible: root.isGone
+      visible: root.isGone && !root.alreadyOptional
       enabled: !root.busy
       iconText: "󰘥"
       tooltipText: "Mark optional (may come back; a missing path stops warning)"
