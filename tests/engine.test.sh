@@ -2149,5 +2149,32 @@ PROBE2
   check "an ordinary locking verb still runs" env HOME="$FH" "$CLI" snapshot --no-push
 fi
 
+if group 79 "a restore stage that fails still leaves one JSON object and a released lock"; then
+  # cmd_restore ran its stages as `[[ do_x ]] && stage_x`, so a stage that
+  # returned non-zero exited the process on the spot under errexit: no later
+  # stage ran, drop_lock never ran, and restore_emit never printed the single
+  # JSON object every verb promises under --json. Every stage happens to end
+  # on a zero-returning statement today, which is not a property anyone can
+  # rely on while adding the next one.
+  mk_fixture g79; seed_home; commit_baseline
+  # An etc/ tree the stage cannot enumerate: the stage now says so and returns
+  # non-zero, which is exactly the shape the chain has to survive.
+  chmod 000 "$FR/etc"
+  r79=$(env HOME="$FH" "$CLI" restore --etc --services --json 2>/dev/null)
+  rc79=$?
+  chmod 700 "$FR/etc"
+  eq "the reply is exactly one JSON object" "$(jq -s 'length' <<<"$r79" 2>/dev/null || echo 0)" "1"
+  eq "the run reports the failure rather than vanishing" "$(jq -r .ok <<<"$r79")" "false"
+  eq "a failing stage still exits 1, not the stage's own status" "$rc79" "1"
+  has "the unreadable tree is named in skipped[]" "$(jq -r '.skipped[].reason' <<<"$r79")" "not readable"
+  # The stage AFTER the failing one still ran: that is what proves the chain
+  # continued rather than the process having died inside restore_stage_etc.
+  eq "the later stage still ran" \
+    "$(jq -r '[.would_write[] | select(startswith("service:"))] | length > 0' <<<"$r79")" "true"
+  # And the lock was dropped, not held to process exit: the very next verb
+  # takes the same lock with the fixture's 2-second wait.
+  check "the next locking verb takes the lock straight away" env HOME="$FH" "$CLI" snapshot --no-push
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

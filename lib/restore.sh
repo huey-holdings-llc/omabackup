@@ -234,6 +234,16 @@ restore_stage_etc() {
     restore_note "no etc/ directory in the repo"
     return 0
   fi
+  # Fail closed on a tree this cannot enumerate. `find` inside the process
+  # substitution below reports its failure to nobody, so an unreadable etc/
+  # printed no rows at all -- byte-identical to "every /etc file matches".
+  # Non-zero return: the stage did not do its job, and cmd_restore's chain is
+  # written so a stage saying so no longer costs the caller its JSON reply.
+  if [[ ! -r "$DATA_REPO/etc" || ! -x "$DATA_REPO/etc" ]]; then
+    restore_warn "cannot read $DATA_REPO/etc -- the /etc comparison was NOT made"
+    restore_skip "etc" "the repo's etc/ directory is not readable"
+    return 1
+  fi
   while IFS= read -r rel; do
     if [[ ! -e "$etc_root/$rel" ]]; then
       [[ $JSON == 1 ]] || printf '  \033[1;33mMISSING\033[0m  /etc/%s\n' "$rel"
@@ -488,11 +498,19 @@ cmd_restore() {
   if ! take_lock; then
     restore_warn "the repo lock is held (a snapshot may be running); try again shortly"
   else
-    [[ "$do_configs" == 1 ]]  && restore_stage_configs "$apply"
-    [[ "$do_etc" == 1 ]]      && restore_stage_etc "$apply"
-    [[ "$do_packages" == 1 ]] && restore_stage_packages "$apply"
-    [[ "$do_plugins" == 1 ]]  && restore_stage_plugins "$apply"
-    [[ "$do_services" == 1 ]] && restore_stage_services "$apply"
+    # One `if` per stage, and `|| true` on the call. The chain used to be
+    # `[[ ... ]] && stage`, where the stage is the final command of an AND
+    # list: under errexit a stage that returned non-zero took the whole
+    # process down right there, skipping every later stage, drop_lock and
+    # restore_emit -- so a --json caller got no JSON object at all (the one
+    # thing the contract guarantees) and the flock was held until the process
+    # died. A stage that fails has already said so through restore_warn, which
+    # is what RESTORE_FAILURES and ok:false are for.
+    if [[ "$do_configs" == 1 ]];  then restore_stage_configs "$apply"  || true; fi
+    if [[ "$do_etc" == 1 ]];      then restore_stage_etc "$apply"      || true; fi
+    if [[ "$do_packages" == 1 ]]; then restore_stage_packages "$apply" || true; fi
+    if [[ "$do_plugins" == 1 ]];  then restore_stage_plugins "$apply"  || true; fi
+    if [[ "$do_services" == 1 ]]; then restore_stage_services "$apply" || true; fi
     drop_lock
   fi
 
