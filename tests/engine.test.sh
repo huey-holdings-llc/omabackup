@@ -2102,5 +2102,52 @@ if group 77 "the data repo root and .git are 0700 on every path into the repo"; 
   eq "the verb ends 0700 on both paths" "$(stat -c %a "$FR")/$(stat -c %a "$FR/.git")" "700/700"
 fi
 
+if group 78 "a nested take_lock does not release the caller's lock"; then
+  # The one check in this suite that is not black box, and deliberately so:
+  # the defect is that a verb calling another locking verb IN-PROCESS released
+  # the outer lock, and every verb-calls-verb site today happens to fork a
+  # subshell (a command substitution), so no verb can reach the nesting from
+  # outside. The probe below sources lib/lock.sh, nests a take, and asks a
+  # SEPARATE process whether the file is still locked -- which is exactly the
+  # question the guard exists to answer.
+  mk_fixture g78
+  cat > "$T/lockprobe.sh" <<PROBE
+#!/usr/bin/env bash
+set -euo pipefail
+JSON=0
+. "$HERE/../lib/common.sh"
+. "$HERE/../lib/lock.sh"
+DATA_REPO="$FR"
+held() { if flock -n "\$DATA_REPO/.lock" -c true 2>/dev/null; then echo free; else echo held; fi; }
+take_lock
+take_lock          # nested: a no-op, not a second open
+drop_lock          # inner drop: must NOT release
+held
+drop_lock          # outer drop: releases
+held
+PROBE
+  chmod +x "$T/lockprobe.sh"
+  p78=$(bash "$T/lockprobe.sh")
+  eq "the inner drop leaves the lock held, the outer one releases it" "$(tr '\n' ' ' <<<"$p78")" "held free "
+  # ...and the ordinary single take/drop pair still behaves, so the counter
+  # has not simply pinned the lock open for the life of the process.
+  cat > "$T/lockprobe2.sh" <<PROBE2
+#!/usr/bin/env bash
+set -euo pipefail
+JSON=0
+. "$HERE/../lib/common.sh"
+. "$HERE/../lib/lock.sh"
+DATA_REPO="$FR"
+take_lock
+if flock -n "\$DATA_REPO/.lock" -c true 2>/dev/null; then echo free; else echo held; fi
+drop_lock
+if flock -n "\$DATA_REPO/.lock" -c true 2>/dev/null; then echo free; else echo held; fi
+PROBE2
+  eq "one take, one drop still locks then releases" "$(bash "$T/lockprobe2.sh" | tr '\n' ' ')" "held free "
+  # A verb still runs end to end with the counting lock in place.
+  seed_home
+  check "an ordinary locking verb still runs" env HOME="$FH" "$CLI" snapshot --no-push
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
