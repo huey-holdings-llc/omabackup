@@ -103,7 +103,14 @@ restore_stage_configs() {
   fi
 
   local epoch; epoch=$(date +%s)
-  log "Restoring configs into \$HOME"
+  # A dry run used to announce "Restoring configs into $HOME" before it
+  # printed anything with "[dry]" in it, so a cautious reader working top
+  # down believed they had just overwritten their home directory.
+  if [[ "$apply" == 1 ]]; then
+    log "Restoring configs into \$HOME"
+  else
+    log "[dry] nothing will be written; add --apply to do it for real"
+  fi
 
   # Type conflicts: a FILE in $HOME where the snapshot has a DIRECTORY (or
   # vice versa, or a symlink either way) is invisible to the per-file backup
@@ -216,10 +223,37 @@ restore_stage_configs() {
         if [[ -f "$tgt" || -d "$tgt" ]]; then chmod "$mode" "$tgt"; fi
       done < "$DATA_REPO/modes.txt"
     fi
+    # The .bak.<epoch> copies are the only way back, and the human output
+    # never mentioned them: RESTORE_BACKED_UP was emitted under --json alone,
+    # so anyone who did not ask for JSON was told "completed with no failures"
+    # and never learned the undo copies existed.
+    local n_bak=${#RESTORE_BACKED_UP[@]}
+    if [[ "$n_bak" -gt 0 ]]; then
+      log "$n_bak file(s) copied aside as <path>.bak.$epoch; delete them once you are happy"
+    fi
     log "Done. Run 'omarchy restart shell' or log out for shell.json to take effect."
   else
     log "[dry] --configs would restore ${have_n:-0} file(s)/link(s) into \$HOME"
+    restore_list_would
   fi
+}
+
+# restore_list_would: name the first RESTORE_WOULD paths in the human dry run.
+# A count on its own is not a preview: the whole point of a dry run is seeing
+# WHICH files it would touch, and those paths were emitted under --json only.
+# The array holds JSON strings (jstr), so one jq call decodes the lot rather
+# than one fork per line.
+RESTORE_WOULD_SHOWN=20
+restore_list_would() {
+  [[ ${#RESTORE_WOULD[@]} -gt 0 ]] || return 0
+  [[ "${JSON:-0}" == 1 ]] && return 0
+  local p
+  while IFS= read -r p; do
+    [[ -n "$p" ]] && printf '      %s\n' "$p"
+  done < <(jq -r ".[0:${RESTORE_WOULD_SHOWN}][]" <<<"[$(jjoin "${RESTORE_WOULD[@]}")]" 2>/dev/null)
+  local extra=$(( ${#RESTORE_WOULD[@]} - RESTORE_WOULD_SHOWN ))
+  [[ "$extra" -gt 0 ]] && printf '      ... and %s more (omabackup restore --configs --json lists them all)\n' "$extra"
+  return 0
 }
 
 # ---------------------------------------------------------- etc

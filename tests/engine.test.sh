@@ -239,6 +239,11 @@ if group 06 "restore --configs: dry run touches nothing, --apply backs up and ne
   mkdir -p "$FH/.config/appb"; printf '{"a":1}\n' > "$FH/.config/appb/settings.json"
   chmod 600 "$FH/.config/appb/settings.json"; chmod 700 "$FH/.config/appb"
   allow '.config/appb'; allow '.config/mytool'
+  # Enough files that the dry run's listing has to cap itself: a real $HOME
+  # has thousands, and 20 names plus a count is the preview, not a wall.
+  mkdir -p "$FH/.config/appmany"
+  for i in $(seq 1 25); do printf 'many %s\n' "$i" > "$FH/.config/appmany/f$i.conf"; done
+  allow '.config/appmany'
   printf 'x\n' > "$FH/.config/mytool/trailing .conf "; chmod 600 "$FH/.config/mytool/trailing .conf "
   check "baseline snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
 
@@ -254,6 +259,22 @@ if group 06 "restore --configs: dry run touches nothing, --apply backs up and ne
   eq "dry run left \$FH byte-for-byte unchanged" "$after" "$before"
   eq "json: applied is false on a dry run" "$(obj restore --configs | jq -r .applied)" "false"
   eq "json: a dry run writes nothing" "$(obj restore --configs | jq -r '.wrote | length')" "0"
+
+  # --- the human dry run: it must not open by announcing a restore, and a
+  # count on its own is not a preview of what it would touch ---
+  dry06=$(ob restore --configs)
+  has "the dry run leads with what it will not do" "$dry06" "\[dry\] nothing will be written; add --apply to do it for real"
+  [[ "$dry06" != *"Restoring configs into"* ]] \
+    && ok "the dry run never says it is restoring" || bad "the dry run announced a restore"
+  # shellcheck disable=SC2088  # the literal "~/" the report prints, not a path to expand
+  has "the dry run names the paths it would write, not just a count" "$dry06" "~/.config/appmany/f"
+  # The cap: 20 paths, then a count of the rest, so a real \$HOME does not
+  # scroll the terminal away.
+  eq "the dry run lists at most 20 paths" \
+    "$(grep -c '^      ~/' <<<"$dry06")" "20"
+  has "and says how many it did not list" "$dry06" "and .* more"
+  eq "the dry run still prints exactly one JSON object under --json" \
+    "$(obj restore --configs | jq -s 'length')" "1"
 
   # --- --apply: overwrites the tracked file, leaves a .bak.<epoch> copy,
   # never deletes the file the snapshot never saw ---
@@ -272,6 +293,15 @@ if group 06 "restore --configs: dry run touches nothing, --apply backs up and ne
   # shellcheck disable=SC2088  # literal "~/" prefix inside a jq filter/expected value, not a path to expand
   eq "json names the backed-up file in backed_up[]" \
     "$(jq -r '.backed_up[] | select(. == "~/.config/mytool/mytool.conf")' <<<"$out")" "~/.config/mytool/mytool.conf"
+
+  # The .bak.<epoch> copies are the only way back from an --apply, and the
+  # human output never mentioned them at all: they were emitted under --json
+  # alone, so a user who did not ask for JSON read "completed with no
+  # failures" and never learned the copies existed.
+  printf 'LOCAL EDIT AGAIN\n' > "$FH/.config/mytool/mytool.conf"
+  apply06=$(ob restore --configs --apply)
+  has "--apply says how many copies it made aside, and where" "$apply06" "file(s) copied aside as <path>.bak."
+  has "and how to be rid of them" "$apply06" "delete them once you are happy"
 
   # --- permissions and a trailing-space filename survive a restore into a
   # FRESH $HOME. Git checks every directory out as 755 and every file gets
