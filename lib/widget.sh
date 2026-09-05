@@ -233,6 +233,20 @@ cmd_push() {
 
   if [[ ${#dirty[@]} -gt 0 ]]; then
     if ! take_lock; then widget_reply_fail "the repo lock is held (a snapshot may be running); try again shortly"; return 1; fi
+    # `git commit` commits the whole INDEX, not just the paths staged below.
+    # The same defect the snapshot pipeline had: anything already staged when
+    # the button was pressed -- a hand `git add` under home/, or what a run
+    # that died between staging and committing left behind -- rode into this
+    # list commit and was pushed with it. Unstage first. `git reset` leaves
+    # the working tree alone, so the other edit survives as an uncommitted
+    # change and is still reported by status and the login nag.
+    if ! git -C "$DATA_REPO" diff --cached --quiet; then
+      local pre
+      pre=$( { git -C "$DATA_REPO" diff --cached --name-only || true; } | awk 'NR<=5' | paste -sd' ' )
+      warn "unstaging edits that were staged before this push (they stay as uncommitted changes): $pre"
+      git -C "$DATA_REPO" reset -q \
+        || { drop_lock; widget_reply_fail "could not unstage pre-existing staged changes"; return 1; }
+    fi
     git -C "$DATA_REPO" add -- "${dirty[@]}" \
       || { drop_lock; widget_reply_fail "git add failed for the listed files"; return 1; }
     # AUTHORITATIVE GATE, the same one the snapshot pipeline runs before its

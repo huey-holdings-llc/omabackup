@@ -1523,6 +1523,23 @@ FAKEGL
   eq "a clean list edit still commits" "$(pj65 push --confirm | jq -r .ok)" "true"
   eq "the clean edit is committed" "$(git -C "$FR" status --porcelain -- drift-ignore.txt | grep -c . || true)" "0"
 
+  # `git commit` commits the INDEX, not the paths this verb staged. An edit
+  # staged before the button was pressed -- snapshot output left behind by a
+  # run that died between staging and committing, or a hand `git add` -- rode
+  # into the list commit and was pushed with it. Same defect, same fix as the
+  # snapshot pipeline: unstage first, working tree untouched.
+  printf '\n# staged by hand, nothing to do with the lists\n' >> "$FR/home/.bashrc"
+  git -C "$FR" add home/.bashrc
+  printf '\n# another clean note\n' >> "$FR/drift-ignore.txt"
+  eq "a list edit still commits with an unrelated path pre-staged" "$(pj65 push --confirm | jq -r .ok)" "true"
+  eq "the commit touches only the watched list" \
+    "$(git -C "$FR" show --name-only --format= HEAD | grep -c . || true)" "1"
+  eq "the commit names the list, not the pre-staged path" \
+    "$(git -C "$FR" show --name-only --format= HEAD | grep -c '^drift-ignore.txt$' || true)" "1"
+  eq "the pre-staged edit survives as an unstaged modification" \
+    "$(git -C "$FR" status --porcelain -- home/.bashrc)" " M home/.bashrc"
+  git -C "$FR" checkout -q -- home/.bashrc
+
   # ...including on a machine with NO git identity at all. A fresh Omarchy
   # install has no ~/.gitconfig: the snapshot supplied a fallback identity and
   # this path did not, so the push button died with "Author identity unknown"
