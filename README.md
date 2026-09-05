@@ -12,9 +12,9 @@ your machine except a push to the private remote you chose.
 
 OmaBackup was built with AI assistance (Claude Code) by a hobbyist, not a
 professional developer. Every effort was made to follow good practice
-anyway: the code is reviewed by a second model on pull requests that touch
-`lib/` or the widget contract, every guard has a test that proves it fires,
-and every claim in this README was checked against the code. Please read the
+anyway: larger pull requests get a review from OpenAI Codex, requested by the
+maintainer, every guard has a test that proves it fires, and every claim in
+this README was checked against the code. Please read the
 source with that in mind, and if you know better, open an issue or a pull
 request. See [CONTRIBUTING.md](CONTRIBUTING.md) for the principles the
 project follows and a help-wanted list: other git hosts' visibility checks,
@@ -28,9 +28,10 @@ your own; the MIT license is there for exactly that.
 
 ## Privacy and security
 
-The allowlist is the model: nothing outside `allowlist.txt` is ever staged,
-and the drift scan exists to report what that list omits, not to back
-anything up on its own.
+The two allowlists are the model: nothing under `$HOME` outside
+`allowlist.txt`, and nothing under `/etc` outside `etc-allowlist.txt`, is
+ever staged, and the drift scan exists to report what those lists omit, not
+to back anything up on its own.
 
 * **Two secret gates.** A filename gate always runs on the staging tree,
   refusing credential-looking basenames (`ghp_`, `gho_`, `github_pat_`,
@@ -54,10 +55,16 @@ anything up on its own.
 * **No token ever touches this tool.** Push authentication is whatever git
   already has configured (SSH key, credential helper, a deploy key); the
   engine never reads, stores or passes one.
-* **What it never writes.** OmaBackup reads your Omarchy, Hyprland and shell
-  config; it never edits any of it. It writes only to the data repo it
-  owns, its own config and state files, and your systemd user directory
-  during setup.
+* **What it writes, and what it only reads.** OmaBackup reads your Omarchy
+  and Hyprland config; it never edits either. Outside that, it writes to a
+  known, short list of places: the data repo it owns; its own config
+  (`~/.config/omabackup/config.json`) and state files; the five unit files
+  it installs into `~/.config/systemd/user/`; the `~/.local/bin/omabackup`
+  symlink; one opt-in line appended to `~/.bashrc`, offered at setup and
+  added only if you say yes (`setup --remove` disables the timers and
+  deletes the symlink and config, but it does not touch `~/.bashrc`; that
+  line is yours to remove by hand if you added it); and your `$HOME` itself,
+  but only when you run `restore --apply`.
 
 ## Prior art and thanks
 
@@ -100,21 +107,24 @@ anything up on its own.
 * **Drift report, five categories**: `omabackup drift` walks `$HOME` (and,
   unless skipped, `/etc`) for config that looks user-authored but is not
   covered by the allowlist: `NEW` (no stock counterpart), `MODIFIED`
-  (differs from Omarchy's stock default), `GONE` (an optional allowlist
-  entry that vanished), `TOOBIG` (over the size cap), `EXCLUDED` (matched
-  `.gitignore` after staging).
+  (differs from Omarchy's stock default), `GONE` (an allowlist entry that no
+  longer resolves, whether marked optional or simply under the missing-entry
+  threshold), `TOOBIG` (over the size cap), `EXCLUDED` (matched `.gitignore`
+  after staging).
 * **Popup triage**: `NEW` files grouped by folder, biggest first; one click
   Allows or Ignores a whole directory (folder targets are refused at depth
   one, so `~/.config/` can never be silenced by accident), a caret expands a
   folder to single files, `GONE` rows offer Remove or Mark-optional, and a
   notes toggle switches Ignore between a dated default reason and asking for
   one.
-* **Fail-closed guards**: a missing allowlist entry, a floor breach (staged
-  files or allowlist entries dropping far below the last commit), a
-  symlinked directory inside the backup, a stale `.git/index.lock`, a repo
-  mid-merge or mid-rebase, a drift scan that did not finish, and a
-  confirmed-public remote all refuse the run instead of committing something
-  smaller or unverifiable.
+* **Fail-closed guards**: a large fraction of allowlist entries vanishing at
+  once (a few missing is recorded as `GONE` and the run continues; at or
+  above `maxMissingPct` it refuses), a floor breach (staged files or
+  allowlist entries dropping far below the last commit), a symlinked
+  directory inside the backup, an `index.lock` that cannot be proven
+  abandoned, a repo mid-merge or mid-rebase, a drift scan that did not
+  finish, and a confirmed-public remote all refuse the run instead of
+  committing something smaller or unverifiable.
 * **Manifests**: packages, systemd services, Omarchy plugin clones, dconf,
   printers, timezone, locale and more, each guarded so a tool that is not
   installed writes a documented placeholder instead of erasing yesterday's
@@ -155,9 +165,10 @@ omarchy plugin add https://github.com/huey-holdings-llc/omabackup --enable
 ```
 
 Then open the bar widget and press "Set up OmaBackup", or run
-`omabackup setup` yourself. Either way you will be asked where the data repo
-should live, whether to adopt an existing one, and for a remote to push to
-(or to stay local only).
+`omabackup setup` yourself. You will be asked where the data repo should
+live and for a remote to push to (or to stay local only). To adopt an
+existing engine repo instead of creating a new one, run
+`omabackup setup --import DIR` (adoption is a flag, not a wizard prompt).
 
 ## Update
 
@@ -360,8 +371,8 @@ Contribution principles: [CONTRIBUTING.md](CONTRIBUTING.md).
 The roadmap lives in the
 [issue tracker](https://github.com/huey-holdings-llc/omabackup/issues).
 
-Not planned: this plugin never syncs two machines, never runs as root, and
-never sends anything anywhere but the remote you configured.
+Not planned: syncing two machines, and sending anything anywhere but the
+remote you configured. It is also not designed or tested to run as root.
 
 ## License
 
