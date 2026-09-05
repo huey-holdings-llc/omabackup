@@ -27,3 +27,22 @@ repo_assert_clean() {
   git -C "$DATA_REPO" symbolic-ref --short -q HEAD >/dev/null || die "detached HEAD; check out main in $DATA_REPO first"
 }
 repo_branch() { git -C "$DATA_REPO" symbolic-ref --short -q HEAD; }
+
+# git_ident_args: fill GIT_IDENT_ARGS with the `-c user.*` a commit needs on a
+# machine that has no git identity at all, and leave it EMPTY on a machine
+# that has one -- the user's own name and address must never be overridden.
+# A fresh Omarchy install has no ~/.gitconfig, so without this every commit
+# this tool makes dies with "Author identity unknown". One helper because
+# every commit path needs it: the snapshot, both setup paths and the widget's
+# push button, which had it in one place only.
+#   git_ident_args
+#   git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit ...
+# shellcheck disable=SC2034  # GIT_IDENT_ARGS: filled here, read by the commit sites in snapshot/setup/widget
+GIT_IDENT_ARGS=()
+git_ident_args() {
+  GIT_IDENT_ARGS=()
+  local email
+  email=$(git -C "$DATA_REPO" config user.email 2>/dev/null || true)
+  # shellcheck disable=SC2034  # read by the commit sites in lib/snapshot.sh, lib/setup.sh and lib/widget.sh
+  [[ -n "$email" ]] || GIT_IDENT_ARGS=(-c user.name=OmaBackup -c user.email=omabackup@localhost)
+}

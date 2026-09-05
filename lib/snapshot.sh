@@ -443,13 +443,11 @@ snapshot_commit() {
   # pipefail would abort the run one line before `git commit`.
   local summary
   summary=$( { git -C "$DATA_REPO" diff --cached --name-only || true; } | cut -d/ -f1-2 | sort -u | awk 'NR<=8' | paste -sd' ' )
-  # A machine with no git identity configured cannot commit at all. Supply a
-  # repo-local one rather than failing, and only when the user has none: their
-  # own name and address must never be overridden.
-  local email; email=$(git -C "$DATA_REPO" config user.email 2>/dev/null || true)
-  local -a ident=()
-  [[ -n "$email" ]] || ident=(-c user.name=OmaBackup -c user.email=omabackup@localhost)
-  git -C "$DATA_REPO" ${ident[@]+"${ident[@]}"} commit -q \
+  # A machine with no git identity configured cannot commit at all. The
+  # fallback lives in git_ident_args (lib/lock.sh) so every commit path in
+  # this tool gets the same one.
+  git_ident_args
+  git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -q \
     -m "snapshot: $(date '+%Y-%m-%d %H:%M')" -m "areas: $summary" || die "git commit failed"
   COMMITTED=true
   log "Committed: $(git -C "$DATA_REPO" log -1 --format='%h %s' || true)"

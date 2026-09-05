@@ -1315,6 +1315,15 @@ if group 61 "setup --import adopts an existing engine repo; unattended trust sta
   jq '.remote.trusted=false' "$OMABACKUP_CONFIG" > "$T/c61" && mv "$T/c61" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
   check "import writes the marker" env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
   eq "marker format 1" "$(jq -r .format "$FR/.omabackup")" "1"
+  # Nothing else ever commits the marker: the snapshot commits its four output
+  # paths and push --confirm the five lists, so an uncommitted .omabackup meant
+  # a clone of the adopted repo carried no marker and every verb refused it.
+  eq "the adoption leaves the repo clean" "$(git -C "$FR" status --porcelain | grep -c . || true)" "0"
+  if git -C "$FR" log -1 --name-only --format= | grep -qx '.omabackup'; then
+    ok "the adoption commit names .omabackup"
+  else
+    bad "the marker was not committed" "$(git -C "$FR" log -1 --oneline --name-only)"
+  fi
   # $FR's origin is $BARE, a local path: not GitHub. An unattended run
   # (--yes, no tty, no --trust-remote) must never turn trust on for it.
   eq "unattended import never turns trust ON for a non-GitHub remote" \
@@ -1513,6 +1522,24 @@ FAKEGL
   printf '\n# clean note\n' >> "$FR/drift-ignore.txt"
   eq "a clean list edit still commits" "$(pj65 push --confirm | jq -r .ok)" "true"
   eq "the clean edit is committed" "$(git -C "$FR" status --porcelain -- drift-ignore.txt | grep -c . || true)" "0"
+
+  # ...including on a machine with NO git identity at all. A fresh Omarchy
+  # install has no ~/.gitconfig: the snapshot supplied a fallback identity and
+  # this path did not, so the push button died with "Author identity unknown"
+  # and left the five lists staged behind it. mk_fixture sets user.* on the
+  # fixture repo, so that has to go too for the assertion to mean anything.
+  git -C "$FR" config --unset user.email || true
+  git -C "$FR" config --unset user.name || true
+  NOID65="$T/noid-home"; mkdir -p "$NOID65"
+  printf '\n# clean note, no identity\n' >> "$FR/drift-ignore.txt"
+  head65=$(git -C "$FR" rev-parse HEAD)
+  i65=$(env HOME="$NOID65" GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 PATH="${GL65}$PATH" \
+    "$CLI" push --confirm --json 2>/dev/null)
+  eq "push --confirm commits on a machine with no git identity" "$(jq -r .ok <<<"$i65")" "true"
+  [[ "$(git -C "$FR" rev-parse HEAD)" != "$head65" ]] \
+    && ok "the identity-less run made a commit" || bad "no commit: the identity fallback did not fire"
+  eq "the fallback identity is the tool's own" "$(git -C "$FR" log -1 --format=%ae)" "omabackup@localhost"
+  eq "nothing is left staged" "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
 fi
 
 if group 66 "guards that had no proving assertion"; then

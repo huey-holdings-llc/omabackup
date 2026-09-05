@@ -253,8 +253,13 @@ cmd_push() {
       widget_reply_fail "the staged secret scan refused these files; staging undone, nothing committed"
       return 1
     fi
-    out=$(git -C "$DATA_REPO" commit -q -m "lists: update ${dirty[*]} via widget" 2>&1) \
-      || { drop_lock; widget_reply_fail "commit failed: $out"; return 1; }
+    # Same identity fallback as every other commit path: a machine with no
+    # ~/.gitconfig cannot commit at all, and this one failed with "Author
+    # identity unknown" and left the five lists staged behind it. The reset on
+    # failure is what keeps a refusal from leaving that mess.
+    git_ident_args
+    out=$(git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -q -m "lists: update ${dirty[*]} via widget" 2>&1) \
+      || { git -C "$DATA_REPO" reset -q 2>/dev/null || true; drop_lock; widget_reply_fail "commit failed: $out"; return 1; }
     drop_lock
   fi
   remote_push_if_ahead

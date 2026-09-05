@@ -195,7 +195,8 @@ setup_seed() {
   # `git commit -q` does not suppress "nothing to commit, working tree
   # clean" on stdout when a rerun has nothing new to lay down; that line
   # must never leak into a --json caller's single JSON object.
-  git -C "$DATA_REPO" -c user.name=OmaBackup -c user.email=omabackup@localhost commit -qm "omabackup: initial layout" >/dev/null 2>&1 || true
+  git_ident_args
+  git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -qm "omabackup: initial layout" >/dev/null 2>&1 || true
   setup_phase "seeded"
 }
 
@@ -229,9 +230,23 @@ setup_import() {
   DATA_REPO=$dir
   # shellcheck disable=SC2034  # STAGE: read by later libs (lib/config.sh), not this file
   STAGE="$dir/.staging"
-  [[ -f "$DATA_REPO/.gitignore" ]] || cp "$PLUGIN_DIR/share/data.gitignore" "$DATA_REPO/.gitignore"
-  [[ -f "$DATA_REPO/.gitleaks.toml" ]] || cp "$PLUGIN_DIR/share/gitleaks.toml" "$DATA_REPO/.gitleaks.toml"
+  # `adopted` collects exactly what THIS run wrote, so the commit below can
+  # stage it by name, the same half of the mutation rule setup_seed keeps.
+  local -a adopted=()
+  [[ -f "$DATA_REPO/.gitignore" ]] \
+    || { cp "$PLUGIN_DIR/share/data.gitignore" "$DATA_REPO/.gitignore"; adopted+=(.gitignore); }
+  [[ -f "$DATA_REPO/.gitleaks.toml" ]] \
+    || { cp "$PLUGIN_DIR/share/gitleaks.toml" "$DATA_REPO/.gitleaks.toml"; adopted+=(.gitleaks.toml); }
   setup_marker
+  adopted+=(.omabackup)
+  # Commit the marker. Nothing else ever does: the snapshot commits its four
+  # output paths and push --confirm the five lists, so an uncommitted
+  # .omabackup meant a clone of the adopted repo carried no marker at all and
+  # every verb refused it there. `|| true` for the same reason as setup_seed:
+  # a rerun with nothing new to write must be a silent no-op, not a failure.
+  git -C "$DATA_REPO" add -- "${adopted[@]}" >/dev/null || die "could not stage the adoption marker"
+  git_ident_args
+  git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -qm "omabackup: adopt existing repo" >/dev/null 2>&1 || true
   setup_phase "imported"
 }
 
