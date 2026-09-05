@@ -122,11 +122,24 @@ secrets_scan_staged() {
   # `|| rc=$?` for the same reason as secrets_scan_staging: under
   # `set -euo pipefail`, a failing command in a bare `if ...; then` body is
   # not errexit-exempt and would kill the process before reset/die ran.
+  # The two halves of one gate had different version tolerance:
+  # secrets_scan_staging probes for `gitleaks dir` and falls back to the older
+  # `detect --no-git`, while this half called `gitleaks git --staged` with no
+  # fallback at all. On a build without the `git` subcommand that is a non-zero
+  # exit, which dies -- so the authoritative gate stopped every snapshot on a
+  # machine whose other gate coped fine. `protect --staged` is the same scan
+  # under the pre-8.19 name.
+  local -a gl
+  if gitleaks git --help >/dev/null 2>&1; then
+    gl=(gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1)
+  else
+    gl=(gitleaks protect --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1)
+  fi
   local rc=0
   if [[ "${JSON:-0}" == 1 ]]; then
-    ( cd "$DATA_REPO" && gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1 >&2 ) || rc=$?
+    ( cd "$DATA_REPO" && "${gl[@]}" >&2 ) || rc=$?
   else
-    ( cd "$DATA_REPO" && gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1 ) || rc=$?
+    ( cd "$DATA_REPO" && "${gl[@]}" ) || rc=$?
   fi
   [[ $rc -eq 0 ]] || { git -C "$DATA_REPO" reset -q; die "gitleaks exited $rc on the staged commit; staging undone, nothing committed"; }
 }

@@ -2419,5 +2419,62 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
   eq "the mismatch is a fault, not a footnote" "$(jq -r .state <<<"$m85")" "fault"
 fi
 
+if group 86 "the gitleaks rules and the staged scan survive an older or a newer gitleaks"; then
+  # The rules file declared no minVersion (gitleaks asks for one by name) and
+  # used the deprecated singular [rules.allowlist]. A gitleaks 9 that drops the
+  # singular form makes both scans exit non-zero, which dies: fail-closed, but
+  # a total daily stoppage of the tool.
+  mk_fixture g86; seed_home; commit_baseline
+  has "the rules file states the version it needs" "$(cat "$HERE/../share/gitleaks.toml")" 'minVersion = "8.19.0"'
+  eq "no deprecated singular rule allowlist is left" \
+    "$(grep -c '^\s*\[rules\.allowlist\]' "$HERE/../share/gitleaks.toml" || true)" "0"
+  eq "the scoped allowlist is the plural form" \
+    "$(grep -c '^\s*\[\[rules\.allowlists\]\]' "$HERE/../share/gitleaks.toml" || true)" "1"
+  if command -v gitleaks >/dev/null; then
+    mkdir -p "$T/glempty"
+    g86=$(gitleaks dir "$T/glempty" -c "$HERE/../share/gitleaks.toml" --no-banner 2>&1 || true)
+    eq "the installed gitleaks parses it with nothing deprecated" "$(grep -ci 'deprecated' <<<"$g86" || true)" "0"
+    eq "and asks for no minVersion" "$(grep -ci 'minVersion' <<<"$g86" || true)" "0"
+  else
+    echo "  (gitleaks not installed: skipping the live parse)"
+  fi
+
+  # A build with no `git` subcommand: the staged gate had no fallback, so it
+  # died on every snapshot while the staging-tree gate coped. The fake refuses
+  # `git` the way an older binary would, and answers `protect --staged`.
+  mkdir -p "$T/fakebin"
+  cat > "$T/fakebin/gitleaks" <<'OLDGL'
+#!/bin/sh
+case "$1" in
+  git) echo "unknown command \"git\" for \"gitleaks\"" >&2; exit 1 ;;
+  protect)
+    case " $* " in
+      *" --staged "*)
+        if git diff --cached 2>/dev/null | grep -q 'sk-ant-'; then
+          echo "fake gitleaks (protect): anthropic-api-key found in a staged file"
+          exit 1
+        fi
+        ;;
+    esac
+    exit 0 ;;
+  dir) echo "unknown command \"dir\" for \"gitleaks\"" >&2; exit 1 ;;
+esac
+exit 0
+OLDGL
+  chmod +x "$T/fakebin/gitleaks"
+  o86() { env HOME="$FH" PATH="$T/fakebin:$PATH" "$CLI" "$@" --json 2>/dev/null; }
+  git -C "$FR" push -q -u origin main 2>/dev/null || true
+  printf '\n# a clean note\n' >> "$FR/drift-ignore.txt"
+  eq "a clean list edit commits on a build with no git subcommand" "$(o86 push --confirm | jq -r .ok)" "true"
+  # ...and the fallback is a real scan, not a shrug: the same build still
+  # refuses a planted secret.
+  key86="sk-ant-api03-$(rand_body 90)AA"
+  printf '\n# pasted by accident: %s\n' "$key86" >> "$FR/drift-ignore.txt"
+  p86=$(o86 push --confirm)
+  eq "the fallback still refuses a secret in a staged list file" "$(jq -r .ok <<<"$p86")" "false"
+  has "and names the staged scan" "$p86" "staged secret scan"
+  git -C "$FR" checkout -q -- drift-ignore.txt
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
