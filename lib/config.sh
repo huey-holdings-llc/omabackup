@@ -233,6 +233,22 @@ data_repo_assert_mode() {
   done
 }
 
+# data_repo_marker_format FILE: print the marker's format number, or return 1
+# printing nothing when the file is not JSON this tool can read.
+#
+# Both callers used to spell this `jq -r '.format // 0' … || echo 0`, which
+# substitutes a VALID answer for a parse failure: a corrupt or truncated
+# marker read as format 0, sailed through the `<= 1` check as a repo this
+# version understands, and setup then rewrote it -- so a half-written format:2
+# marker was silently replaced with format:1 and the one record of what wrote
+# the repo was gone. A parse failure is not a format; it is a refusal.
+data_repo_marker_format() {
+  local fmt
+  fmt=$(jq -r '.format // 0' "$1" 2>/dev/null) || return 1
+  case "$fmt" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$fmt"
+}
+
 # data_repo_require: the marker is the contract; refuse a repo we do not understand.
 data_repo_require() {
   [[ -d "$DATA_REPO/.git" ]] || die "data repo is not a git repository: $DATA_REPO"
@@ -243,8 +259,9 @@ data_repo_require() {
   # still refuses: a 1.1 repo may carry layout this version would misread, and
   # guessing is how a backup gets quietly damaged. setup_marker never lowers an
   # existing format, so the newer machine in a synced pair keeps working.
-  local fmt; fmt=$(jq -r '.format // 0' "$DATA_REPO/.omabackup" 2>/dev/null || echo 0)
-  case "$fmt" in ''|*[!0-9]*) die "data repo marker has no usable format field: $DATA_REPO/.omabackup" ;; esac
+  local fmt
+  fmt=$(data_repo_marker_format "$DATA_REPO/.omabackup") \
+    || die "data repo marker has no usable format field: $DATA_REPO/.omabackup"
   [[ "$fmt" -le 1 ]] || die "data repo format $fmt is newer than this version understands; upgrade omabackup"
   data_repo_assert_mode
 }

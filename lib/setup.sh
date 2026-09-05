@@ -211,8 +211,12 @@ setup_seed() {
 setup_marker() {
   local prev=0 fmt=1
   if [[ -f "$DATA_REPO/.omabackup" ]]; then
-    prev=$(jq -r '.format // 0' "$DATA_REPO/.omabackup" 2>/dev/null || echo 0)
-    case "$prev" in ''|*[!0-9]*) prev=0 ;; esac
+    # A marker that is there but unreadable is NOT format 0. Reading it as 0
+    # meant this function overwrote it with format:1, so a corrupt (or
+    # half-written) format:2 marker was quietly replaced by one saying the
+    # repo is older than it is. Refuse and leave the file exactly as found.
+    prev=$(data_repo_marker_format "$DATA_REPO/.omabackup") \
+      || die "data repo marker is not readable JSON: $DATA_REPO/.omabackup -- refusing to overwrite it"
   fi
   [[ "$prev" -le 1 ]] || fmt=$prev
   jq -cn --arg v "$VERSION" --argjson f "$fmt" '{format:$f, createdBy:$v}' > "$DATA_REPO/.omabackup"
@@ -227,6 +231,20 @@ setup_marker() {
 setup_import() {
   local dir=${1/#\~/$HOME}
   [[ -d "$dir/.git" ]] || die "$dir is not a git repository"
+  # THE MARKER FIRST, before this function touches anything. The format
+  # refusal used to fire much later -- data_repo_require, reached through the
+  # first drift scan -- by which time the config had been rewritten to point
+  # at the repo, .gitignore and .gitleaks.toml had been copied in, the marker
+  # had been rewritten and a commit had been made. So "this repo is newer than
+  # I understand" was announced only after adopting it. A repo this version
+  # cannot read must be left exactly as it was found.
+  if [[ -f "$dir/.omabackup" ]]; then
+    local ifmt
+    ifmt=$(data_repo_marker_format "$dir/.omabackup") \
+      || die "$dir has a .omabackup marker that is not readable JSON; refusing to adopt it"
+    [[ "$ifmt" -le 1 ]] \
+      || die "data repo format $ifmt is newer than this version understands; upgrade omabackup"
+  fi
   # Spec section 6: the five list files and the three trees. modes.txt and
   # etc/ were missing from this check, so a repo without them was adopted and
   # then failed later, in the snapshot, with a much worse message.

@@ -2627,9 +2627,39 @@ if group 87 "a repo or a config from a newer version is refused or ignored, neve
   s87=$(obj status)
   eq "format 2 is refused" "$(jq -r .ok <<<"$s87")" "false"
   has "the refusal says which way the gap runs" "$(jq -r .error <<<"$s87")" "newer than this version"
+  # A refused import must leave the repo and the config exactly as found. The
+  # format refusal used to fire from data_repo_require, reached through the
+  # first drift scan -- long after the config had been repointed, the seed
+  # files copied in, the marker rewritten and a commit made.
+  head87=$(git -C "$FR" rev-parse HEAD)
+  cfg87=$(cat "$OMABACKUP_CONFIG")
+  # The marker edit above is the test's own; compare the tree with itself.
+  tree87=$(git -C "$FR" status --porcelain)
   fails "setup --import cannot adopt it either" \
     env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
   eq "and the format:2 marker survives that attempt" "$(jq -r .format "$FR/.omabackup")" "2"
+  eq "the refused import made no commit" "$(git -C "$FR" rev-parse HEAD)" "$head87"
+  eq "the refused import left the working tree alone" \
+    "$(git -C "$FR" status --porcelain)" "$tree87"
+  eq "the refused import left the config alone" "$(cat "$OMABACKUP_CONFIG")" "$cfg87"
+
+  # A marker that is present but not JSON is NOT format 0. Read as 0 it passed
+  # every check, and setup then overwrote it with format:1 -- so a corrupt or
+  # half-written format:2 marker was replaced by one claiming the repo is
+  # older than it is, and the only record of what wrote it was gone.
+  printf 'garbage not json\n' > "$FR/.omabackup"
+  c87=$(obj status)
+  eq "an unparseable marker is refused" "$(jq -r .ok <<<"$c87")" "false"
+  has "the refusal names the marker" "$(jq -r .error <<<"$c87")" ".omabackup"
+  fails "setup will not adopt an unparseable marker either" \
+    env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
+  eq "and the unparseable marker is left byte for byte alone" \
+    "$(cat "$FR/.omabackup")" "garbage not json"
+  fails "a flagless setup rerun will not rewrite it either" \
+    env HOME="$FH" "$CLI" setup --data-repo "$FR" --no-timers --yes
+  eq "still untouched" "$(cat "$FR/.omabackup")" "garbage not json"
+  git -C "$FR" checkout -q -- . 2>/dev/null || true
+
   printf '{"format":1,"createdBy":"test"}\n' > "$FR/.omabackup"
   eq "an ordinary format:1 repo still works" "$(env HOME="$FH" "$CLI" status >/dev/null 2>&1; echo $?)" "0"
 
