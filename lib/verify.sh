@@ -107,7 +107,7 @@ cmd_verify() {
   # plus the modes.txt replay) rather than duplicating it, with $HOME
   # retargeted for the call and the restore floor lifted -- this is proving
   # the backup restores, not gating on how much of it there is.
-  local live_home="$HOME" saved_min="${OMABACKUP_MIN_RESTORE:-}"
+  local live_home="$HOME"
   # RESTORE_WOULD, RESTORE_WROTE, RESTORE_BACKED_UP and RESTORE_SKIPPED are
   # read by restore_stage_configs in lib/restore.sh, not this file.
   # shellcheck disable=SC2034
@@ -119,10 +119,13 @@ cmd_verify() {
   # shellcheck disable=SC2034
   RESTORE_SKIPPED=()
   RESTORE_FAILURES=0
-  HOME="$R"; OMABACKUP_MIN_RESTORE=1
-  restore_stage_configs 1
+  HOME="$R"
+  # Floor of 1, passed as the stage's second ARGUMENT. This used to be
+  # OMABACKUP_MIN_RESTORE=1 set in-process and put back afterwards, which is
+  # the same guard-weakening-through-the-environment shape lib/config.sh now
+  # refuses to honour from outside the test suite.
+  restore_stage_configs 1 1
   HOME="$live_home"
-  if [[ -n "$saved_min" ]]; then OMABACKUP_MIN_RESTORE="$saved_min"; else unset OMABACKUP_MIN_RESTORE; fi
 
   local -a MISMATCHED=()
   if [[ "$RESTORE_FAILURES" -gt 0 ]]; then

@@ -11,6 +11,36 @@ STATE_DIR="${OMABACKUP_STATE_DIR:-$XDG_STATE_HOME/omabackup}"
 STATUS_FILE="$STATE_DIR/status.json"
 LOG_FILE="$STATE_DIR/omabackup.log"
 STOCK_DIR="${OMABACKUP_STOCK_DIR:-/usr/share/omarchy}"
+
+# Guard-weakening test hooks, honoured ONLY when the suite marks itself with
+# OMABACKUP_IN_SUITE=1 (tests/engine.test.sh exports it at its own top).
+#
+# A `systemd --user` unit inherits the user manager's environment
+# (~/.config/environment.d/*.conf, `systemctl --user import-environment`, a
+# line in .bashrc), so one of these set once reached the daily timer forever
+# and nothing said so: OMABACKUP_MIN_FILES=1 disables the hollow-snapshot
+# floor that stops a collapsed staging tree overwriting a good backup, and
+# OMABACKUP_NET=0 makes the visibility probe skip the public-repo check
+# entirely. Outside the suite they are unset here and named in a health
+# problem below, so the widget reads fault rather than a quietly weaker guard.
+#
+# The path redirections (OMABACKUP_CONFIG, OMABACKUP_STATE_DIR,
+# OMABACKUP_STOCK_DIR, OMABACKUP_ETC_ROOT) and OMABACKUP_SKIP_TIMERS,
+# OMABACKUP_LOCK_WAIT and OMABACKUP_NOTIFY are deliberately NOT in this list:
+# they point the tool at other files or quieten it, they do not weaken a guard
+# over what it does look at.
+OMABACKUP_OVERRIDES_IGNORED=""
+if [[ "${OMABACKUP_IN_SUITE:-0}" != 1 ]]; then
+  for _ob_hook in OMABACKUP_MIN_FILES OMABACKUP_MIN_ALLOWLIST OMABACKUP_MIN_RESTORE \
+                  OMABACKUP_NET OMABACKUP_SKIP_ETC OMABACKUP_SKIP_DROPINS; do
+    [[ -n "${!_ob_hook:-}" ]] || continue
+    OMABACKUP_OVERRIDES_IGNORED+="${OMABACKUP_OVERRIDES_IGNORED:+ }$_ob_hook"
+    unset "$_ob_hook"
+  done
+  unset _ob_hook
+fi
+export OMABACKUP_OVERRIDES_IGNORED
+
 OMABACKUP_SKIP_ETC="${OMABACKUP_SKIP_ETC:-0}"
 OMABACKUP_SKIP_TIMERS="${OMABACKUP_SKIP_TIMERS:-0}"
 OMABACKUP_LOCK_WAIT="${OMABACKUP_LOCK_WAIT:-20}"

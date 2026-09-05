@@ -412,17 +412,23 @@ stock-config stand-in, data repo and local bare remote, then drives
 on `lib/` internals. Test-only environment hooks, documented here because
 they only ever matter to that harness: `OMABACKUP_CONFIG`,
 `OMABACKUP_STATE_DIR`, `OMABACKUP_STOCK_DIR` (a stand-in for
-`/usr/share/omarchy`), `OMABACKUP_NET=0` (skip the visibility probe's
-network wait) and `NET_WAIT` (how many seconds `nm-online` may wait when it
-does run), `OMABACKUP_NOTIFY=0`, `OMABACKUP_MIN_FILES` and
-`OMABACKUP_MIN_ALLOWLIST` (override the derived snapshot floors),
-`OMABACKUP_MIN_RESTORE` (override the floor `restore --configs` refuses
-below; this one lowers a data-safety guard, so it belongs in a fixture and
-nowhere else), `OMABACKUP_SKIP_ETC=1` and `OMABACKUP_ETC_ROOT` (keep the real
-`/etc` out of a fixture), `OMABACKUP_SKIP_DROPINS=1` (skip only the `/etc`
-drop-in half of the drift scan, defaulting to whatever `OMABACKUP_SKIP_ETC`
-says), `OMABACKUP_SKIP_TIMERS=1` (never touch the real `systemctl --user`),
-and `OMABACKUP_LOCK_WAIT`.
+`/usr/share/omarchy`), `OMABACKUP_ETC_ROOT` (keep the real `/etc` out of a
+fixture), `NET_WAIT` (how many seconds `nm-online` may wait),
+`OMABACKUP_NOTIFY=0`, `OMABACKUP_SKIP_TIMERS=1` (never touch the real
+`systemctl --user`), and `OMABACKUP_LOCK_WAIT`.
+
+Six more hooks weaken a guard rather than redirect a path, so they take
+effect **only when `OMABACKUP_IN_SUITE=1` is set too**, which the suite
+exports at its own top: `OMABACKUP_MIN_FILES` and `OMABACKUP_MIN_ALLOWLIST`
+(the derived snapshot floors), `OMABACKUP_MIN_RESTORE` (the floor
+`restore --configs` refuses below), `OMABACKUP_NET=0` (skip the visibility
+probe entirely), and `OMABACKUP_SKIP_ETC=1` / `OMABACKUP_SKIP_DROPINS=1`
+(skip the `/etc` half of the drift scan). Without the marker they are
+ignored, and `status` reports a problem naming every one it found, so the
+widget shows a fault. A `systemd --user` unit inherits the user manager's
+environment, so any of these set once in `~/.config/environment.d` or
+`.bashrc` would otherwise have reached the daily timer forever with nothing
+saying so.
 
 Design docs: [docs/superpowers/specs/2026-09-03-omabackup-design.md](docs/superpowers/specs/2026-09-03-omabackup-design.md)
 and [docs/superpowers/plans/2026-09-03-omabackup-1.0.md](docs/superpowers/plans/2026-09-03-omabackup-1.0.md).

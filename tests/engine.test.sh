@@ -1977,5 +1977,47 @@ if group 73 "a modes.txt record never chmods through a symlinked path"; then
   eq "an ordinary record still replays" "$(stat -c %a "$FH/.bashrc")" "600"
 fi
 
+if group 74 "guard-weakening OMABACKUP_* hooks need the suite marker, and status says when one was ignored"; then
+  # A `systemd --user` unit inherits the user manager's environment, so
+  # OMABACKUP_MIN_FILES=1 set once in ~/.config/environment.d or .bashrc
+  # reached the daily timer forever and disabled the hollow-snapshot floor
+  # that stops a collapsed staging tree overwriting a good backup. These
+  # hooks are honoured only alongside OMABACKUP_IN_SUITE=1.
+  mk_fixture g74; seed_home
+  mkdir -p "$FH/.config/many" "$T/etcroot"
+  i74=1
+  while [ "$i74" -le 25 ]; do
+    printf 'x\n' > "$FH/.config/many/f$i74"
+    printf '?.config/many/f%d\n' "$i74" >> "$FR/allowlist.txt"
+    i74=$((i74+1))
+  done
+  git -C "$FR" commit -qam "25 optional entries, so the derived floors are real"
+  check "baseline commits the full tree" env HOME="$FH" "$CLI" snapshot --no-push
+  # Now hollow: 25 of the 28 tracked files are gone. Optional entries, so the
+  # allowlist assertion records them as GONE and the run reaches the floor.
+  rm -f "$FH/.config/many"/f*
+
+  # OMABACKUP_ETC_ROOT is a path redirection, not a guard, so it still works
+  # without the marker and keeps this machine's real /etc drop-ins out of it.
+  o74=$(env -u OMABACKUP_IN_SUITE HOME="$FH" OMABACKUP_ETC_ROOT="$T/etcroot" \
+        OMABACKUP_MIN_FILES=1 "$CLI" snapshot --no-push --json 2>/dev/null)
+  eq "without the marker the floor override is ignored and the run refuses" "$(jq -r .ok <<<"$o74")" "false"
+  has "the refusal is the hollow-snapshot floor" "$(jq -r .error <<<"$o74")" "refusing to commit a hollow snapshot"
+
+  s74=$(env -u OMABACKUP_IN_SUITE HOME="$FH" OMABACKUP_MIN_FILES=1 "$CLI" status --json 2>/dev/null)
+  eq "status reads fault while an override is set" "$(jq -r .state <<<"$s74")" "fault"
+  # grep -q takes a basic regex, so the literal "*" in the message is left
+  # out of the pattern rather than escaped.
+  has "status names the ignored override" "$(jq -r '.problems[]' <<<"$s74")" \
+    "override(s) set in the environment"
+  has "and names the variable itself" "$(jq -r '.problems[]' <<<"$s74")" "OMABACKUP_MIN_FILES"
+  ! grep -q 'ignoring OMABACKUP' <<<"$(obj status | jq -r '.problems[]')" \
+    && ok "under the marker no override problem is reported" || bad "the suite's own hooks read as ignored"
+
+  # ...and under the marker the hook still does its job, or the suite could
+  # not build a fixture at all.
+  eq "under the marker the floor override is honoured" "$(obj snapshot --no-push | jq -r .ok)" "true"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

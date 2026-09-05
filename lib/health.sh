@@ -140,6 +140,13 @@ health_collect() {
     { [[ "$H_SELFTEST_ENABLED" == true ]] && [[ "$H_SELFTEST_ACTIVE" == true ]]; } || H_PROBLEMS+=("self-test timer is not armed")
   fi
 
+  # --- guard-weakening OMABACKUP_* hooks found in the ambient environment.
+  # lib/config.sh already ignored them (they only work under the test suite's
+  # own marker), but a value that reached the daily timer and did nothing is
+  # still someone believing a guard is off. Report it: any problem is a fault.
+  [[ -z "${OMABACKUP_OVERRIDES_IGNORED:-}" ]] \
+    || H_PROBLEMS+=("ignoring OMABACKUP_* override(s) set in the environment: $OMABACKUP_OVERRIDES_IGNORED")
+
   H_SETUP=$(health_setup_state)
 }
 

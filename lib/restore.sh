@@ -45,9 +45,13 @@ restore_mode_target() {
 }
 
 # ---------------------------------------------------------- configs
-# restore_stage_configs APPLY: copy $DATA_REPO/home back into $HOME.
+# restore_stage_configs APPLY [MIN]: copy $DATA_REPO/home back into $HOME.
+# MIN overrides the floor this stage refuses below. It is a PARAMETER, not an
+# environment variable: cmd_verify used to set OMABACKUP_MIN_RESTORE=1
+# in-process around its own call, which is exactly the guard-weakening shape
+# lib/config.sh now refuses to honour from the outside.
 restore_stage_configs() {
-  local apply=$1 min_restore="${OMABACKUP_MIN_RESTORE:-50}"
+  local apply=$1 min_restore="${2:-${OMABACKUP_MIN_RESTORE:-50}}"
 
   # This stage copies from the WORKING TREE, not from HEAD. When snapshot_sync
   # has run but the commit after it has not (the staged secret gate refused,
