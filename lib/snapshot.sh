@@ -224,7 +224,7 @@ snapshot_stage() {
   while IFS= read -r big; do
     [[ -z "$big" ]] && continue
     warn "too large for the backup (> $maxsize): ~/${big#"$HOME"/}"
-    printf 'TOOBIG     ~/%s   (exceeds %s; NOT backed up)\n' "${big#"$HOME"/}" "$maxsize" \
+    printf 'TOOBIG     ~/%s\t(exceeds %s; NOT backed up)\n' "${big#"$HOME"/}" "$maxsize" \
       >> "$STAGE/manifests/.toobig"
   done < <(snapshot_oversized "$findsize")
 
@@ -281,7 +281,7 @@ snapshot_drift_finish() {
   # nobody notices on their own. It must match manifests_drift's capture of
   # the previous report exactly, or the comm below diffs two different things.
   local new_drift
-  new_drift=$(grep -hE '^(MODIFIED|NEW|GONE|# ERROR)' "$rep" 2>/dev/null | sort || true)
+  new_drift=$(grep -hE "$DRIFT_CLASSES" "$rep" 2>/dev/null | sort || true)
   SNAP_NEW_DRIFT=$(comm -13 <(printf '%s\n' "$MAN_DRIFT_PREV") <(printf '%s\n' "$new_drift") | grep . || true)
   manifests_drift_counts "$rep"
   log "drift: ${DRIFT_N} item(s); see manifests/drift.txt"
@@ -412,7 +412,7 @@ snapshot_commit() {
     local ex
     while IFS= read -r ex; do
       [[ -z "$ex" ]] && continue
-      printf 'EXCLUDED   ~/%s   (matches .gitignore; NOT backed up)\n' "${ex#home/}" \
+      printf 'EXCLUDED   ~/%s\t(matches .gitignore; NOT backed up)\n' "${ex#home/}" \
         >> "$DATA_REPO/manifests/drift.txt"
     done < <(git -C "$DATA_REPO" ls-files -o -i --exclude-standard home/ 2>/dev/null | awk 'NR<=20' || true)
     # Re-stage. These lines are written after the `git add` above, so without

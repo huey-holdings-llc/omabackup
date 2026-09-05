@@ -39,6 +39,10 @@ rel_from_tilde() {
   p=${p#\~/}
   case "$p" in
     ''|/*) return 1 ;;
+    # A TAB is refused here (and by assert_argv_safe before this even runs)
+    # for two reasons: it would smuggle a second field into a list file, and
+    # it is the drift report's path/note separator, so a path carrying one
+    # could never be matched against a report line anyway.
     *$'\n'*|*$'\t'*) return 1 ;;
     ..|../*|*/..|*/../*) return 1 ;;
   esac
@@ -46,15 +50,16 @@ rel_from_tilde() {
 }
 
 # drift_has WANT TYPES: does the current drift report name this exact path
-# under one of the pipe-separated TYPES?
+# under one of the pipe-separated TYPES? The line is split by
+# drift_line_split (lib/drift.sh), the same function that builds the JSON the
+# popup renders: this gate and the row the user clicked must recover the same
+# path from the same line, or a crafted filename lets one click widen the
+# allowlist to a directory the scan never reported.
 drift_has() {
-  local want=$1 types=$2 line t rest path
+  local want=$1 types=$2 line
   while IFS= read -r line; do
-    t=${line%%[[:space:]]*}
-    rest=${line#"$t"}; rest=${rest#"${rest%%[![:space:]]*}"}
-    case "$rest" in *' ('*) path=${rest%% (*} ;; *) path=$rest ;; esac
-    path=${path%"${path##*[![:space:]]}"}
-    [[ "$path" == "$want" ]] && return 0
+    drift_line_split "$line" || continue
+    [[ "$DRIFT_PATH" == "$want" ]] && return 0
   done < <(grep -E "^($types)" "$DATA_REPO/manifests/drift.txt" 2>/dev/null)
   return 1
 }
@@ -63,14 +68,11 @@ drift_has() {
 # one drifting path lies UNDER it. Depth 1 ("~/.config/") is always refused:
 # one click must never be able to silence an entire report.
 drift_has_under() {
-  local want=$1 types=$2 line t rest path
+  local want=$1 types=$2 line
   case "${want#\~/}" in */*/*) ;; *) return 1 ;; esac    # "seg/" is depth 1
   while IFS= read -r line; do
-    t=${line%%[[:space:]]*}
-    rest=${line#"$t"}; rest=${rest#"${rest%%[![:space:]]*}"}
-    case "$rest" in *' ('*) path=${rest%% (*} ;; *) path=$rest ;; esac
-    path=${path%"${path##*[![:space:]]}"}
-    case "$path" in "$want"?*) return 0 ;; esac
+    drift_line_split "$line" || continue
+    case "$DRIFT_PATH" in "$want"?*) return 0 ;; esac
   done < <(grep -E "^($types)" "$DATA_REPO/manifests/drift.txt" 2>/dev/null)
   return 1
 }

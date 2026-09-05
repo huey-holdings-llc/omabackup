@@ -919,7 +919,7 @@ if group 48 "a huge unbacked tree is reported wholesale, never scanned per-file"
   printf '.local/share/bigok\n' >> "$FR/allowlist.txt"; git -C "$FR" commit -qam allow
   d=$(ob drift)
   # shellcheck disable=SC2088 # matching drift's literal "~/" report prefix, not a path to expand
-  want=$(printf 'NEW        %s' '~/.local/share/blob/ (>50 files: too large to scan; allowlist it, or add a dated .../** line to drift-ignore.txt)')
+  want=$(printf 'NEW        %s\t%s' '~/.local/share/blob/' '(>50 files: too large to scan; allowlist it, or add a dated .../** line to drift-ignore.txt)')
   # grep -F: the expected line has regex metacharacters (.../** ...) that are not a pattern here.
   grep -qF -- "$want" <<<"$d" && ok "huge tree collapses to one NEW line" || bad "huge tree collapses to one NEW line" "missing '$want'"
   ! grep -q 'blob/store/f' <<<"$d" && ok "no per-file lines for the huge tree" || bad "huge tree was still scanned per-file"
@@ -970,7 +970,7 @@ if group 50 "status: JSON for the bar widget"; then
   mk_fixture g50; seed_home; commit_baseline
   { printf 'NEW        ~/.config/appz/z.toml\n'
     printf 'GONE       ~/.config/gonezo\n'
-    printf 'NEW        ~/.local/share/bigz/ (>2000 files: too large to scan; add or ignore wholesale)\n'
+    printf 'NEW        ~/.local/share/bigz/\t(>2000 files: too large to scan; add or ignore wholesale)\n'
     printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
   date +%s > "$FR/manifests/.last-run"
   git -C "$FR" push -q -u origin main 2>/dev/null || true
@@ -1084,7 +1084,7 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
   mkdir -p "$FH/.config/appz"; printf 'z=1\n' > "$FH/.config/appz/z.toml"
   mkdir -p "$FH/.local/share/bigz"; printf 'b\n' > "$FH/.local/share/bigz/f1"
   { printf 'NEW        ~/.config/appz/z.toml\n'
-    printf 'NEW        ~/.local/share/bigz/ (>2000 files: too large to scan; add or ignore wholesale)\n'
+    printf 'NEW        ~/.local/share/bigz/\t(>2000 files: too large to scan; add or ignore wholesale)\n'
     printf 'GONE       ~/.config/gonezo\n'
     printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
 
@@ -1789,6 +1789,55 @@ if group 69 "a remote advanced elsewhere reads as diverged, not as a retryable p
     "$(env HOME="$FH" OMABACKUP_NET=1 "$CLI" snapshot --json 2>/dev/null | jq -r .pushed)" "true"
   [[ ! -f "$OMABACKUP_STATE_DIR/diverged.stamp" ]] \
     && ok "the divergence stamp is cleared by a successful push" || bad "the stamp outlived the divergence"
+fi
+
+if group 70 "a filename holding the old note separator names its own drift row"; then
+  # The report used to separate a note from the path with " (", and every
+  # consumer recovered the path by cutting at the first one. A file literally
+  # named "creds (readme" therefore produced a row whose displayed path was
+  # the PREFIX "~/.config/creds" -- a deliberately never-backed-up secrets
+  # directory -- and the widget's own "does the report name this path" gate
+  # truncated identically, so it agreed with itself and one Allow click
+  # widened the allowlist to a directory the scan had never reported. The note
+  # is TAB-separated now, and a path can never contain a TAB.
+  mk_fixture g70; seed_home
+  mkdir -p "$FH/.config/creds"
+  printf 'token\n' > "$FH/.config/creds/token.json"
+  printf 'readme\n' > "$FH/.config/creds (readme"
+  printf '.config/creds/**   # 2026-09-05 test: secrets, never backed up\n' >> "$FR/drift-ignore.txt"
+  git -C "$FR" commit -qam "ignore the secrets directory"
+  commit_baseline
+
+  ! grep -q 'creds/token.json' "$FR/manifests/drift.txt" \
+    && ok "the drift-ignored secrets directory stays out of the report" || bad "the ignored directory was reported"
+  grep -qxF -- 'NEW        ~/.config/creds (readme' "$FR/manifests/drift.txt" \
+    && ok "the report row carries the whole filename" || bad "the report row does not carry the whole filename" \
+       "$(grep creds "$FR/manifests/drift.txt" || true)"
+  # shellcheck disable=SC2088 # expected literal string, not a path to expand
+  eq "status parses the row as the whole filename, not the prefix" \
+    "$(obj status | jq -r '.drift[] | select(.path | test("creds")) | .path')" \
+    '~/.config/creds (readme'
+
+  # The gate: the truncated prefix is a path the report does not name.
+  # shellcheck disable=SC2088 # literal "~/" prefix, not a path to expand
+  a70=$(obj allow '~/.config/creds')
+  eq "allow refuses the prefix the report never named" "$(jq -r .ok <<<"$a70")" "false"
+  has "the refusal says the report does not name it" "$a70" "does not name that path"
+  grep -qx '.config/creds' "$FR/allowlist.txt" \
+    && bad "the never-backed-up secrets directory was allowlisted" || ok "the secrets directory stayed out of the allowlist"
+
+  # ...and the row IS actionable under its real name.
+  # shellcheck disable=SC2088 # literal "~/" prefix, not a path to expand
+  eq "allow accepts the row under its real name" "$(obj allow '~/.config/creds (readme' | jq -r .ok)" "true"
+  grep -qxF -- '.config/creds (readme' "$FR/allowlist.txt" \
+    && ok "the real name was written to the allowlist" || bad "the real name is missing from the allowlist"
+
+  # A note still round-trips, TAB-separated, through the JSON the popup reads.
+  { printf 'TOOBIG     ~/.config/huge.img\t(exceeds 8m; NOT backed up)\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  eq "a TAB-separated note parses into path and note" \
+    "$(obj status | jq -c '[.drift[0].path,.drift[0].note]')" \
+    '["~/.config/huge.img","(exceeds 8m; NOT backed up)"]'
 fi
 
 echo; echo "passed=$pass failed=$fail"

@@ -14,6 +14,52 @@
 # `has` assertions in tests/engine.test.sh that match strings like
 # "NEW        ~/.config/mytool".
 
+# DRIFT_CLASSES: the report line classes that count as drift a human has to
+# act on. One constant, because manifests_drift, manifests_drift_counts and
+# snapshot_drift_finish all filter the report with it and comm(1) diffs two
+# of those filters against each other: a class added to one regex and not the
+# others made every run report the same item as new, forever.
+# shellcheck disable=SC2034  # read by lib/manifests.sh and lib/snapshot.sh
+DRIFT_CLASSES='^(MODIFIED|NEW|GONE|# ERROR)'
+
+# drift_line_split LINE: split one report line into DRIFT_TYPE, DRIFT_PATH and
+# DRIFT_NOTE. Returns 1 for a line that is not a report row (blank, or a
+# comment other than "# ERROR"), so callers write `... || continue`.
+#
+# The report format is `TYPE<spaces>PATH` with an optional note separated from
+# the path by a TAB: `TYPE<spaces>PATH<TAB>(note)`. It used to separate the
+# note with " (", and every consumer recovered the path by cutting at the
+# first " (" -- so a file literally named `creds (readme` produced a row whose
+# path was the prefix `~/.config/creds`, the widget's own "does the report
+# name this path" gate truncated identically and agreed with itself, and one
+# Allow click widened the allowlist to a directory the scan had never
+# reported. A TAB cannot occur in a path here: no producer writes one, and
+# allow/ignore refuse an argument containing one (assert_argv_safe and
+# rel_from_tilde, lib/widget.sh).
+drift_line_split() {
+  local line=$1 rest
+  DRIFT_TYPE=""; DRIFT_PATH=""; DRIFT_NOTE=""
+  case "$line" in
+    '# ERROR'*)
+      # Both "# ERROR: msg" (drift_scan's own lines) and "# ERROR msg" are
+      # accepted: strip the marker, an optional colon, then leading spaces,
+      # so the path carries the message, never the "# ERROR" prefix.
+      DRIFT_TYPE=ERROR
+      rest=${line#'# ERROR'}; rest=${rest#:}
+      DRIFT_PATH=${rest#"${rest%%[! ]*}"}
+      return 0 ;;
+    ''|'#'*) return 1 ;;
+  esac
+  DRIFT_TYPE=${line%%[[:space:]]*}
+  rest=${line#"$DRIFT_TYPE"}
+  rest=${rest#"${rest%%[![:space:]]*}"}
+  case "$rest" in
+    *$'\t'*) DRIFT_PATH=${rest%%$'\t'*}; DRIFT_NOTE=${rest#*$'\t'} ;;
+    *)       DRIFT_PATH=$rest ;;
+  esac
+  return 0
+}
+
 # drift_scan: print the report to stdout, ending with the "# drift-scan-complete"
 # sentinel. The daily pipeline (snapshot, Task 9) refuses to commit without that
 # line, so a scan that dies partway through can no longer be mistaken for a
@@ -47,10 +93,18 @@ drift_scan() {
   # 2b (.config, .local) and section 2c (.local/{state,share}/*) can each
   # reach the same file. Reporting it more than once would inflate every
   # count downstream (the item total, a future health summary).
+  # _drift_report TYPE PATH [NOTE]: one row. The note is TAB-separated from
+  # the path (see drift_line_split); it is never appended to the path itself,
+  # or a filename containing the separator renames the row.
   _drift_report() {
     [ -n "${_reported[$2]:-}" ] && return 0
     _reported[$2]=1
-    printf '%-10s %s\n' "$1" "$2"; found=$((found+1))
+    if [ -n "${3:-}" ]; then
+      printf '%-10s %s\t(%s)\n' "$1" "$2" "$3"
+    else
+      printf '%-10s %s\n' "$1" "$2"
+    fi
+    found=$((found+1))
   }
 
   # find(1) prune arguments built from the /** ignore entries, so full-depth
@@ -159,7 +213,7 @@ drift_scan() {
         top="$parent"
       done
       if ! is_covered "$top" && ! is_ignored_subtree "$top"; then
-        _drift_report NEW "~/$top/ (>$MAX_SCAN_FILES files: too large to scan; allowlist it, or add a dated .../** line to drift-ignore.txt)"
+        _drift_report NEW "~/$top/" ">$MAX_SCAN_FILES files: too large to scan; allowlist it, or add a dated .../** line to drift-ignore.txt"
       fi
       printf '%s/%s/\n' "$HOME" "$top" >> "$excl"
       a="$rel"
@@ -433,34 +487,20 @@ cmd_drift() {
 }
 
 # drift_items_json: report lines on stdin -> JSON array body (type, path, note).
-# Used by cmd_drift --json and, later, health/widget via drift_parse. Leading
-# whitespace is trimmed with `${v#"${v%%[! ]*}"}` (strip the longest
-# leading-spaces-only prefix), not `${v##+( )}`, so this needs no `extglob`:
-# that shopt used to be set at file scope and leaked into every other verb
-# for the rest of the process, the same class of leak Task 5 fixed for
-# nullglob.
+# Used by cmd_drift --json and health/widget via drift_parse. Every field
+# comes from drift_line_split above, which every other consumer uses too, so
+# the JSON the widget renders and the gate the write verbs apply can never
+# disagree about which path a row names. Leading whitespace is trimmed there
+# with `${v#"${v%%[![:space:]]*}"}` (strip the longest leading-space-only
+# prefix), not `${v##+( )}`, so this needs no `extglob`: that shopt used to be
+# set at file scope and leaked into every other verb for the rest of the
+# process, the same class of leak Task 5 fixed for nullglob.
 drift_items_json() {
-  local items=() type path note rest line
+  local items=() path line
   while IFS= read -r line; do
-    case "$line" in
-      '# ERROR'*)
-        # Both "# ERROR: msg" (drift_scan's own lines) and "# ERROR msg" are
-        # accepted: strip the marker, an optional colon, then leading spaces,
-        # so path carries the message, never the "# ERROR" prefix.
-        type=ERROR
-        path=${line#'# ERROR'}; path=${path#:}
-        path=${path#"${path%%[! ]*}"}
-        note=""
-        ;;
-      ''|'#'*) continue ;;
-      *)
-        type=${line%% *}; rest=${line#"$type"}
-        rest=${rest#"${rest%%[! ]*}"}
-        path=${rest%% (*}; note=""; [[ "$rest" == *" ("* ]] && note=${rest#*"$path" }
-        path=${path%/}   # a directory's trailing "/" is report display flourish, not part of the path
-        ;;
-    esac
-    items+=("{\"type\":$(jstr "$type"),\"path\":$(jstr "$path"),\"note\":$(jstr "$note")}")
+    drift_line_split "$line" || continue
+    path=${DRIFT_PATH%/}   # a directory's trailing "/" is report display flourish, not part of the path
+    items+=("{\"type\":$(jstr "$DRIFT_TYPE"),\"path\":$(jstr "$path"),\"note\":$(jstr "$DRIFT_NOTE")}")
   done
   jjoin "${items[@]}"
 }

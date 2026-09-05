@@ -256,7 +256,7 @@ manifests_drift() {
   local M="$1/manifests"
   # Same filter as snapshot_drift_finish's "new_drift", GONE included: the two
   # are the operands of one comm, so they have to select the same line classes.
-  MAN_DRIFT_PREV=$(grep -hE '^(MODIFIED|NEW|GONE|# ERROR)' "$DATA_REPO/manifests/drift.txt" 2>/dev/null | sort || true)
+  MAN_DRIFT_PREV=$(grep -hE "$DRIFT_CLASSES" "$DATA_REPO/manifests/drift.txt" 2>/dev/null | sort || true)
   # stderr lands in the report on purpose: a scan that dies partway through
   # must leave its reason where a human reading drift.txt will find it. The
   # missing sentinel is what the pipeline actually refuses on.
@@ -272,7 +272,7 @@ manifests_drift() {
 manifests_drift_counts() {
   DRIFT_N=0; TOOBIG_N=0; EXCLUDED_N=0
   [[ -f "$1" ]] || return 0
-  DRIFT_N=$(grep -cE '^(MODIFIED|NEW|GONE|# ERROR)' "$1" 2>/dev/null || true)
+  DRIFT_N=$(grep -cE "$DRIFT_CLASSES" "$1" 2>/dev/null || true)
   TOOBIG_N=$(grep -c '^TOOBIG' "$1" 2>/dev/null || true)
   EXCLUDED_N=$(grep -c '^EXCLUDED' "$1" 2>/dev/null || true)
   DRIFT_N=${DRIFT_N:-0}; TOOBIG_N=${TOOBIG_N:-0}; EXCLUDED_N=${EXCLUDED_N:-0}
