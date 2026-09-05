@@ -331,6 +331,15 @@ setup_remote() {
     [[ $trust == 0 ]] && warn "non-GitHub remote left untrusted: commits will not be pushed until remote.trusted is true"
   fi
   config_write "$(jq --arg u "$url" --argjson t "$([[ $trust == 1 ]] && echo true || echo false)" '.remote={url:$u, trusted:$t}' "$CONFIG_FILE")"
+  # Reload, because CFG_* is a CACHE and everything after this point in the
+  # wizard reads it. setup_first_snapshot runs cmd_snapshot in-process, whose
+  # remote_probe compares the live origin against CFG_REMOTE_URL and reads
+  # CFG_REMOTE_TRUSTED: with the pre-setup values still in memory, the
+  # status.json that setup itself writes said remote-unverified immediately
+  # after `--trust-remote`, and the widget showed the "review the remote" card
+  # until the next status run. Every setup group passed --no-timers, which
+  # skips the first snapshot, so nothing caught it.
+  config_load
   setup_phase "remote"
 }
 

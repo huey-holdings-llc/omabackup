@@ -2206,6 +2206,27 @@ if group 80 "a mass disappearance halts the run even when every entry is optiona
   printf 'setting=1\n' > "$FH/.config/opt/f1.conf"
   check "one vanished optional entry still runs" env HOME="$FH" "$CLI" snapshot --no-push
   has "it is reported as GONE, not as a refusal" "$(cat "$FR/manifests/drift.txt")" "GONE"
+
+  # An absence the last report already carried is known, not new. Without
+  # this, a machine whose seed list never fully resolved would refuse every
+  # run for the rest of time over the same entries.
+  rm -f "$FH/.config/opt/f3.conf"
+  check "one more vanishing beside a known GONE still runs" env HOME="$FH" "$CLI" snapshot --no-push
+  rm -f "$FH/.config/opt/f4.conf"
+  check "and one more again, though three of six are now absent" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "all three are reported" "$(grep -c '^GONE' "$FR/manifests/drift.txt" || true)" "3"
+
+  # The first run is the other half of the same rule: no prior report means no
+  # backup to destroy and no baseline, and share/allowlist.example seeds 23
+  # optional Omarchy paths a fresh install legitimately does not all have.
+  mk_fixture g80b
+  cp "$HERE/../share/allowlist.example" "$FR/allowlist.txt"
+  mkdir -p "$FH/.config"; printf 'x\n' > "$FH/.bashrc"
+  printf '.bashrc\n' >> "$FR/allowlist.txt"
+  git -C "$FR" commit -qam "the shipped seed list on a sparse fresh home"
+  check "a first run on a sparse fresh home is not refused" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the unresolved seed entries are recorded as GONE" \
+    "$(( $(grep -c '^GONE' "$FR/manifests/drift.txt" || true) > 5 ))" "1"
 fi
 
 if group 81 "a pacman whose wording changed is an error, never a clean /etc scan"; then
@@ -2329,6 +2350,31 @@ if group 83 "status.json's push_verifiable is the push gate's answer, not git's 
   # The two objects status can emit must still carry the same key set.
   eq "not-configured status carries the same keys as a configured one" \
     "$(OMABACKUP_CONFIG=/nonexistent obj status | jq -S 'keys')" "$(obj status | jq -S 'keys')"
+fi
+
+if group 84 "the wizard's own first snapshot uses the remote the wizard just configured"; then
+  # CFG_* is a cache of the config file. setup_remote wrote the new remote to
+  # disk and left the cache alone, and setup_first_snapshot runs cmd_snapshot
+  # IN-PROCESS -- so the wizard's own snapshot probed with the pre-setup remote
+  # values and the status.json setup itself wrote said remote-unverified,
+  # immediately after --trust-remote. The widget then showed the "review the
+  # remote" card until the next status run. Untested until now because every
+  # setup group passes --no-timers, which skips the first snapshot entirely.
+  mk_fixture g84; seed_home
+  jq '.remote={url:"",trusted:false}' "$OMABACKUP_CONFIG" > "$T/c" && mv "$T/c" "$OMABACKUP_CONFIG"
+  git -C "$FR" remote remove origin
+  # No --no-timers: the first snapshot has to run. OMABACKUP_SKIP_TIMERS=1 (set
+  # by mk_fixture) keeps systemctl out of it.
+  check "setup wires the remote and trusts it" \
+    env HOME="$FH" "$CLI" setup --remote "$BARE" --trust-remote --yes
+  eq "the config records the trust" "$(jq -r '.remote.trusted' "$OMABACKUP_CONFIG")" "true"
+  eq "the wizard's own status.json says setup is ready" \
+    "$(jq -r .setup "$OMABACKUP_STATE_DIR/status.json")" "ready"
+  eq "and the push gate agrees, in the same file" \
+    "$(jq -r .push_verifiable "$OMABACKUP_STATE_DIR/status.json")" "true"
+  # A later status run must not be the first thing to notice: it should agree
+  # with what the wizard already wrote.
+  eq "a later status agrees" "$(obj status | jq -r .setup)" "ready"
 fi
 
 echo; echo "passed=$pass failed=$fail"

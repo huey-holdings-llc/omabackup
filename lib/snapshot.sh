@@ -123,20 +123,47 @@ snapshot_assert_allowlist() {
   # partition, a bad edit. Committing then would destroy the backup. So many
   # vanished dies, a few are recorded as GONE and the run carries on.
   #
-  # VANISHED IS missing PLUS GONE. This percentage counted `missing` alone,
-  # and every entry in share/allowlist.example carries the optional `?` marker,
-  # so on a stock install `missing` is permanently empty and maxMissingPct --
-  # the guard whose stated purpose is "wrong $HOME, or an unmounted partition?"
-  # -- could never fire. The only thing left between an unmounted $HOME and an
-  # `rsync --delete` over a good backup was the halved-file floor, which lets
-  # ~49% of the backup go. An optional entry still does not halt the run on its
-  # own; a MASS vanishing now halts it whether the entries were optional or not.
-  local vanished=$(( ${#missing[@]} + ${#GONE[@]} ))
-  if [[ $vanished -gt 0 ]]; then
-    local pct=$(( vanished * 100 / (entry_count > 0 ? entry_count : 1) ))
+  local pct
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    pct=$(( ${#missing[@]} * 100 / (entry_count > 0 ? entry_count : 1) ))
     if [[ "$pct" -ge "${CFG_MAX_MISSING_PCT:-25}" ]]; then
-      printf '  vanished: %s\n' ${missing[@]+"${missing[@]}"} ${GONE[@]+"${GONE[@]}"} >&2
-      die "$vanished of $entry_count allowlist entries ($pct%) no longer exist; refusing to run. Wrong \$HOME, or an unmounted partition?"
+      printf '  missing: %s\n' "${missing[@]}" >&2
+      die "${#missing[@]} of $entry_count allowlist entries ($pct%) no longer exist; refusing to run. Wrong \$HOME, or an unmounted partition?"
+    fi
+  fi
+
+  # ...and the same percentage over the OPTIONAL entries too, which is where
+  # the guard actually had to look. Every entry in share/allowlist.example
+  # carries the `?` marker, so on a stock install `missing` above is
+  # permanently empty and maxMissingPct -- the guard whose stated purpose is
+  # "wrong $HOME, or an unmounted partition?" -- could never fire at all. The
+  # only thing left between an unmounted $HOME and an `rsync --delete` over a
+  # good backup was the halved-file floor, which lets about half of it go.
+  #
+  # VANISHED SINCE THE LAST REPORT, not "absent today". Two reasons, both from
+  # the seed list being what it is:
+  #   * a first run has no backup to destroy and no baseline to compare
+  #     against, and a fresh install legitimately does not have all 23 seeded
+  #     Omarchy paths, so the check waits for a run that produced a report;
+  #   * an entry that was already GONE in that report is a known, triaged
+  #     absence, not a disappearance -- counting it again would refuse every
+  #     run forever on a machine whose seed list never fully resolved.
+  # So this fires on entries that resolved last time and do not now, which is
+  # exactly the unmounted-partition shape.
+  if [[ ${#GONE[@]} -gt 0 && -f "$DATA_REPO/manifests/.last-run" ]]; then
+    local known_gone g
+    local -a fresh_gone=()
+    known_gone=$(sed -nE 's/^GONE[[:space:]]+~\/([^\t]*)$/\1/p' "$DATA_REPO/manifests/drift.txt" 2>/dev/null || true)
+    for g in "${GONE[@]}"; do
+      grep -qxF -- "$g" <<<"$known_gone" || fresh_gone+=("$g")
+    done
+    local vanished=$(( ${#missing[@]} + ${#fresh_gone[@]} ))
+    if [[ $vanished -gt 0 ]]; then
+      pct=$(( vanished * 100 / (entry_count > 0 ? entry_count : 1) ))
+      if [[ "$pct" -ge "${CFG_MAX_MISSING_PCT:-25}" ]]; then
+        printf '  vanished: %s\n' ${missing[@]+"${missing[@]}"} ${fresh_gone[@]+"${fresh_gone[@]}"} >&2
+        die "$vanished of $entry_count allowlist entries ($pct%) no longer exist; refusing to run. Wrong \$HOME, or an unmounted partition?"
+      fi
     fi
   fi
 
