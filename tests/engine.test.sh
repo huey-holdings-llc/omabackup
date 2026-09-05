@@ -2299,6 +2299,11 @@ if group 79 "a restore stage that fails still leaves one JSON object and a relea
   eq "the run reports the failure rather than vanishing" "$(jq -r .ok <<<"$r79")" "false"
   eq "a failing stage still exits 1, not the stage's own status" "$rc79" "1"
   has "the unreadable tree is named in skipped[]" "$(jq -r '.skipped[].reason' <<<"$r79")" "not readable"
+  # ...and the stage's own non-zero return is counted, not discarded. `|| true`
+  # left ok:false resting on the stage having remembered to warn on its way
+  # out; a stage that fails silently must still be a failure.
+  eq "the failing stage is counted as a failure of its own" \
+    "$(jq -r '.failures >= 2' <<<"$r79")" "true"
   # The stage AFTER the failing one still ran: that is what proves the chain
   # continued rather than the process having died inside restore_stage_etc.
   eq "the later stage still ran" \
@@ -2527,6 +2532,20 @@ if group 83 "status.json's push_verifiable is the push gate's answer, not git's 
   eq "a verdict recorded for another origin does not count" \
     "$(obj status | jq -r .push_verifiable)" "false"
   eq "and says so" "$(obj status | jq -r .push_reason)" "unprobed"
+
+  # A verdict has an age, and an old yes is not a yes: a repository can be made
+  # public between one run and the next, and nothing re-probes on a widget
+  # refresh. The `at` field was written and never read.
+  git -C "$FR" remote set-url origin "$BARE"
+  check "a fresh snapshot records a fresh verdict" env HOME="$FH" "$CLI" snapshot
+  eq "which reads as verifiable" "$(obj status | jq -r .push_verifiable)" "true"
+  jq --argjson t "$(( $(date +%s) - 40 * 86400 ))" '.at=$t' \
+    "$OMABACKUP_STATE_DIR/push-verdict.json" > "$T/v" && mv "$T/v" "$OMABACKUP_STATE_DIR/push-verdict.json"
+  eq "a verdict older than staleDays stops counting" "$(obj status | jq -r .push_verifiable)" "false"
+  eq "and says why" "$(obj status | jq -r .push_reason)" "stale"
+  # A verdict with no usable timestamp is no verdict at all.
+  jq '.at="soon"' "$OMABACKUP_STATE_DIR/push-verdict.json" > "$T/v" && mv "$T/v" "$OMABACKUP_STATE_DIR/push-verdict.json"
+  eq "an unusable timestamp reads as stale too" "$(obj status | jq -r .push_reason)" "stale"
 
   # The two objects status can emit must still carry the same key set.
   eq "not-configured status carries the same keys as a configured one" \

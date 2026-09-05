@@ -150,16 +150,30 @@ health_collect() {
   # from a widget refresh. A verdict recorded against a DIFFERENT origin is not
   # an answer about this one: trust is bound to a URL everywhere else in this
   # tool, and it is bound to a URL here too.
+  # The verdict also has an AGE, and an old yes is not a yes. The probe is the
+  # only thing that knows whether the remote is still private, and a repository
+  # can be made public between one run and the next; a verdict recorded when
+  # the file was written and never looked at again would keep saying "safe to
+  # push" for as long as nobody ran a snapshot. staleDays is the same limit the
+  # rest of this file uses for "the backup has stopped running", so it is the
+  # same answer to the same question: how long may this tool go on believing
+  # something it has not checked.
   H_PUSH_VERIFIABLE=false; H_PUSH_REASON="unprobed"
-  local verdict="$STATE_DIR/push-verdict.json" v_url v_ok v_reason cur_url
+  local verdict="$STATE_DIR/push-verdict.json" v_url v_ok v_reason v_at cur_url
   if [[ -r "$verdict" ]]; then
     cur_url=$(remote_origin_url)
     v_url=$(jq -r '.url // ""' "$verdict" 2>/dev/null || true)
     if [[ -n "$cur_url" && "$v_url" == "$cur_url" ]]; then
-      v_ok=$(jq -r 'if .verifiable == true then "true" else "false" end' "$verdict" 2>/dev/null || echo false)
-      v_reason=$(jq -r '.reason // ""' "$verdict" 2>/dev/null || true)
-      H_PUSH_VERIFIABLE=$v_ok
-      [[ -z "$v_reason" ]] || H_PUSH_REASON=$v_reason
+      v_at=$(jq -r '.at // 0' "$verdict" 2>/dev/null || echo 0)
+      case "$v_at" in ''|*[!0-9]*) v_at=0 ;; esac
+      if [[ "$v_at" -le 0 || $(( now - v_at )) -gt $(( CFG_STALE_DAYS * 86400 )) ]]; then
+        H_PUSH_REASON="stale"
+      else
+        v_ok=$(jq -r 'if .verifiable == true then "true" else "false" end' "$verdict" 2>/dev/null || echo false)
+        v_reason=$(jq -r '.reason // ""' "$verdict" 2>/dev/null || true)
+        H_PUSH_VERIFIABLE=$v_ok
+        [[ -z "$v_reason" ]] || H_PUSH_REASON=$v_reason
+      fi
     fi
   fi
 

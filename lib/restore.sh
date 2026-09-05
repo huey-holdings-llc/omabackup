@@ -498,19 +498,22 @@ cmd_restore() {
   if ! take_lock; then
     restore_warn "the repo lock is held (a snapshot may be running); try again shortly"
   else
-    # One `if` per stage, and `|| true` on the call. The chain used to be
-    # `[[ ... ]] && stage`, where the stage is the final command of an AND
-    # list: under errexit a stage that returned non-zero took the whole
-    # process down right there, skipping every later stage, drop_lock and
-    # restore_emit -- so a --json caller got no JSON object at all (the one
+    # One `if` per stage, and the non-zero return COUNTED, not discarded. The
+    # chain used to be `[[ ... ]] && stage`, where the stage is the final
+    # command of an AND list: under errexit a stage that returned non-zero took
+    # the whole process down right there, skipping every later stage, drop_lock
+    # and restore_emit -- so a --json caller got no JSON object at all (the one
     # thing the contract guarantees) and the flock was held until the process
-    # died. A stage that fails has already said so through restore_warn, which
-    # is what RESTORE_FAILURES and ok:false are for.
-    if [[ "$do_configs" == 1 ]];  then restore_stage_configs "$apply"  || true; fi
-    if [[ "$do_etc" == 1 ]];      then restore_stage_etc "$apply"      || true; fi
-    if [[ "$do_packages" == 1 ]]; then restore_stage_packages "$apply" || true; fi
-    if [[ "$do_plugins" == 1 ]];  then restore_stage_plugins "$apply"  || true; fi
-    if [[ "$do_services" == 1 ]]; then restore_stage_services "$apply" || true; fi
+    # died. `|| true` fixed that and then threw the answer away: a stage could
+    # fail with nothing recording it, and ok:false rested on the stage having
+    # remembered to call restore_warn itself. restore_warn here makes it
+    # structural -- a stage that returns non-zero is a failure whether or not
+    # it said so on its way out.
+    if [[ "$do_configs" == 1 ]];  then restore_stage_configs "$apply"  || restore_warn "the configs stage did not complete"; fi
+    if [[ "$do_etc" == 1 ]];      then restore_stage_etc "$apply"      || restore_warn "the etc stage did not complete"; fi
+    if [[ "$do_packages" == 1 ]]; then restore_stage_packages "$apply" || restore_warn "the packages stage did not complete"; fi
+    if [[ "$do_plugins" == 1 ]];  then restore_stage_plugins "$apply"  || restore_warn "the plugins stage did not complete"; fi
+    if [[ "$do_services" == 1 ]]; then restore_stage_services "$apply" || restore_warn "the services stage did not complete"; fi
     drop_lock
   fi
 
