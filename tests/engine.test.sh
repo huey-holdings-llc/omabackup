@@ -2308,49 +2308,98 @@ if group 79 "a restore stage that fails still leaves one JSON object and a relea
   check "the next locking verb takes the lock straight away" env HOME="$FH" "$CLI" snapshot --no-push
 fi
 
-if group 80 "a mass disappearance halts the run even when every entry is optional"; then
+if group 80 "a mass disappearance halts the run, and slow erosion does not slip past it"; then
   # maxMissingPct is the "wrong \$HOME, or an unmounted partition?" guard, and
   # it counted REQUIRED entries only. Every entry in share/allowlist.example
   # carries the optional `?` marker, so on a stock install the count it looked
   # at was permanently empty and the guard could never fire: an unmounted home
   # subvolume would have committed, rsync --delete'd the backup down to
   # whatever survived, and reported it as ordinary GONE rows at "attention".
+  #
+  # What counts as vanished is "this repo has backed it up and $HOME no longer
+  # has it", read from the repo's own history. Twenty-five entries, four files
+  # each, so the tracked-file gate and the halved-file floor both stay clear of
+  # the entry percentages this group is actually about.
   mk_fixture g80
-  mkdir -p "$FH/.config/opt"
-  for i in 1 2 3 4 5 6; do printf 'setting=%d\n' "$i" > "$FH/.config/opt/f$i.conf"; done
-  for i in 1 2 3 4 5 6; do printf '?.config/opt/f%d.conf\n' "$i" >> "$FR/allowlist.txt"; done
-  git -C "$FR" commit -qam "six optional entries"
-  check "the baseline run commits with all six present" env HOME="$FH" "$CLI" snapshot --no-push
+  i80=1
+  while [ "$i80" -le 25 ]; do
+    mkdir -p "$FH/.config/full/d$i80"
+    for j80 in 1 2 3 4; do printf 'setting=%d\n' "$j80" > "$FH/.config/full/d$i80/f$j80.conf"; done
+    printf '?.config/full/d%d\n' "$i80" >> "$FR/allowlist.txt"
+    i80=$((i80+1))
+  done
+  git -C "$FR" commit -qam "25 optional directory entries, 100 files"
+  check "the baseline run commits all of it" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the backup holds 100 files" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "100"
 
-  # Two of six is 33%, over the default maxMissingPct of 25.
-  rm -f "$FH/.config/opt/f1.conf" "$FH/.config/opt/f2.conf"
-  m80=$(obj snapshot --no-push)
-  eq "a third of the allowlist vanishing refuses the run" "$(jq -r .ok <<<"$m80")" "false"
-  has "the refusal is the maxMissingPct one" "$(jq -r .error <<<"$m80")" "no longer exist; refusing to run"
-  has "the refusal names the wrong-\$HOME case" "$(jq -r .error <<<"$m80")" "unmounted partition"
-  eq "the count is of everything that vanished, optional included" \
-    "$(jq -r .error <<<"$m80" | grep -c '^2 of 6 allowlist entries (33%)')" "1"
-  eq "nothing was committed by the refused run" \
-    "$(git -C "$FR" log --oneline | grep -c 'snapshot:' || true)" "1"
-
-  # ...and one optional entry vanishing is still soft, so the guard has not
-  # simply become "any GONE halts the backup".
-  printf 'setting=1\n' > "$FH/.config/opt/f1.conf"
+  # One entry vanishing is soft: 4% is nowhere near the threshold, and the
+  # guard must not have become "any GONE halts the backup".
+  rm -rf "$FH/.config/full/d1"
   check "one vanished optional entry still runs" env HOME="$FH" "$CLI" snapshot --no-push
   has "it is reported as GONE, not as a refusal" "$(cat "$FR/manifests/drift.txt")" "GONE"
 
-  # An absence the last report already carried is known, not new. Without
-  # this, a machine whose seed list never fully resolved would refuse every
-  # run for the rest of time over the same entries.
-  rm -f "$FH/.config/opt/f3.conf"
-  check "one more vanishing beside a known GONE still runs" env HOME="$FH" "$CLI" snapshot --no-push
-  rm -f "$FH/.config/opt/f4.conf"
-  check "and one more again, though three of six are now absent" env HOME="$FH" "$CLI" snapshot --no-push
-  eq "all three are reported" "$(grep -c '^GONE' "$FR/manifests/drift.txt" || true)" "3"
+  # SLOW EROSION. Five more go, which with d1 is 6 of 25 (24%), just under the
+  # threshold: this run is meant to pass. The previous run committed d1's
+  # removal, so d1 is no longer in HEAD -- only the repo's history still knows
+  # it was ever backed up, and that is exactly what stops the next run being
+  # judged on this run's losses alone.
+  for i80 in 2 3 4 5 6; do rm -rf "$FH/.config/full/d$i80"; done
+  check "24% in one run is under the threshold and still runs" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the backup is down to 76 files" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "76"
 
-  # The first run is the other half of the same rule: no prior report means no
-  # backup to destroy and no baseline, and share/allowlist.example seeds 23
-  # optional Omarchy paths a fresh install legitimately does not all have.
+  # Another 24% on the next run. Each run on its own is under the threshold;
+  # together they are 48% of the allowlist, and the run refuses. Judged one run
+  # at a time this drained the backup away a notch at a time, forever.
+  for i80 in 7 8 9 10 11 12; do rm -rf "$FH/.config/full/d$i80"; done
+  e80=$(obj snapshot --no-push)
+  eq "the second 24% is refused, because erosion accumulates" "$(jq -r .ok <<<"$e80")" "false"
+  has "the refusal is the maxMissingPct one" "$(jq -r .error <<<"$e80")" "no longer exist; refusing to run"
+  eq "and it counts every entry this repo ever backed up" \
+    "$(jq -r .error <<<"$e80" | grep -c '^12 of 25 allowlist entries (48%)' || true)" "1"
+  has "it names the way out" "$(jq -r .error <<<"$e80")" "resolve-gone"
+  eq "nothing was committed by the refused run" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "76"
+
+  # THE MULTI-MACHINE CASE. A clone carries the history but not
+  # manifests/.last-run, which is gitignored: an earlier version keyed the
+  # whole check on that file, so the first run on machine B -- the run most
+  # likely to be looking at an unmounted or half-synced $HOME -- had the guard
+  # switched off entirely.
+  mk_fixture g80i
+  mkdir -p "$FH/.config"
+  i80=1
+  while [ "$i80" -le 25 ]; do
+    printf 'setting=%d\n' "$i80" > "$FH/.config/mach$i80.conf"
+    printf '?.config/mach%d.conf\n' "$i80" >> "$FR/allowlist.txt"
+    i80=$((i80+1))
+  done
+  git -C "$FR" commit -qam "25 optional entries"
+  check "machine A takes a full backup" env HOME="$FH" "$CLI" snapshot --no-push
+  git clone -q "$FR" "$T/clone"
+  # etc/ is empty in this fixture and git does not track empty directories, so
+  # the clone needs it back before it looks like an engine repo. A real repo
+  # with any /etc reference copy in it carries the directory itself.
+  mkdir -p "$T/clone/etc"
+  rm -f "$FR/manifests/.last-run" 2>/dev/null || true
+  [[ ! -f "$T/clone/manifests/.last-run" ]] \
+    && ok "the clone carries no .last-run (it is gitignored)" || bad ".last-run travelled with the clone"
+  check "machine B adopts the clone" env HOME="$FH" "$CLI" setup --import "$T/clone" --no-timers --yes
+  # ...and machine B's $HOME is missing a third of it: an unmounted subvolume,
+  # a half-finished sync, a wrong $HOME.
+  for i80 in 1 2 3 4 5 6 7 8 9; do rm -f "$FH/.config/mach$i80.conf"; done
+  m80=$(obj snapshot --no-push)
+  eq "the first run on the second machine refuses" "$(jq -r .ok <<<"$m80")" "false"
+  has "with the maxMissingPct refusal" "$(jq -r .error <<<"$m80")" "no longer exist; refusing to run"
+  eq "counting what the clone's own history says was backed up" \
+    "$(jq -r .error <<<"$m80" | grep -c '^9 of 25 allowlist entries (36%)' || true)" "1"
+  eq "and the clone's backup is untouched" \
+    "$(git -C "$T/clone" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "25"
+
+  # THE SPARSE FIRST RUN, the other half of the same rule. No backup exists
+  # yet, so nothing can have disappeared: share/allowlist.example seeds 23
+  # optional Omarchy paths and a fresh install legitimately has few of them.
   mk_fixture g80b
   cp "$HERE/../share/allowlist.example" "$FR/allowlist.txt"
   mkdir -p "$FH/.config"; printf 'x\n' > "$FH/.bashrc"
@@ -2359,8 +2408,8 @@ if group 80 "a mass disappearance halts the run even when every entry is optiona
   check "a first run on a sparse fresh home is not refused" env HOME="$FH" "$CLI" snapshot --no-push
   eq "the unresolved seed entries are recorded as GONE" \
     "$(( $(grep -c '^GONE' "$FR/manifests/drift.txt" || true) > 5 ))" "1"
+  check "and the run after it is not refused either" env HOME="$FH" "$CLI" snapshot --no-push
 fi
-
 if group 81 "a pacman whose wording changed is an error, never a clean /etc scan"; then
   # Both /etc sections read pacman's prose, not an API: the field name
   # `Backup Files` in -Qii and the literal `error: No package owns <path>` on

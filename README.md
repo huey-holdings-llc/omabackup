@@ -144,8 +144,10 @@ to back anything up on its own.
   one.
 * **Fail-closed guards**: a large fraction of allowlist entries vanishing at
   once (a few missing is recorded as `GONE` and the run continues; at or
-  above `maxMissingPct` it refuses, counting optional entries that resolved
-  on the last run and do not now, not only required ones), a producer whose
+  above `maxMissingPct` it refuses, counting every entry this repo has ever
+  backed up and $HOME no longer has, optional ones included, so erosion a
+  little at a time still adds up and a second machine's first run is guarded
+  too), a producer whose
   output the `/etc` scan cannot parse, a floor breach (staged files or
   allowlist entries dropping far below the last commit), a symlinked
   directory inside the backup, an `index.lock` that cannot be proven

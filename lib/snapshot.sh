@@ -20,6 +20,7 @@
 # deleting one allowlisted glob is not an emergency. OMABACKUP_MIN_FILES and
 # OMABACKUP_MIN_ALLOWLIST override; config.sh unsets them when they are empty,
 # which is how a caller asks for "derive it" explicitly.
+# shellcheck disable=SC2034  # PREV_TRACKED: read by snapshot_assert_allowlist, not this function
 snapshot_floors_from_history() {
   local prev_tracked=0 prev_entries=0 listing
   if git -C "$DATA_REPO" rev-parse --verify HEAD >/dev/null 2>&1; then
@@ -36,6 +37,10 @@ snapshot_floors_from_history() {
     # allowlist.txt has no such path in HEAD, which is bootstrap, not damage.
     prev_entries=$(git -C "$DATA_REPO" show HEAD:allowlist.txt 2>/dev/null | grep -cvE '^[[:space:]]*(#|$)' || true)
   fi
+  # Also the gate on the mass-disappearance check below: "does a real backup
+  # exist to compare against". It comes from the repo's own history, so it is
+  # the same answer on a fresh clone as on the machine that made it.
+  PREV_TRACKED=$prev_tracked
   if [[ "${prev_tracked:-0}" -ge 20 ]]; then
     MIN_FILES="${OMABACKUP_MIN_FILES:-$(( prev_tracked / 2 ))}"
   else
@@ -61,6 +66,27 @@ snapshot_entry_exists() {
   done
   IFS=$oldifs
   return "$rc"
+}
+
+# snapshot_entry_was_backed_up ENTRY: 0 when this data repo has ever held
+# content for home/ENTRY. That, and not "is it in today's drift report", is
+# what makes an absence a DISAPPEARANCE: a seed entry that never resolved on
+# this machine was never backed up, so it is not something that went missing.
+#
+# HEAD first, because it answers in constant time and covers the common case
+# (a file backed up yesterday, gone today). A path absent from HEAD may still
+# have been backed up and then removed by an earlier run's `rsync --delete`,
+# and that case is the whole point: without it, erosion at just under the
+# threshold passes forever, because every run's losses leave HEAD before the
+# next run looks. `git rev-list -1` finds the commit that deleted it.
+#
+# `:(literal)` because an allowlist entry may contain glob characters, which
+# git would otherwise read as pathspec wildcards and match half the tree.
+snapshot_entry_was_backed_up() {
+  local p="home/$1" seen
+  if git -C "$DATA_REPO" cat-file -e "HEAD:$p" 2>/dev/null; then return 0; fi
+  seen=$(git -C "$DATA_REPO" rev-list -1 HEAD -- ":(literal)$p" 2>/dev/null || true)
+  [[ -n "$seen" ]]
 }
 
 # ---------------------------------------------------------------- 1. assert
@@ -140,29 +166,33 @@ snapshot_assert_allowlist() {
   # only thing left between an unmounted $HOME and an `rsync --delete` over a
   # good backup was the halved-file floor, which lets about half of it go.
   #
-  # VANISHED SINCE THE LAST REPORT, not "absent today". Two reasons, both from
-  # the seed list being what it is:
-  #   * a first run has no backup to destroy and no baseline to compare
-  #     against, and a fresh install legitimately does not have all 23 seeded
-  #     Omarchy paths, so the check waits for a run that produced a report;
-  #   * an entry that was already GONE in that report is a known, triaged
-  #     absence, not a disappearance -- counting it again would refuse every
-  #     run forever on a machine whose seed list never fully resolved.
-  # So this fires on entries that resolved last time and do not now, which is
-  # exactly the unmounted-partition shape.
-  if [[ ${#GONE[@]} -gt 0 && -f "$DATA_REPO/manifests/.last-run" ]]; then
-    local known_gone g
-    local -a fresh_gone=()
-    known_gone=$(sed -nE 's/^GONE[[:space:]]+~\/([^\t]*)$/\1/p' "$DATA_REPO/manifests/drift.txt" 2>/dev/null || true)
-    for g in "${GONE[@]}"; do
-      grep -qxF -- "$g" <<<"$known_gone" || fresh_gone+=("$g")
+  # VANISHED = THIS REPO HAS BACKED IT UP AND $HOME NO LONGER HAS IT, required
+  # and optional entries alike. The repo's own history is the whole baseline,
+  # which matters three ways:
+  #   * it travels with a clone, so the check is armed on the FIRST run after
+  #     `setup --import` on a second machine -- the case an earlier version
+  #     missed, because it keyed on manifests/.last-run, which is gitignored
+  #     and therefore never present in a fresh clone;
+  #   * a seed entry that never resolved here was never backed up, so it is
+  #     not a disappearance and a sparse machine is never refused for it;
+  #   * it is cumulative. An earlier version compared against the last drift
+  #     report and ignored an absence that report already carried, so erosion
+  #     at just under the threshold passed every run, forever, and the backup
+  #     drained away one notch at a time.
+  # The gate is PREV_TRACKED, from the same history: under 20 tracked files
+  # there is no real backup yet, nothing to destroy, and nothing to compare
+  # against.
+  if [[ "${PREV_TRACKED:-0}" -ge 20 ]]; then
+    local e
+    local -a vanished=()
+    for e in ${missing[@]+"${missing[@]}"} ${GONE[@]+"${GONE[@]}"}; do
+      if snapshot_entry_was_backed_up "$e"; then vanished+=("$e"); fi
     done
-    local vanished=$(( ${#missing[@]} + ${#fresh_gone[@]} ))
-    if [[ $vanished -gt 0 ]]; then
-      pct=$(( vanished * 100 / (entry_count > 0 ? entry_count : 1) ))
+    if [[ ${#vanished[@]} -gt 0 ]]; then
+      pct=$(( ${#vanished[@]} * 100 / (entry_count > 0 ? entry_count : 1) ))
       if [[ "$pct" -ge "${CFG_MAX_MISSING_PCT:-25}" ]]; then
-        printf '  vanished: %s\n' ${missing[@]+"${missing[@]}"} ${fresh_gone[@]+"${fresh_gone[@]}"} >&2
-        die "$vanished of $entry_count allowlist entries ($pct%) no longer exist; refusing to run. Wrong \$HOME, or an unmounted partition?"
+        printf '  vanished: %s\n' "${vanished[@]}" >&2
+        die "${#vanished[@]} of $entry_count allowlist entries ($pct%) no longer exist; refusing to run. Wrong \$HOME, or an unmounted partition? If they are gone for good: omabackup resolve-gone <path> remove"
       fi
     fi
   fi
