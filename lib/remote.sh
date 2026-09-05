@@ -66,6 +66,10 @@ remote_url_parts() {
   case "$auth" in *@*) auth=${auth##*@} ;; esac    # userinfo
   host=${auth%%:*}                                  # port
   host=${host,,}
+  # A fully qualified name may carry the root's trailing dot, and resolvers
+  # and git both treat "github.com." as github.com. Left on, it would be one
+  # more spelling that reads as "not GitHub".
+  host=${host%.}
   printf '%s\t%s' "$host" "$path"
   return 0
 }
@@ -159,6 +163,12 @@ remote_probe_derive() {
   # take the whole process down under errexit, no matter what the callee does.
   slug=$(remote_github_slug "$url" || true)
   if [[ -z "$slug" ]]; then
+    # A GitHub HOST whose URL cannot be reduced to owner/repo can never be
+    # probed, and trust does not apply to a GitHub host at all (setup refuses
+    # to record one). Consulting trust here let a stale trusted flag push to
+    # `https://github.com/o/r/..` with reason "trusted" and no probe ever run,
+    # which is loss event (b) with the safety valve reading green.
+    if remote_is_github "$url"; then PUSH_REASON="remote-unverified"; return 0; fi
     if remote_trust_ok "$url"; then PUSH_VERIFIABLE=true; PUSH_REASON="trusted"; else PUSH_REASON="remote-unverified"; fi
     return 0
   fi

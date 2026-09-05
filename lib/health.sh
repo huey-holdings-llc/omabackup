@@ -20,7 +20,14 @@ health_setup_state() {
   [[ -f "$DATA_REPO/.omabackup" ]] || { echo not-configured; return; }
   gitleaks_available || { echo gitleaks-missing; return; }
   local url slug; url=$(remote_origin_url); slug=$(remote_github_slug "$url")
-  if [[ -n "$url" && -z "$slug" && "$CFG_REMOTE_TRUSTED" != true ]]; then echo remote-unverified; return; fi
+  if [[ -n "$url" && -z "$slug" ]]; then
+    # A GitHub host with no usable slug is unverifiable whatever the config
+    # says: the probe is the only thing that can speak for a GitHub remote,
+    # and setup refuses to record trust for one, so a stale trusted flag must
+    # not make the widget render "ready" over a repo nothing ever checked.
+    remote_is_github "$url" && { echo remote-unverified; return; }
+    [[ "$CFG_REMOTE_TRUSTED" == true ]] || { echo remote-unverified; return; }
+  fi
   echo ready
 }
 

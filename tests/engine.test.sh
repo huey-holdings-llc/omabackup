@@ -1988,6 +1988,31 @@ if group 72 "a GitHub remote is recognised whatever the URL spelling, and is nev
   eq "the refusal left remote.trusted alone" "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "false"
   git -C "$FR" remote set-url origin "git@github.com:someone/omabackup-data.git"
   eq "the scp-like spelling is refused too" "$(obj setup --trust-remote --yes --no-timers | jq -r .ok)" "false"
+
+  # A GitHub HOST whose URL cannot be reduced to owner/repo can never be
+  # probed, and trust does not apply to a GitHub host at all. Consulting the
+  # config here let a stale trusted flag push to a repo nothing had checked,
+  # with reason "trusted" and the widget rendering "ready".
+  git -C "$FR" remote set-url origin 'https://github.com/o/r/..'
+  jq --arg u 'https://github.com/o/r/..' '.remote={url:$u, trusted:true}' "$OMABACKUP_CONFIG" > "$T/c72b" \
+    && mv "$T/c72b" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  : > "$T/probed"
+  printf '# stale trust\n' >> "$FH/.bashrc"
+  u72=$(env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_NET=1 NET_WAIT=1 \
+        "$CLI" snapshot --no-push --json 2>/dev/null)
+  eq "a trusted but unverifiable GitHub remote is not push_verifiable" \
+    "$(jq -r .push_verifiable <<<"$u72")" "false"
+  eq "the reason is remote-unverified, not trusted" "$(jq -r .push_reason <<<"$u72")" "remote-unverified"
+  eq "and no probe was made for it" "$(cat "$T/probed")" ""
+  st72=$(env HOME="$FH" PATH="$T/fakebin:$PATH" "$CLI" status --json 2>/dev/null)
+  eq "the widget reads remote-unverified, not ready" "$(jq -r .setup <<<"$st72")" "remote-unverified"
+  eq "status.json carries the same verdict" \
+    "$(jq -c '[.push_verifiable,.push_reason]' <<<"$st72")" '[false,"remote-unverified"]'
+
+  # A fully qualified name carries the root's trailing dot, and git resolves
+  # it to the same host, so it must not read as one more non-GitHub spelling.
+  eq "github.com. is recognised as GitHub" "$(probe72 'https://github.com./o/r')" \
+    "private|https://api.github.com/repos/o/r"
 fi
 
 if group 73 "a modes.txt record never chmods through a symlinked path"; then
