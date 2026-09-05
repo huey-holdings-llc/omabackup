@@ -140,7 +140,9 @@ to back anything up on its own.
   one.
 * **Fail-closed guards**: a large fraction of allowlist entries vanishing at
   once (a few missing is recorded as `GONE` and the run continues; at or
-  above `maxMissingPct` it refuses), a floor breach (staged files or
+  above `maxMissingPct` it refuses, counting optional entries that resolved
+  on the last run and do not now, not only required ones), a producer whose
+  output the `/etc` scan cannot parse, a floor breach (staged files or
   allowlist entries dropping far below the last commit), a symlinked
   directory inside the backup, an `index.lock` that cannot be proven
   abandoned, a repo mid-merge or mid-rebase, a drift scan that did not
@@ -273,6 +275,9 @@ manifests/           generated facts about the machine, plus drift.txt
 .gitignore           belt-and-braces excludes, copied from share/ at setup
 .gitleaks.toml       the secret-scan rules, copied from share/ at setup
 .omabackup           marker: {"format": 1, "createdBy": "<version>"}
+                     a marker whose format is HIGHER than this version knows
+                     is refused, never rewritten, so the newer machine in a
+                     synced pair keeps working
 ```
 
 `allowlist.txt` entries are directories (recursive) or files, relative to
@@ -291,6 +296,16 @@ and is re-checked after the glob expands, and the expression runs under
 rule can never run a shell command or read and write a file of its own.
 `omabackup lint` reports either problem as `BADRULE`, and the snapshot
 refuses the run.
+
+The config file is read the same way. A key this version does not recognise is
+ignored with a warning, so a config written (or synced) by a newer OmaBackup
+does not stop an older one; a key that reads as a typo of a known one is
+refused instead, because a misspelled `maxMissingPct` is a threshold you
+believe is set and is not. `timer.calendar` and `timer.jitter` are checked with
+`systemd-analyze calendar` and `systemd-analyze timespan` before they can reach
+a unit file, and `status` reports it when the installed snapshot timer and the
+config disagree (editing the config alone changes nothing until you rerun
+`omabackup setup`).
 
 ### CLI
 

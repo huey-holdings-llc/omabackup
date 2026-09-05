@@ -963,6 +963,13 @@ if group 49 "desktop popups fire only from the timer, never from a manual run"; 
   # A vanished OPTIONAL entry is a GONE line, and the backup just got smaller.
   # That is the one drift class nobody notices on their own, so it has to pop
   # exactly like a NEW line does: once, then never again for the same report.
+  # Four more covered entries first. One entry vanishing out of four is 25% of
+  # the allowlist, which is the mass-disappearance guard's default threshold:
+  # this group is about notifications, and a real install has twenty-odd
+  # entries, so give the fixture enough that one GONE is the minority it would
+  # be in practice.
+  mkdir -p "$FH/.config/appn"
+  for i in 1 2 3 4; do printf 'x\n' > "$FH/.config/appn/n$i.conf"; allow "?.config/appn/n$i.conf"; done
   mkdir -p "$FH/.config/appg"; printf 'x\n' > "$FH/.config/appg/g.toml"
   allow '?.config/appg'
   eq "adding a covered optional entry is not new drift" "$(npop INVOCATION_ID=fixture OMABACKUP_NOTIFY=1)" "0"
@@ -1992,16 +1999,26 @@ if group 74 "guard-weakening OMABACKUP_* hooks need the suite marker, and status
   # hooks are honoured only alongside OMABACKUP_IN_SUITE=1.
   mk_fixture g74; seed_home
   mkdir -p "$FH/.config/many" "$T/etcroot"
+  # Two kinds of entry, on purpose. 25 file entries that STAY put the allowlist
+  # over the floor of 20 (that floor's own override is ignored without the
+  # marker too), and one directory entry holds the 60 files that vanish below.
+  # Every allowlist entry keeps resolving, so this stays a question about the
+  # hollow-snapshot floor rather than about the mass-disappearance guard, which
+  # would otherwise refuse first and prove nothing about the floor.
+  mkdir -p "$FH/.config/keep"
   i74=1
   while [ "$i74" -le 25 ]; do
-    printf 'x\n' > "$FH/.config/many/f$i74"
-    printf '?.config/many/f%d\n' "$i74" >> "$FR/allowlist.txt"
+    printf 'x\n' > "$FH/.config/keep/k$i74"
+    printf '?.config/keep/k%d\n' "$i74" >> "$FR/allowlist.txt"
     i74=$((i74+1))
   done
-  git -C "$FR" commit -qam "25 optional entries, so the derived floors are real"
+  i74=1
+  while [ "$i74" -le 60 ]; do printf 'x\n' > "$FH/.config/many/f$i74"; i74=$((i74+1)); done
+  printf '.config/many\n' >> "$FR/allowlist.txt"
+  git -C "$FR" commit -qam "29 entries and 88 files, so the derived floors are real"
   check "baseline commits the full tree" env HOME="$FH" "$CLI" snapshot --no-push
-  # Now hollow: 25 of the 28 tracked files are gone. Optional entries, so the
-  # allowlist assertion records them as GONE and the run reaches the floor.
+  # Now hollow: 60 of the 88 tracked files are gone, with every allowlist entry
+  # still resolving.
   rm -f "$FH/.config/many"/f*
 
   # OMABACKUP_ETC_ROOT is a path redirection, not a guard, so it still works
