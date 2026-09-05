@@ -1934,6 +1934,25 @@ if group 71 "normalize rules are data: no command execution, no writes outside t
   eq "a syntax error is still BADSED" "$(jq -r '[.problems[]|select(.code=="BADSED")]|length' <<<"$b71")" "1"
   eq "and it is not reported as BADRULE" "$(jq -r '[.problems[]|select(.code=="BADRULE")]|length' <<<"$b71")" "0"
   cp "$T/normalize.bak" "$FR/normalize.txt"
+
+  # The check AFTER the glob expands. The path half is confined before the
+  # glob runs, but a glob can still land on a symlink inside the staging tree
+  # whose target is somewhere else entirely, and the rule is applied to the
+  # RESOLVED path, so without this check sed rewrites the file the link
+  # points at. The link points into the suite's own scratch area, never /etc.
+  printf 'ORIGINAL\n' > "$T/outside-target.txt"
+  ln -sfn "$T/outside-target.txt" "$FH/.config/mytool/outref"
+  allow '.config/mytool'
+  head71=$(git -C "$FR" rev-parse HEAD)
+  printf 'home/.config/mytool/outref\ts/ORIGINAL/OWNED-BY-NORMALIZE/\n' >> "$FR/normalize.txt"
+  x71=$(obj snapshot --no-push)
+  eq "a rule whose target resolves outside the staging tree refuses the run" "$(jq -r .ok <<<"$x71")" "false"
+  has "the refusal names the confinement" "$(jq -r .error <<<"$x71")" "resolves outside the staging tree"
+  eq "the file the link points at is untouched" "$(cat "$T/outside-target.txt")" "ORIGINAL"
+  eq "and nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$head71"
+  rm -f "$FH/.config/mytool/outref"
+  cp "$T/normalize.bak" "$FR/normalize.txt"
+
   eq "the fixture lints clean again" "$(obj lint --no-walk | jq -r .ok)" "true"
 fi
 
@@ -2163,8 +2182,12 @@ if group 76 "restore refuses manifest lines that are not package or unit names";
   if ! command -v pacman >/dev/null; then
     echo "  (pacman not installed: skipping the package half)"
   else
-    printf -- '--noconfirm\n' >> "$FR/manifests/pacman-aur.txt"
-    printf '/tmp/evil.service\n' >> "$FR/manifests/systemd-user.txt"
+    # Both manifests are replaced with a KNOWN set, so the "well-formed
+    # entries still enumerate" assertion below can name an exact result
+    # instead of a count that no input could ever fail.
+    printf -- '--noconfirm\naur-not-installed-zzz\n' > "$FR/manifests/pacman-aur.txt"
+    printf 'ok-one.service\nok-two.timer\n/tmp/evil.service\n' > "$FR/manifests/systemd-user.txt"
+    : > "$FR/manifests/systemd-user-off.txt"
     git -C "$FR" commit -qam "manifest lines that are not names"
     r76=$(obj restore --packages --services)
     eq "the run reports the refusals rather than passing them on" "$(jq -r .ok <<<"$r76")" "false"
@@ -2177,8 +2200,12 @@ if group 76 "restore refuses manifest lines that are not package or unit names";
     ! grep -qF -- 'evil.service' <<<"$(jq -r '.would_write[]' <<<"$r76")" \
       && ok "the dry run would not enable the absolute unit path" || bad "the unit path still reaches systemctl"
     # Ordinary names are untouched: the guard must not empty the stage.
-    [[ "$(jq -r '[.would_write[] | select(startswith("service:"))] | length' <<<"$r76")" -ge 0 ]] \
-      && ok "well-formed entries still enumerate" || bad "the stage stopped enumerating"
+    eq "the well-formed units still enumerate, and only those" \
+      "$(jq -r '[.would_write[] | select(startswith("service:"))] | sort | join(",")' <<<"$r76")" \
+      "service:ok-one.service,service:ok-two.timer"
+    eq "the well-formed AUR package still enumerates, and only that" \
+      "$(jq -r '[.would_write[] | select(startswith("aur:"))] | join(",")' <<<"$r76")" \
+      "aur:aur-not-installed-zzz"
   fi
 fi
 

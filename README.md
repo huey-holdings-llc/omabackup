@@ -41,14 +41,18 @@ to back anything up on its own.
   `credentials`, `Cookies*`, `hosts.yml`) plus token prefixes (`ghp_`,
   `gho_`, `github_pat_`, `AKIA...`, `sk-ant-`, `sk-proj-`, `glpat-`, `xoxb-`
   and friends, `AIza`, `hf_`, `npm_`, `dop_v1_`, `SG.`, and a private-key
-  header). `.env.*` covers `.env.example` on purpose: a template that has
-  been filled in is indistinguishable from a real one by name, and the cost
-  of a wrong refusal is renaming one file. When gitleaks is installed, it
-  also scans the staging tree and the staged commit with a project rules file
-  covering Anthropic and Claude Code tokens, current OpenAI keys, WireGuard
-  and NaCl keys, NetworkManager pre-shared keys and credential-embedded URLs.
-  Either
-  gate finding something stops the commit before it happens.
+  header). Two of these refuse more than you may expect, on purpose, because
+  a filename cannot tell you whether the secret is real: `.env.*` covers
+  `.env.example` (a template that has been filled in looks exactly like a
+  template that has not), and `*.asc` covers an armoured PUBLIC key or a
+  detached signature as readily as an armoured private one. The cost of a
+  wrong refusal is renaming one file, or listing the path in
+  `drift-ignore.txt` and keeping it out of the backup. When gitleaks is
+  installed, it also scans the staging tree and the staged commit with a
+  project rules file covering Anthropic and Claude Code tokens, current
+  OpenAI keys, WireGuard and NaCl keys, NetworkManager pre-shared keys and
+  credential-embedded URLs. Either gate finding something stops the commit
+  before it happens.
 * **A visibility probe before every push.** For a GitHub remote, OmaBackup
   asks `https://api.github.com/repos/OWNER/REPO`, unauthenticated, after
   waiting for the network to come up. The remote counts as GitHub by its

@@ -138,12 +138,9 @@ setup_data_repo() {
   # the write side of the same rule.
   dir=$(cd "$dir" && pwd -P) || die "could not resolve the data repo path: $1"
   [[ -d "$dir/.git" ]] || git -C "$dir" init -q -b main
-  # `mkdir -m 700 -p` above leaves an EXISTING directory's mode alone, so a
-  # setup pointed at a directory that was already there kept whatever mode it
-  # had. .git holds every backed-up config in full history and never
-  # self-heals the way the rsynced trees do.
-  chmod 700 "$dir" || warn "could not chmod 700 $dir"
-  [[ ! -d "$dir/.git" ]] || chmod 700 "$dir/.git" || warn "could not chmod 700 $dir/.git"
+  # The mode is tightened by setup_marker, not here: `mkdir -m 700 -p` above
+  # leaves an EXISTING directory alone, but chmod 700 belongs after the marker
+  # says this directory is ours, never before.
   # A rerun MERGES into whatever config already exists (remote.trusted,
   # shellNag, timer.* and setupPhase must all survive); only a first-ever
   # setup starts clean from CONFIG_DEFAULTS.
@@ -219,6 +216,10 @@ setup_marker() {
   fi
   [[ "$prev" -le 1 ]] || fmt=$prev
   jq -cn --arg v "$VERSION" --argjson f "$fmt" '{format:$f, createdBy:$v}' > "$DATA_REPO/.omabackup"
+  # Both setup paths reach here, and only here is the marker on disk. The repo
+  # root and .git hold every backed-up config in full history, `mkdir -m 700
+  # -p` leaves an existing directory's mode alone, and import chmod'd nothing.
+  data_repo_assert_mode
 }
 
 # setup_import DIR: adopt an existing engine repo, one that already carries
@@ -240,9 +241,8 @@ setup_import() {
   # Absolute, for the same reason setup_data_repo resolves its own directory.
   dir=$(cd "$dir" && pwd -P) || die "could not resolve the data repo path: $1"
   # An imported repo was cloned by someone else, under whatever umask they
-  # had. This path chmod'd nothing at all, so all of .git stayed readable.
-  chmod 700 "$dir" || warn "could not chmod 700 $dir"
-  [[ ! -d "$dir/.git" ]] || chmod 700 "$dir/.git" || warn "could not chmod 700 $dir/.git"
+  # had, and this path chmod'd nothing at all, so all of .git stayed readable.
+  # setup_marker below tightens it, once the marker says the repo is ours.
   if config_exists; then
     config_write "$(jq -c --argjson d "$CONFIG_DEFAULTS" --arg r "$dir" '$d * . + {dataRepo:$r}' "$CONFIG_FILE")"
   else

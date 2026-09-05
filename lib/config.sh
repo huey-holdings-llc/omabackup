@@ -218,6 +218,11 @@ state_write_status() {
 # `rsync -a`; .git never does. Warn and fix rather than die: a too-open repo
 # is a thing to close, not a reason to stop backing up.
 data_repo_assert_mode() {
+  # Only ever tighten a directory that carries the marker. DATA_REPO comes
+  # from a config file a human can edit, and chmod 700 on whatever it happens
+  # to name (a home directory, a shared project) would be this tool's bug, not
+  # its fix. setup writes the marker before it calls this.
+  [[ -f "$DATA_REPO/.omabackup" ]] || return 0
   local d m
   for d in "$DATA_REPO" "$DATA_REPO/.git"; do
     [[ -d "$d" ]] || continue
