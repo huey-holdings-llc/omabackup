@@ -2043,5 +2043,35 @@ if group 75 "the filename gate covers the credential classes data.gitignore alre
   eq "a staged id_ed25519.pub is still allowed" "$(gate75 'id_ed25519.pub')" "true"
 fi
 
+if group 76 "restore refuses manifest lines that are not package or unit names"; then
+  # Manifest lines are repo-controlled strings that become ARGUMENTS. A line
+  # beginning with "-" in pacman-aur.txt became a yay FLAG (--noconfirm,
+  # defeating that file's own "interactive, never --noconfirm" promise), and
+  # systemd-user.txt was handed to `systemctl --user enable --now`
+  # unvalidated, so an absolute path to a unit file in the just-restored tree
+  # was enabled AND started.
+  mk_fixture g76; seed_home; commit_baseline
+  if ! command -v pacman >/dev/null; then
+    echo "  (pacman not installed: skipping the package half)"
+  else
+    printf -- '--noconfirm\n' >> "$FR/manifests/pacman-aur.txt"
+    printf '/tmp/evil.service\n' >> "$FR/manifests/systemd-user.txt"
+    git -C "$FR" commit -qam "manifest lines that are not names"
+    r76=$(obj restore --packages --services)
+    eq "the run reports the refusals rather than passing them on" "$(jq -r .ok <<<"$r76")" "false"
+    has "the option-shaped package line is refused" \
+      "$(jq -r '.skipped[].reason' <<<"$r76")" "not a package name: --noconfirm"
+    has "the absolute unit path is refused" \
+      "$(jq -r '.skipped[].reason' <<<"$r76")" "not a unit name: /tmp/evil.service"
+    ! grep -qF -- 'aur:--noconfirm' <<<"$(jq -r '.would_write[]' <<<"$r76")" \
+      && ok "the dry run would not hand --noconfirm to yay" || bad "--noconfirm still reaches the install list"
+    ! grep -qF -- 'evil.service' <<<"$(jq -r '.would_write[]' <<<"$r76")" \
+      && ok "the dry run would not enable the absolute unit path" || bad "the unit path still reaches systemctl"
+    # Ordinary names are untouched: the guard must not empty the stage.
+    [[ "$(jq -r '[.would_write[] | select(startswith("service:"))] | length' <<<"$r76")" -ge 0 ]] \
+      && ok "well-formed entries still enumerate" || bad "the stage stopped enumerating"
+  fi
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

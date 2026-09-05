@@ -23,6 +23,26 @@ restore_warn() { warn "$*"; RESTORE_FAILURES=$((RESTORE_FAILURES+1)); }
 # not attempted.
 restore_skip() { RESTORE_SKIPPED+=("{\"path\":$(jstr "$1"),\"reason\":$(jstr "$2")}"); }
 
+# ---------------------------------------------------------- argv hygiene
+# Manifest lines are repo-controlled strings that become ARGUMENTS to pacman,
+# yay, systemctl and git. `missing_native` is intersected with `pacman -Slq`
+# so the native path was already safe, but the AUR path was not: a line
+# beginning with "-" became a yay FLAG (`--noconfirm`, defeating that file's
+# own "interactive, never --noconfirm" promise), systemd-user.txt was read
+# with `awk '{print $1}'` and handed to `systemctl --user enable --now`
+# unvalidated so an absolute path to a unit file in the restored tree was
+# enabled AND started, and a plugin revision reached `git checkout` with no
+# separator. Every list-derived argument now sits after a `--`, and its shape
+# is checked first: `--` alone would have turned `--noconfirm` into a package
+# name yay then tried to install, which is noise, not safety.
+#
+# The leading character is constrained separately from the rest, because the
+# character class a package name is allowed to use contains "-" and would
+# otherwise accept "--noconfirm" as a perfectly good package name.
+restore_pkg_ok()  { [[ "$1" =~ ^[A-Za-z0-9@._+][A-Za-z0-9@._+-]*$ ]]; }
+restore_unit_ok() { [[ "$1" =~ ^[A-Za-z0-9@._-]+\.(service|timer|socket|target|path)$ ]]; }
+restore_rev_ok()  { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._/+-]*$ ]]; }
+
 # restore_mode_target BASE REL: print the path a modes.txt record names,
 # resolved, or fail when it is not a real path lying directly under BASE.
 #
@@ -251,7 +271,32 @@ restore_stage_packages() {
   missing_native=$(comm -23 <(clean < "$M/pacman-native.txt" | sort) <(pacman -Qqen 2>/dev/null | sort)) || true
   missing_aur=$(comm -23 <(clean < "$M/pacman-aur.txt" 2>/dev/null | sort) <(pacman -Qqem 2>/dev/null | sort)) || true
 
+  # Refuse anything that is not a package name BEFORE the dry-run branch, so
+  # a refusal shows up in the dry run rather than first appearing when
+  # --apply hands the line to yay. Filtered in this shell, never in a command
+  # substitution: restore_warn and restore_skip write globals.
   local p
+  local -a native_pkgs=() aur_pkgs=()
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    if restore_pkg_ok "$p"; then native_pkgs+=("$p")
+    else
+      restore_warn "manifests/pacman-native.txt line is not a package name, refusing: $p"
+      restore_skip "manifests/pacman-native.txt" "refused a line that is not a package name: $p"
+    fi
+  done <<<"$missing_native"
+  while IFS= read -r p; do
+    [[ -n "$p" ]] || continue
+    if restore_pkg_ok "$p"; then aur_pkgs+=("$p")
+    else
+      restore_warn "manifests/pacman-aur.txt line is not a package name, refusing: $p"
+      restore_skip "manifests/pacman-aur.txt" "refused a line that is not a package name: $p"
+    fi
+  done <<<"$missing_aur"
+  missing_native=""; missing_aur=""
+  if [[ ${#native_pkgs[@]} -gt 0 ]]; then missing_native=$(printf '%s\n' "${native_pkgs[@]}"); fi
+  if [[ ${#aur_pkgs[@]} -gt 0 ]]; then missing_aur=$(printf '%s\n' "${aur_pkgs[@]}"); fi
+
   if [[ "$apply" != 1 ]]; then
     if [[ -n "$missing_native" ]]; then
       while IFS= read -r p; do [[ -n "$p" ]] && RESTORE_WOULD+=("$(jstr "package:$p")"); done <<<"$missing_native"
@@ -271,6 +316,9 @@ restore_stage_packages() {
       restore_warn "no longer in the repos (moved to AUR, renamed, or dropped): $(tr '\n' ' ' <<<"$gone")"
     fi
     if [[ -n "$available" ]]; then
+      # The list reaches pacman on STDIN (the trailing "-"), not as argv, so
+      # there is no argument for a "--" to separate; every name in it has been
+      # through restore_pkg_ok and then intersected with `pacman -Slq`.
       if printf '%s\n' "$available" | sudo pacman -S --needed -; then
         while IFS= read -r p; do [[ -n "$p" ]] && RESTORE_WROTE+=("$(jstr "package:$p")"); done <<<"$available"
       else
@@ -280,11 +328,11 @@ restore_stage_packages() {
   else
     restore_note "native packages already satisfied"
   fi
-  if [[ -n "$missing_aur" ]]; then
+  if [[ ${#aur_pkgs[@]} -gt 0 ]]; then
     have yay || { restore_warn "yay not found -- cannot install AUR packages"; return 0; }
-    local -a aur_pkgs=()
-    mapfile -t aur_pkgs <<<"$missing_aur"
-    if yay -S --needed "${aur_pkgs[@]}"; then
+    # `--` before the list: every name in it passed restore_pkg_ok above, so
+    # this is belt and braces, and belt and braces is the point.
+    if yay -S --needed -- "${aur_pkgs[@]}"; then
       for p in "${aur_pkgs[@]}"; do [[ -n "$p" ]] && RESTORE_WROTE+=("$(jstr "aur:$p")"); done
     else
       restore_warn "some AUR packages failed (unmaintained or removed from AUR?) -- continuing"
@@ -321,8 +369,17 @@ restore_stage_plugins() {
     if omarchy plugin add --yes "$url" </dev/null; then
       RESTORE_WROTE+=("$(jstr "plugin:$id")")
       if [[ -n "${rev:-}" && -d "$HOME/.config/omarchy/plugins/$id/.git" ]]; then
-        git -C "$HOME/.config/omarchy/plugins/$id" checkout --quiet "$rev" 2>/dev/null \
-          || restore_note "pinned rev $rev unavailable for $id (left at HEAD)"
+        if ! restore_rev_ok "$rev"; then
+          restore_warn "plugin revision is not a git object name, refusing to check it out: $rev"
+          restore_skip "plugin:$id" "refused a revision that is not a git object name: $rev"
+        else
+          # `<rev> --`, not `-- <rev>`: the latter names a PATH to restore
+          # from the index, which is a different command entirely. The empty
+          # pathspec list after the separator is what stops a rev beginning
+          # with "-" being read as an option.
+          git -C "$HOME/.config/omarchy/plugins/$id" checkout --quiet "$rev" -- 2>/dev/null \
+            || restore_note "pinned rev $rev unavailable for $id (left at HEAD)"
+        fi
       fi
     else
       restore_warn "  failed: $id"
@@ -352,6 +409,15 @@ restore_stage_services() {
   local skip_units=" syncthing.service "
   while read -r u; do
     case "$u" in ""|\#*) continue ;; esac
+    # Before anything else, and before the dry-run branch below, so a hostile
+    # or corrupt line is refused in the dry run rather than first mattering
+    # when --apply hands it to systemctl. An absolute path to a unit file in
+    # the just-restored tree used to be enabled AND started from here.
+    if ! restore_unit_ok "$u"; then
+      restore_warn "manifests/systemd-user.txt line is not a unit name, refusing: $u"
+      restore_skip "manifests/systemd-user.txt" "refused a line that is not a unit name: $u"
+      continue
+    fi
     case "$skip_units" in *" $u "*) continue ;; esac
     if [[ -n "${off[$u]:-}" ]]; then
       restore_skip "$u" "disabled on purpose (systemd-user-off.txt)"
@@ -362,10 +428,10 @@ restore_stage_services() {
       continue
     fi
     have systemctl || { restore_warn "  systemctl not found -- cannot enable $u"; continue; }
-    if systemctl --user is-enabled "$u" >/dev/null 2>&1; then
+    if systemctl --user is-enabled -- "$u" >/dev/null 2>&1; then
       continue
     fi
-    if systemctl --user enable --now "$u" >/dev/null 2>&1; then
+    if systemctl --user enable --now -- "$u" >/dev/null 2>&1; then
       RESTORE_WROTE+=("$(jstr "service:$u")")
     else
       restore_warn "  could not enable $u"
