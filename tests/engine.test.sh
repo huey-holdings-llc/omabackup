@@ -58,6 +58,10 @@ mk_fixture() {
   cp "$HERE/../share/data.gitignore" "$FR/.gitignore"
   cp "$HERE/../share/gitleaks.toml" "$FR/.gitleaks.toml"
   printf '{"format":1,"createdBy":"test"}\n' > "$FR/.omabackup"
+  # The repo root and .git are 0700 on a real install (setup chmods both, and
+  # data_repo_require re-asserts it), so the fixture starts that way too --
+  # otherwise every verb here would spend its first line tightening them.
+  chmod 700 "$FR" "$FR/.git"
   : > "$FR/modes.txt"; mkdir -p "$FR/home" "$FR/etc" "$FR/manifests"
   git -C "$FR" add -A && git -C "$FR" commit -qm "fixture"
   export OMABACKUP_CONFIG="$T/cfg/config.json" OMABACKUP_STATE_DIR="$T/state" OMABACKUP_STOCK_DIR="$STOCK"
@@ -2071,6 +2075,31 @@ if group 76 "restore refuses manifest lines that are not package or unit names";
     [[ "$(jq -r '[.would_write[] | select(startswith("service:"))] | length' <<<"$r76")" -ge 0 ]] \
       && ok "well-formed entries still enumerate" || bad "the stage stopped enumerating"
   fi
+fi
+
+if group 77 "the data repo root and .git are 0700 on every path into the repo"; then
+  # .git holds every backed-up config, in full history. Nothing asserted its
+  # mode: `mkdir -m 700 -p` leaves an EXISTING directory alone and
+  # `setup --import` chmod'd nothing, so pointing setup at a directory that
+  # was already there, or adopting a clone made under a looser umask, left all
+  # of it group and world readable. home/, etc/ and manifests/ self-heal
+  # through the snapshot's rsync -a; .git never does.
+  mk_fixture g77; seed_home
+  chmod 755 "$FR" "$FR/.git"
+  eq "the repo starts 0755 on both paths" "$(stat -c %a "$FR")/$(stat -c %a "$FR/.git")" "755/755"
+  check "setup --import adopts it" env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
+  eq "import ends 0700 on both paths" "$(stat -c %a "$FR")/$(stat -c %a "$FR/.git")" "700/700"
+
+  chmod 755 "$FR" "$FR/.git"
+  check "setup --data-repo over the same directory" env HOME="$FH" "$CLI" setup --data-repo "$FR" --no-timers --yes
+  eq "setup --data-repo ends 0700 on both paths" "$(stat -c %a "$FR")/$(stat -c %a "$FR/.git")" "700/700"
+
+  # ...and a repo loosened after setup closes itself on the next verb, rather
+  # than staying open until someone reruns the wizard.
+  chmod 755 "$FR" "$FR/.git"
+  d77=$(ob drift)
+  has "an ordinary verb says it tightened the repo" "$d77" "tightening to 700"
+  eq "the verb ends 0700 on both paths" "$(stat -c %a "$FR")/$(stat -c %a "$FR/.git")" "700/700"
 fi
 
 echo; echo "passed=$pass failed=$fail"

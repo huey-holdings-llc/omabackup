@@ -257,7 +257,9 @@ remote are never touched by either command.
 | State | `~/.local/state/omabackup/status.json` (the widget's view) and `omabackup.log` (rotated at 1 MB) |
 | Data repo | wherever setup put it, default `~/.local/share/omabackup/data` |
 
-The data repo itself:
+The data repo itself, whose root and `.git` are kept at mode 700 (setup sets
+both, and every verb re-asserts them, since `.git` holds the whole backup in
+full history):
 
 ```
 allowlist.txt        paths under $HOME to back up, one per line

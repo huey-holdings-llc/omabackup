@@ -115,10 +115,30 @@ state_write_status() {
   printf '%s\n' "$1" > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$STATUS_FILE"
 }
 
+# data_repo_assert_mode: the repo root and .git must be 0700. .git holds every
+# backed-up config in full history, and nothing was ever asserting its mode:
+# `mkdir -m 700 -p` leaves an EXISTING directory alone, and `setup --import`
+# chmod'd nothing, so pointing setup at a directory that already existed, or
+# adopting a clone made under a looser umask, left all of it group and world
+# readable. home/, etc/ and manifests/ self-heal through the snapshot's
+# `rsync -a`; .git never does. Warn and fix rather than die: a too-open repo
+# is a thing to close, not a reason to stop backing up.
+data_repo_assert_mode() {
+  local d m
+  for d in "$DATA_REPO" "$DATA_REPO/.git"; do
+    [[ -d "$d" ]] || continue
+    m=$(stat -c %a "$d" 2>/dev/null) || continue
+    [[ "$m" == 700 ]] && continue
+    warn "data repo path $d is mode $m; tightening to 700"
+    chmod 700 "$d" || warn "could not chmod 700 $d"
+  done
+}
+
 # data_repo_require: the marker is the contract; refuse a repo we do not understand.
 data_repo_require() {
   [[ -d "$DATA_REPO/.git" ]] || die "data repo is not a git repository: $DATA_REPO"
   [[ -f "$DATA_REPO/.omabackup" ]] || die "data repo has no .omabackup marker: run omabackup setup --import $DATA_REPO"
   local fmt; fmt=$(jq -r '.format // 0' "$DATA_REPO/.omabackup" 2>/dev/null || echo 0)
   [[ "$fmt" == 1 ]] || die "data repo format $fmt is not supported by this version"
+  data_repo_assert_mode
 }
