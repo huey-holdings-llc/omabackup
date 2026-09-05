@@ -157,16 +157,41 @@ setup_data_repo() {
 # commit that layout as the repo's first commit.
 setup_seed() {
   local f
+  # `laid` collects exactly what THIS run wrote, so the commit below can stage
+  # it by name. `git add -A` swept the whole data repo instead, which after
+  # the flagless-rerun fix means a real repo with real work in it: an
+  # in-progress edit to allowlist.txt would have been committed as "omabackup:
+  # initial layout" by a wizard rerun the user ran for some other reason. The
+  # mutation rule says this tool commits only its own output; this is setup's
+  # half of it.
+  local -a laid=()
   for f in allowlist drift-ignore etc-allowlist normalize; do
-    [[ -f "$DATA_REPO/$f.txt" ]] || cp "$PLUGIN_DIR/share/$f.example" "$DATA_REPO/$f.txt"
+    if [[ ! -f "$DATA_REPO/$f.txt" ]]; then
+      cp "$PLUGIN_DIR/share/$f.example" "$DATA_REPO/$f.txt"; laid+=("$f.txt")
+    fi
   done
-  [[ -f "$DATA_REPO/.gitignore" ]] || cp "$PLUGIN_DIR/share/data.gitignore" "$DATA_REPO/.gitignore"
-  [[ -f "$DATA_REPO/.gitleaks.toml" ]] || cp "$PLUGIN_DIR/share/gitleaks.toml" "$DATA_REPO/.gitleaks.toml"
-  [[ -f "$DATA_REPO/modes.txt" ]] || : > "$DATA_REPO/modes.txt"
+  [[ -f "$DATA_REPO/.gitignore" ]] \
+    || { cp "$PLUGIN_DIR/share/data.gitignore" "$DATA_REPO/.gitignore"; laid+=(.gitignore); }
+  [[ -f "$DATA_REPO/.gitleaks.toml" ]] \
+    || { cp "$PLUGIN_DIR/share/gitleaks.toml" "$DATA_REPO/.gitleaks.toml"; laid+=(.gitleaks.toml); }
+  [[ -f "$DATA_REPO/modes.txt" ]] || { : > "$DATA_REPO/modes.txt"; laid+=(modes.txt); }
   mkdir -p "$DATA_REPO/home" "$DATA_REPO/etc" "$DATA_REPO/manifests"
   chmod 700 "$DATA_REPO/home"
+  # home/, etc/ and manifests/ are empty here and git does not track empty
+  # directories, so they need no entry: the snapshot stages them by name once
+  # they hold something.
   setup_marker
-  git -C "$DATA_REPO" add -A >/dev/null
+  laid+=(.omabackup)      # setup_marker rewrites it on every run, and it is ours
+  # Plus any seed file git has never seen. Pointing setup at a directory that
+  # already held the lists but had never committed them is legitimate (spec
+  # section 6's "point at an existing empty repo"), and untracked means there
+  # is no human edit to a tracked file to sweep up.
+  local s
+  for s in allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt modes.txt .gitignore .gitleaks.toml; do
+    case " ${laid[*]} " in *" $s "*) continue ;; esac
+    git -C "$DATA_REPO" ls-files --error-unmatch -- "$s" >/dev/null 2>&1 || laid+=("$s")
+  done
+  git -C "$DATA_REPO" add -- "${laid[@]}" >/dev/null
   # `git commit -q` does not suppress "nothing to commit, working tree
   # clean" on stdout when a rerun has nothing new to lay down; that line
   # must never leak into a --json caller's single JSON object.

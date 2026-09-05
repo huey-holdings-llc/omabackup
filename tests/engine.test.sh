@@ -376,6 +376,28 @@ if group 13 "filename that looks like a credential"; then
   # ...and the public half is the one documented exemption.
   printf 'ssh-ed25519 AAAA comment\n' > "$FH/.config/mytool/id_ed25519.pub"
   check "a public key is not treated as a credential" env HOME="$FH" "$CLI" snapshot --no-push
+
+  # That exemption belongs to the id_ class ALONE. A .pub suffix on any other
+  # credential name is not a public key, it is a credential with a suffix.
+  # Contents are deliberately innocuous in both: only the FILENAME may
+  # explain the refusal, or the content scan would answer for the gate under
+  # test and the assertion would pass with the exemption wide open.
+  printf 'nothing secret in here\n' > "$FH/.config/mytool/ghp_token.pub"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "snapshot refuses ghp_token.pub" || bad "a .pub suffix let a ghp_ filename through"
+  has "the ghp_token.pub refusal names the filename gate" "$out" "credential-looking filename"
+  rm -f "$FH/.config/mytool/ghp_token.pub"
+  printf 'nothing secret in here\n' > "$FH/.config/mytool/AKIAABCDEFGHIJKLMNOP.pub"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "snapshot refuses an AWS key id with a .pub suffix" || bad "a .pub suffix let an AKIA filename through"
+  has "the AKIA .pub refusal names the filename gate" "$out" "credential-looking filename"
+  rm -f "$FH/.config/mytool/AKIAABCDEFGHIJKLMNOP.pub"
+
+  # Both original cases still hold with the narrowed exemption in place.
+  check "id_ed25519.pub is still allowed" env HOME="$FH" "$CLI" snapshot --no-push
+  printf 'PRIVATE KEY BODY\n' > "$FH/.config/mytool/id_rsa.old"
+  fails "id_rsa.old is still refused" env HOME="$FH" "$CLI" snapshot --no-push
+  rm -f "$FH/.config/mytool/id_rsa.old"
 fi
 if group 14 "allowlist entry that became a symlink"; then
   mk_fixture g14; seed_home; allow '.config/mytool'
@@ -1353,6 +1375,19 @@ if group 64 "a flagless setup rerun keeps the configured data repo, remote and p
   eq "the trust rerun still keeps remote.url" "$(jq -r .remote.url "$OMABACKUP_CONFIG")" "$T/remote.git"
   eq "the trust rerun flips remote.trusted" "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "true"
 
+  # A rerun now reaches a REAL data repo, so setup_seed must stage only what
+  # it laid down. An in-progress edit to a list is the user's to commit, with
+  # their own message: the wizard must never sweep it into "omabackup: initial
+  # layout" behind their back.
+  printf '.config/an-edit-in-progress\n' >> "$TABS/elsewhere/allowlist.txt"
+  head64=$(git -C "$TABS/elsewhere" rev-parse HEAD)
+  check "flagless rerun with a dirty allowlist" env HOME="$FH" "$CLI" setup --yes --no-timers
+  has "the allowlist edit is still uncommitted after the rerun" \
+    "$(git -C "$TABS/elsewhere" status --porcelain -- allowlist.txt)" "allowlist.txt"
+  eq "the rerun created no commit touching allowlist.txt" \
+    "$(git -C "$TABS/elsewhere" rev-list "$head64"..HEAD -- allowlist.txt | grep -c . || true)" "0"
+  git -C "$TABS/elsewhere" checkout -q -- allowlist.txt
+
   # A relative --data-repo is stored resolved: the timer runs from /, so a
   # path relative to the terminal setup happened to run in means nothing.
   ( cd "$T" && env HOME="$FH" OMABACKUP_CONFIG="$T/rel.json" "$CLI" setup --data-repo relrepo --no-timers --yes ) >/dev/null 2>&1
@@ -1372,27 +1407,52 @@ if group 65 "push --confirm runs the staged secret gate"; then
   # any other list) was committed and then pushed by the very next line.
   mk_fixture g65; seed_home; commit_baseline
   git -C "$FR" push -q -u origin main 2>/dev/null || true
-  if command -v gitleaks >/dev/null; then
-    before65=$(git -C "$FR" rev-parse HEAD)
-    key65="sk-ant-api03-$(rand_body 90)AA"
-    # drift-ignore.txt, not .gitleaks.toml: gitleaks' own default config
-    # allowlists paths named gitleaks.toml, so a token planted there proves
-    # nothing about this gate.
-    printf '\n# pasted by accident: %s\n' "$key65" >> "$FR/drift-ignore.txt"
-    p65=$(obj push --confirm)
-    eq "push --confirm refuses a secret in a watched list file" "$(jq -r .ok <<<"$p65")" "false"
-    has "the refusal names the staged scan" "$p65" "staged secret scan"
-    eq "nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$before65"
-    eq "the staging was undone" "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
-    git -C "$FR" checkout -q -- drift-ignore.txt
-    # And a clean list edit still commits, so the gate is not just refusing
-    # everything.
-    printf '\n# clean note\n' >> "$FR/drift-ignore.txt"
-    eq "a clean list edit still commits" "$(obj push --confirm | jq -r .ok)" "true"
-    eq "the clean edit is committed" "$(git -C "$FR" status --porcelain -- drift-ignore.txt | grep -c . || true)" "0"
-  else
-    echo "  (gitleaks not installed: skipping the staged gate on push)"
+
+  # This group must decide on every machine, so when gitleaks is not
+  # installed a fake stands in for exactly the one call it is about: the
+  # staged-commit scan. Same PATH-shadow pattern as the fake curl and fake
+  # systemctl elsewhere in this suite. The fake reads the real staged diff, so
+  # it still distinguishes a planted token from a clean edit; everything else
+  # (the version probe, the staging-tree scan) exits 0.
+  GL65=""
+  if ! command -v gitleaks >/dev/null; then
+    mkdir -p "$T/fakebin"
+    cat > "$T/fakebin/gitleaks" <<'FAKEGL'
+#!/bin/sh
+case " $* " in
+  *" --staged "*)
+    if git diff --cached 2>/dev/null | grep -q 'sk-ant-'; then
+      echo "fake gitleaks: anthropic-api-key found in a staged file"
+      exit 1
+    fi
+    ;;
+esac
+exit 0
+FAKEGL
+    chmod +x "$T/fakebin/gitleaks"
+    GL65="$T/fakebin:"
+    echo "  (gitleaks not installed: a fake on PATH stands in for the staged scan)"
   fi
+  # Same shape as ob/obj, with the fake (if any) ahead of the real PATH.
+  pj65() { env HOME="$FH" PATH="${GL65}$PATH" "$CLI" "$@" --json 2>/dev/null; }
+
+  before65=$(git -C "$FR" rev-parse HEAD)
+  key65="sk-ant-api03-$(rand_body 90)AA"
+  # drift-ignore.txt, not .gitleaks.toml: gitleaks' own default config
+  # allowlists paths named gitleaks.toml, so a token planted there proves
+  # nothing about this gate.
+  printf '\n# pasted by accident: %s\n' "$key65" >> "$FR/drift-ignore.txt"
+  p65=$(pj65 push --confirm)
+  eq "push --confirm refuses a secret in a watched list file" "$(jq -r .ok <<<"$p65")" "false"
+  has "the refusal names the staged scan" "$p65" "staged secret scan"
+  eq "nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$before65"
+  eq "the staging was undone" "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
+  git -C "$FR" checkout -q -- drift-ignore.txt
+  # And a clean list edit still commits, so the gate is not just refusing
+  # everything.
+  printf '\n# clean note\n' >> "$FR/drift-ignore.txt"
+  eq "a clean list edit still commits" "$(pj65 push --confirm | jq -r .ok)" "true"
+  eq "the clean edit is committed" "$(git -C "$FR" status --porcelain -- drift-ignore.txt | grep -c . || true)" "0"
 fi
 
 if group 66 "guards that had no proving assertion"; then

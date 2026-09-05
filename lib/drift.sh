@@ -94,16 +94,22 @@ drift_scan() {
   # Only the leftover files are matched per-file.
   # Scratch for the two-phase walk. Never /tmp: a bare `mktemp -d` put the
   # full listing of every file under $HOME (paths are themselves private) in a
-  # world-readable directory. It goes in the data repo's own .staging when a
-  # repo is configured, and $STATE_DIR for a standalone drift run that has
-  # none; both are 0700 and both are ours.
+  # world-readable directory.
+  #
+  # $STATE_DIR, not $STAGE, on EVERY path including the snapshot's own drift
+  # pass. $STAGE is torn down and rebuilt by `rm -rf "$STAGE"` at the top of
+  # snapshot_stage and again at the end of snapshot_sync, so a standalone
+  # `omabackup drift` running alongside a snapshot would have had its listing
+  # deleted mid-walk. $STATE_DIR belongs to no other phase, is 0700, and is
+  # already where verify puts its throwaway. One code path, no "which caller
+  # am I" question to get wrong later.
   #
   # DRIFT_TMP is deliberately NOT `local`: the trap below fires when the whole
   # process exits, by which point this call frame is gone, and referencing a
   # local under `set -u` would be an unbound-variable error (the same lesson
   # as VERIFY_R in lib/verify.sh). bin/omabackup runs one verb per process, so
   # a plain global is exactly as scoped as the trap is.
-  local _dscratch="${STAGE:-$STATE_DIR}"
+  local _dscratch="$STATE_DIR"
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
   mkdir -m 700 -p "$_dscratch" || { echo "# ERROR drift: cannot create scratch under $_dscratch"; return 1; }
   DRIFT_TMP=$(mktemp -d "$_dscratch/.drift.XXXXXX") \

@@ -16,9 +16,12 @@
 # covers the same set as the gitignore, and the public half is exempted
 # structurally in secrets_filename_gate below (ERE has no lookahead).
 SECRET_NAME_RE='(ghp_|gho_|github_pat_|AKIA[0-9A-Z]{16}|sk-ant-|BEGIN.*PRIVATE|^id_[A-Za-z0-9._-]+$|\.pem$|\.key$|\.kdbx$|^hosts\.yml$)'
-# Public keys are meant to be shared and are the one documented exemption
-# (share/data.gitignore's `!id_*.pub`).
-SECRET_NAME_EXEMPT_RE='\.pub$'
+# The one documented exemption, and it belongs to the `id_` class ALONE:
+# share/data.gitignore says `id_*` then `!id_*.pub`, nothing wider. A bare
+# `\.pub$` here would have exempted every other class too, so ghp_token.pub,
+# AKIA....pub and sk-ant-oat01-....pub would all have walked straight through
+# a gate that refused them before. Anchored at both ends for that reason.
+SECRET_KEY_PUB_RE='^id_[A-Za-z0-9._-]+\.pub$'
 RULES_FILE="$PLUGIN_DIR/share/gitleaks.toml"
 
 gitleaks_available() { have gitleaks; }
@@ -31,7 +34,7 @@ secrets_filename_gate() {
   local hits
   hits=$(find "$1" -type f -printf '%f\n' 2>/dev/null \
     | grep -E "$SECRET_NAME_RE" \
-    | grep -vE "$SECRET_NAME_EXEMPT_RE" || true)
+    | grep -vE "$SECRET_KEY_PUB_RE" || true)
   [[ -z "$hits" ]] || die "credential-looking filename(s) in the staging tree: $(head -3 <<<"$hits" | tr '\n' ' ')"
 }
 
