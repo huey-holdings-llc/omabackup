@@ -5,7 +5,7 @@
 #
 # This file also carries the write verbs (allow/ignore/resolve-gone/push,
 # plus timer/open) driven by the popup's triage buttons. Ported from
-# hp-laptop-config/bin/widget-helper.sh:156-381. Every write path enforces:
+# the source engine, bin/widget-helper.sh:156-381. Every write path enforces:
 #   * input must be a path the CURRENT drift report names (no arbitrary
 #     writes), "~/"-prefixed exactly as `status` emitted it;
 #   * the repo flock is held for the edit (and any rollback) -- but NOT while
@@ -235,6 +235,24 @@ cmd_push() {
     if ! take_lock; then widget_reply_fail "the repo lock is held (a snapshot may be running); try again shortly"; return 1; fi
     git -C "$DATA_REPO" add -- "${dirty[@]}" \
       || { drop_lock; widget_reply_fail "git add failed for the listed files"; return 1; }
+    # AUTHORITATIVE GATE, the same one the snapshot pipeline runs before its
+    # own commit (lib/snapshot.sh). This path stages five files a human just
+    # edited -- .gitleaks.toml among them -- and committed them with no
+    # content scan at all, so a token pasted into a list could be committed
+    # and then pushed by the very next line. secrets_scan_staged die()s on a
+    # hit, so it runs in a command substitution (its own subshell): the die
+    # can only take THAT subshell down, its `git reset -q` has already undone
+    # the staging in the real repo, and the refusal below is still this
+    # verb's own {ok:false, problems:[...]} shape.
+    local scan_rc=0 scan_out=""
+    scan_out=$(secrets_scan_staged 2>&1) || scan_rc=$?
+    if [[ $scan_rc -ne 0 ]]; then
+      [[ -z "$scan_out" ]] || printf '%s\n' "$scan_out" >&2
+      git -C "$DATA_REPO" reset -q 2>/dev/null || true
+      drop_lock
+      widget_reply_fail "the staged secret scan refused these files; staging undone, nothing committed"
+      return 1
+    fi
     out=$(git -C "$DATA_REPO" commit -q -m "lists: update ${dirty[*]} via widget" 2>&1) \
       || { drop_lock; widget_reply_fail "commit failed: $out"; return 1; }
     drop_lock

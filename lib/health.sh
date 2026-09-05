@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Health checks: one collection pass shared by `status` (lib/widget.sh) and
 # `health` (cmd_health below). Ported from
-# hp-laptop-config/bin/widget-helper.sh:40-155 (the JSON severity model --
+# the source engine, bin/widget-helper.sh:40-155 (the JSON severity model --
 # drift/uncommitted = attention, everything else = fault) and
-# hp-laptop-config/bin/health-check.sh:42-173 (the login-shell nag, which
+# the source engine, bin/health-check.sh:42-173 (the login-shell nag, which
 # reuses the same collection instead of re-deriving it).
 #
 # FAIL CLOSED: an unreadable or garbage manifests/.last-run falls back to the
@@ -77,7 +77,7 @@ health_collect() {
   local drift_file="$DATA_REPO/manifests/drift.txt" items arr count
   H_SCAN_COMPLETE=false; H_DRIFT_COUNT=0; H_DRIFT_TRUNCATED=false; H_DRIFT_JSON="[]"
   if [[ ! -f "$drift_file" ]]; then
-    H_PROBLEMS+=("no drift report -- snapshot.sh may not be running")
+    H_PROBLEMS+=("no drift report -- the snapshot timer may not be running")
   else
     grep -q '^# drift-scan-complete' "$drift_file" && H_SCAN_COMPLETE=true
     [[ "$H_SCAN_COMPLETE" == true ]] || H_PROBLEMS+=("drift report is incomplete -- the scan did not finish")
@@ -266,7 +266,22 @@ cmd_health() {
     fi
   fi
 
-  (( ${#lines[@]} == 0 )) && return 0
-  for p in "${lines[@]}"; do printf '\033[1;31m[omabackup] %s\033[0m\n' "$p"; done
-  return 1
+  # One JSON object on stdout under --json, even (especially) when unhealthy:
+  # `health` is a verb like any other, and a caller asking for JSON got a
+  # coloured ANSI line and nothing to parse. `state` is the same three-way
+  # verdict status.json carries; `problems` is exactly the set of lines the
+  # human rendering would print, throttling included, so the two modes can
+  # never disagree about what is wrong.
+  local healthy=true
+  (( ${#lines[@]} == 0 )) || healthy=false
+  if [[ $JSON == 1 ]]; then
+    local -a probs_j=()
+    for p in ${lines[@]+"${lines[@]}"}; do probs_j+=("$(jstr "$p")"); done
+    jq -cn --argjson ok "$healthy" --arg state "$(health_state)" \
+      --argjson problems "[$(jjoin ${probs_j[@]+"${probs_j[@]}"})]" \
+      '{ok:$ok, state:$state, problems:$problems}'
+  elif [[ $healthy == false ]]; then
+    for p in "${lines[@]}"; do printf '\033[1;31m[omabackup] %s\033[0m\n' "$p"; done
+  fi
+  [[ $healthy == true ]]
 }

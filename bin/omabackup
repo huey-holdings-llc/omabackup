@@ -80,7 +80,15 @@ main() {
       if config_exists; then
         config_load
       else
-        printf '\033[1;31m[omabackup] not configured -- run: omabackup setup\033[0m\n'
+        # Same shared object status uses, so the two never drift apart, with
+        # ok:false in front of it: --json must get one JSON object here too,
+        # not a coloured line it cannot parse.
+        local hj; hj=$(health_not_configured_json)
+        if [[ $JSON == 1 ]]; then
+          jq -c '{ok:false} + . + {problems: (.problems + ["not configured; run: omabackup setup"])}' <<<"$hj"
+        else
+          printf '\033[1;31m[omabackup] not configured -- run: omabackup setup\033[0m\n'
+        fi
         exit 1
       fi ;;
     snapshot|drift|allow|ignore|resolve-gone|push|lint|restore|verify|timer|self-test|open|notify-failure) config_load ;;
