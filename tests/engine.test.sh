@@ -1806,7 +1806,7 @@ if group 69 "a remote advanced elsewhere reads as diverged, not as a retryable p
     && ok "the divergence stamp is cleared by a successful push" || bad "the stamp outlived the divergence"
 fi
 
-if group 70 "a filename holding the old note separator names its own drift row"; then
+if group 70 "a filename the report cannot name never renames someone else's row"; then
   # The report used to separate a note from the path with " (", and every
   # consumer recovered the path by cutting at the first one. A file literally
   # named "creds (readme" therefore produced a row whose displayed path was
@@ -1846,6 +1846,39 @@ if group 70 "a filename holding the old note separator names its own drift row";
   eq "allow accepts the row under its real name" "$(obj allow '~/.config/creds (readme' | jq -r .ok)" "true"
   grep -qxF -- '.config/creds (readme' "$FR/allowlist.txt" \
     && ok "the real name was written to the allowlist" || bad "the real name is missing from the allowlist"
+
+  # The same attack in its raw form. Changing the separator is not a fix on
+  # its own: find hands the producers whatever is on disk, so a filename
+  # holding a TAB (or a newline) still splits a row into a path and a note.
+  # The producers refuse such a name and emit an ERROR row instead, which is a
+  # fault and which no write verb can act on.
+  printf 'readme\n' > "$FH/.config/creds"$'\t'"tabbed"
+  printf 'readme\n' > "$FH/.config/creds"$'\n'"newlined"
+  commit_baseline
+  s70=$(obj status)
+  eq "no actionable row claims the truncated prefix" \
+    "$(jq -r '[.drift[] | select(.type != "ERROR") | select(.path == "~/.config/creds")] | length' <<<"$s70")" "0"
+  eq "both unrepresentable names become ERROR rows" \
+    "$(jq -r '[.drift[] | select(.type == "ERROR") | select(.path | test("unrepresentable"))] | length' <<<"$s70")" "2"
+  has "the ERROR row names the parent and escapes the basename" \
+    "$(jq -r '.drift[] | select(.type=="ERROR") | .path' <<<"$s70")" \
+    "unrepresentable path under ~/.config"
+  eq "an ERROR row makes the state a fault" "$(jq -r .state <<<"$s70")" "fault"
+  # shellcheck disable=SC2088 # literal "~/" prefix, not a path to expand
+  a70b=$(obj allow '~/.config/creds')
+  eq "allow still refuses the truncated prefix" "$(jq -r .ok <<<"$a70b")" "false"
+  grep -qx '.config/creds' "$FR/allowlist.txt" \
+    && bad "the secrets directory was allowlisted through the TAB row" \
+    || ok "the secrets directory stayed out of the allowlist"
+  commit_baseline
+  [[ -e "$FR/home/.config/creds/token.json" ]] \
+    && bad "the next snapshot copied the secret" || ok "the next snapshot did not copy the secret"
+  if git -C "$FR" ls-files -- 'home/.config/creds/*' | grep -q .; then
+    bad "the secret is tracked in the repo"
+  else
+    ok "the secret is not tracked in the repo"
+  fi
+  rm -f "$FH/.config/creds"$'\t'"tabbed" "$FH/.config/creds"$'\n'"newlined"
 
   # A note still round-trips, TAB-separated, through the JSON the popup reads.
   { printf 'TOOBIG     ~/.config/huge.img\t(exceeds 8m; NOT backed up)\n'

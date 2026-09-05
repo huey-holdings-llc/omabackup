@@ -264,8 +264,16 @@ snapshot_stage() {
   while IFS= read -r big; do
     [[ -z "$big" ]] && continue
     warn "too large for the backup (> $maxsize): ~/${big#"$HOME"/}"
-    printf 'TOOBIG     ~/%s\t(exceeds %s; NOT backed up)\n' "${big#"$HOME"/}" "$maxsize" \
-      >> "$STAGE/manifests/.toobig"
+    # Same rule as every other producer: a TAB or a newline in the name means
+    # the row cannot say which file it is about, so it becomes an ERROR row
+    # (which is a fault) rather than a TOOBIG row naming a different path.
+    # shellcheck disable=SC2088  # literal "~/" display prefix, exactly what the report prints; never a path bash is asked to expand
+    if drift_path_representable "~/${big#"$HOME"/}"; then
+      printf 'TOOBIG     ~/%s\t(exceeds %s; NOT backed up)\n' "${big#"$HOME"/}" "$maxsize" \
+        >> "$STAGE/manifests/.toobig"
+    else
+      drift_error_unrepresentable "~/${big#"$HOME"/}" >> "$STAGE/manifests/.toobig"
+    fi
   done < <(snapshot_oversized "$findsize")
 
   cd "$back" || die "cannot return to $back"
@@ -302,7 +310,12 @@ snapshot_oversized() {
 snapshot_drift_finish() {
   local rep="$STAGE/manifests/drift.txt" g
   for g in ${GONE[@]+"${GONE[@]}"}; do
-    printf 'GONE       ~/%s\n' "$g" >> "$rep"
+    # shellcheck disable=SC2088  # literal "~/" display prefix, exactly what the report prints; never a path bash is asked to expand
+    if drift_path_representable "~/$g"; then
+      printf 'GONE       ~/%s\n' "$g" >> "$rep"
+    else
+      drift_error_unrepresentable "~/$g" >> "$rep"
+    fi
     warn "optional entry absent (uninstalled?): $g"
   done
   # A crashed scan used to be indistinguishable from a clean one: the output
@@ -506,8 +519,13 @@ snapshot_commit() {
     local ex
     while IFS= read -r ex; do
       [[ -z "$ex" ]] && continue
-      printf 'EXCLUDED   ~/%s\t(matches .gitignore; NOT backed up)\n' "${ex#home/}" \
-        >> "$DATA_REPO/manifests/drift.txt"
+      # shellcheck disable=SC2088  # literal "~/" display prefix, exactly what the report prints; never a path bash is asked to expand
+      if drift_path_representable "~/${ex#home/}"; then
+        printf 'EXCLUDED   ~/%s\t(matches .gitignore; NOT backed up)\n' "${ex#home/}" \
+          >> "$DATA_REPO/manifests/drift.txt"
+      else
+        drift_error_unrepresentable "~/${ex#home/}" >> "$DATA_REPO/manifests/drift.txt"
+      fi
     done < <(git -C "$DATA_REPO" ls-files -o -i --exclude-standard home/ 2>/dev/null | awk 'NR<=20' || true)
     # Re-stage. These lines are written after the `git add` above, so without
     # this they are never committed AND leave the working tree permanently

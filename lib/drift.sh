@@ -22,6 +22,37 @@
 # shellcheck disable=SC2034  # read by lib/manifests.sh and lib/snapshot.sh
 DRIFT_CLASSES='^(MODIFIED|NEW|GONE|# ERROR)'
 
+# drift_path_representable PATH: 0 when PATH can be written as a report row.
+#
+# The row format is `TYPE<spaces>PATH<TAB>(note)`, one row per line, so a TAB
+# or a newline in a FILENAME cannot be represented: a file named
+# `creds<TAB>readme` under a drift-ignored secrets directory produced a row
+# whose path read `~/.config/creds`, the widget's own "does the report name
+# this path" gate split it identically and agreed with itself, and one Allow
+# click widened the allowlist to a directory the scan had never reported.
+# Changing the separator does not fix that on its own, because `find` hands
+# the producers whatever is on disk. So the producers refuse such a path and
+# emit an ERROR row instead (drift_error_unrepresentable): ERROR rows are
+# faults, and no write verb can act on one.
+drift_path_representable() {
+  case "$1" in *$'\t'*|*$'\n'*) return 1 ;; esac
+  return 0
+}
+
+# drift_error_unrepresentable PATH: the ERROR row that stands in for a path
+# the report cannot name. The parent is printed plainly so a human can go and
+# look, and the basename is %q-escaped so the row itself stays one line with
+# no TAB in it. A parent that is ITSELF unrepresentable is escaped too, or the
+# stand-in would carry the same byte it exists to keep out.
+drift_error_unrepresentable() {
+  local p=$1 parent name
+  parent=${p%/*}
+  [ "$parent" = "$p" ] && parent="."
+  name=${p##*/}
+  case "$parent" in *$'\t'*|*$'\n'*) parent=$(printf '%q' "$parent") ;; esac
+  printf '# ERROR: unrepresentable path under %s (%s)\n' "$parent" "$(printf '%q' "$name")"
+}
+
 # drift_line_split LINE: split one report line into DRIFT_TYPE, DRIFT_PATH and
 # DRIFT_NOTE. Returns 1 for a line that is not a report row (blank, or a
 # comment other than "# ERROR"), so callers write `... || continue`.
@@ -29,15 +60,13 @@ DRIFT_CLASSES='^(MODIFIED|NEW|GONE|# ERROR)'
 # The report format is `TYPE<spaces>PATH` with an optional note separated from
 # the path by a TAB: `TYPE<spaces>PATH<TAB>(note)`. It used to separate the
 # note with " (", and every consumer recovered the path by cutting at the
-# first " (" -- so a file literally named `creds (readme` produced a row whose
-# path was the prefix `~/.config/creds`, the widget's own "does the report
-# name this path" gate truncated identically and agreed with itself, and one
-# Allow click widened the allowlist to a directory the scan had never
-# reported. A TAB cannot occur in a path here: no producer writes one, and
-# allow/ignore refuse an argument containing one (assert_argv_safe and
-# rel_from_tilde, lib/widget.sh).
+# first " (" -- see drift_path_representable above for the loss event that
+# came of it. A TAB reaches a path here only if something other than this
+# tool wrote the report, so a row carrying more than one is malformed rather
+# than a path plus a note, and is read as ERROR rather than trusted up to the
+# first separator.
 drift_line_split() {
-  local line=$1 rest
+  local line=$1 rest tabs
   DRIFT_TYPE=""; DRIFT_PATH=""; DRIFT_NOTE=""
   case "$line" in
     '# ERROR'*)
@@ -53,6 +82,12 @@ drift_line_split() {
   DRIFT_TYPE=${line%%[[:space:]]*}
   rest=${line#"$DRIFT_TYPE"}
   rest=${rest#"${rest%%[![:space:]]*}"}
+  tabs=${rest//[!$'\t']/}
+  if [[ ${#tabs} -gt 1 ]]; then
+    DRIFT_TYPE=ERROR
+    DRIFT_PATH="malformed drift row, more than one TAB: $(printf '%q' "$line")"
+    return 0
+  fi
   case "$rest" in
     *$'\t'*) DRIFT_PATH=${rest%%$'\t'*}; DRIFT_NOTE=${rest#*$'\t'} ;;
     *)       DRIFT_PATH=$rest ;;
@@ -95,10 +130,16 @@ drift_scan() {
   # count downstream (the item total, a future health summary).
   # _drift_report TYPE PATH [NOTE]: one row. The note is TAB-separated from
   # the path (see drift_line_split); it is never appended to the path itself,
-  # or a filename containing the separator renames the row.
+  # or a filename containing the separator renames the row. A path that holds
+  # the separator (or a newline) cannot be a row at all: find hands this
+  # function whatever is on disk, so it becomes an ERROR row naming the
+  # parent, which is a fault and which no write verb can act on.
   _drift_report() {
     [ -n "${_reported[$2]:-}" ] && return 0
     _reported[$2]=1
+    if ! drift_path_representable "$2"; then
+      drift_error_unrepresentable "$2"; found=$((found+1)); return 0
+    fi
     if [ -n "${3:-}" ]; then
       printf '%-10s %s\t(%s)\n' "$1" "$2" "$3"
     else
