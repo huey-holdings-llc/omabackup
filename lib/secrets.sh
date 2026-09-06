@@ -56,14 +56,16 @@ hosts.yml'
 # `SG\.` alone matches MSG.txt, and `npm_` matches npm_debug-anything.
 SECRET_NAME_RE='(ghp_|gho_|github_pat_|AKIA[0-9A-Z]{16}|sk-ant-|BEGIN.*PRIVATE'\
 '|^glpat-|^xox[baprs]-|^AIza|^sk-proj-|^hf_|^npm_|^dop_v1_|^SG\.'\
-'|^id_[A-Za-z0-9._-]+$|\.pem$|\.key$|\.p12$|\.pfx$|\.kdbx$|\.ovpn$|\.jks$|\.asc$'\
+'|^id_[^/]+$|\.pem$|\.key$|\.p12$|\.pfx$|\.kdbx$|\.ovpn$|\.jks$|\.asc$'\
 '|^\.env$|^\.env\.|^\.netrc$|^\.git-credentials$|^\.npmrc$|^\.pypirc$'\
 '|^\.credentials\.json$|^credentials$|^Cookies|^hosts\.yml$)'
 # The one documented exemption, and it belongs to the `id_` class ALONE:
 # share/data.gitignore says `id_*` then `!id_*.pub`, nothing wider. A bare
 # `\.pub$` here would have exempted every other class too, so ghp_token.pub,
 # AKIA....pub and sk-ant-oat01-....pub would all have walked straight through
-# a gate that refused them before. Anchored at both ends for that reason.
+# a gate that refused them before. Anchored at both ends for that reason, and
+# the character class stays narrow here on purpose: an `id_` name carrying
+# anything odder than this is refused rather than exempted.
 SECRET_KEY_PUB_RE='^id_[A-Za-z0-9._-]+\.pub$'
 RULES_FILE="$PLUGIN_DIR/share/gitleaks.toml"
 
@@ -73,11 +75,19 @@ gitleaks_available() { have gitleaks; }
 # `find | grep -q` failed open on SIGPIPE in the original engine -- grep -q
 # exits at the first match, find dies of SIGPIPE (141), and pipefail reported
 # 141 so the `if` never fired (snapshot.sh:502-508).
+#
+# NUL-delimited, and the `id_` class matches share/data.gitignore's `id_*`
+# rather than a character class of its own. A basename may contain a newline:
+# `%f\n` split `id_<LF>rsa` into `id_` and `rsa`, neither of which matches
+# anything, so a private key walked straight through the gate that exists to
+# stop it. `%f\0` with `grep -z` keeps the name whole, and `[^/]+` is what
+# lets the whole name match once the newline is part of it.
 secrets_filename_gate() {
   local hits
-  hits=$(find "$1" -type f -printf '%f\n' 2>/dev/null \
-    | grep -E "$SECRET_NAME_RE" \
-    | grep -vE "$SECRET_KEY_PUB_RE" || true)
+  hits=$(find "$1" -type f -printf '%f\0' 2>/dev/null \
+    | grep -zE "$SECRET_NAME_RE" \
+    | grep -zvE "$SECRET_KEY_PUB_RE" \
+    | tr '\n\0' ' \n' || true)
   [[ -z "$hits" ]] || die "credential-looking filename(s) in the staging tree: $(head -3 <<<"$hits" | tr '\n' ' ')"
 }
 

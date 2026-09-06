@@ -467,6 +467,19 @@ if group 13 "filename that looks like a credential"; then
   has "the AKIA .pub refusal names the filename gate" "$out" "credential-looking filename"
   rm -f "$FH/.config/mytool/AKIAABCDEFGHIJKLMNOP.pub"
 
+  # A BASENAME MAY CONTAIN A NEWLINE, and the gate read find's output a line at
+  # a time: `id_<LF>rsa` arrived as `id_` and `rsa`, neither of which matches
+  # anything, so the private key the gate exists to stop walked through it. The
+  # body is innocuous on purpose: only the FILENAME may explain the refusal, or
+  # the content scan would be answering for the gate under test.
+  nl13=$'id_\nrsa'
+  printf 'nothing secret in here\n' > "$FH/.config/mytool/$nl13"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "snapshot refuses a key name with a newline inside it" \
+    || bad "a newline in the basename walked through the filename gate"
+  has "the newline-name refusal names the filename gate" "$out" "credential-looking filename"
+  rm -f "$FH/.config/mytool/$nl13"
+
   # Both original cases still hold with the narrowed exemption in place.
   check "id_ed25519.pub is still allowed" env HOME="$FH" "$CLI" snapshot --no-push
   printf 'PRIVATE KEY BODY\n' > "$FH/.config/mytool/id_rsa.old"
@@ -558,6 +571,20 @@ if group 21 "list hygiene"; then
   echo new > "$FH/.local/bin/late"; printf '.local/bin\n' >> "$FR/allowlist.txt"
   check "a file newer than the last run is pending, not NOTBACKEDUP" env HOME="$FH" "$CLI" lint
   check "--no-walk skips the completeness walk" env HOME="$FH" "$CLI" lint --no-walk
+
+  # The completeness walk read find's output a line at a time, so a newline in
+  # a filename arrived as two fragment paths: neither exists under home/, so a
+  # file that was backed up in full produced two NOTBACKEDUP rows and a red
+  # lint that no amount of backing it up could clear.
+  mk_fixture g21n; seed_home; allow '.config/mytool'
+  nl21=$'bad\nname.conf'
+  printf 'setting=1\n' > "$FH/.config/mytool/$nl21"
+  check "the snapshot backs up a file whose name holds a newline" env HOME="$FH" "$CLI" snapshot --no-push
+  [[ -e "$FR/home/.config/mytool/$nl21" ]] && ok "the file really is in the backup" \
+    || bad "the newline-named file was not backed up"
+  eq "and the completeness walk reports no NOTBACKEDUP fragments for it" \
+    "$(obj lint | jq -r '[.problems[] | select(.code == "NOTBACKEDUP")] | length')" "0"
+  check "so lint is clean" env HOME="$FH" "$CLI" lint
 fi
 if [[ "${OMABACKUP_REAL_REPO:-0}" == 1 ]] && group 21R "list hygiene against the REAL data repo"; then
   unset OMABACKUP_CONFIG OMABACKUP_STATE_DIR OMABACKUP_STOCK_DIR OMABACKUP_SKIP_ETC

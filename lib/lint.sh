@@ -187,7 +187,10 @@ lint_completeness() {
       [[ -e "$m" ]] || continue
       rel="${m#"$HOME"/}"
       if [[ -d "$m" ]]; then
-        while IFS= read -r f; do
+        # NUL-delimited, like every other find reader here: a newline in a
+        # filename split one path into two fragments, and both fragments were
+        # then reported NOTBACKEDUP for a file that was backed up in full.
+        while IFS= read -r -d '' f; do
           checked=$((checked+1))
           r="${f#"$HOME"/}"
           if [[ ! -e "$DATA_REPO/home/$r" ]]; then
@@ -203,7 +206,7 @@ lint_completeness() {
         # Same exclusions the snapshot's rsync applies (.git/, *.log, size
         # cap), or a deliberately skipped file is flagged NOTBACKEDUP forever.
         done < <(find "$m" -path '*/.git' -prune -o -type f ! -name '*.bak.*' ! -name '*.sample' \
-                   ! -name 'mimeinfo.cache' ! -name '*.log' ! -size +"$size_find" -print 2>/dev/null)
+                   ! -name 'mimeinfo.cache' ! -name '*.log' ! -size +"$size_find" -print0 2>/dev/null)
       else
         checked=$((checked+1))
         if [[ ! -e "$DATA_REPO/home/$rel" ]]; then
