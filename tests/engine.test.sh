@@ -1288,6 +1288,33 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
   eq "resolve-gone: refuses a path drift does not list as GONE" \
     "$(obj resolve-gone "$(tp .config/appz/z.toml)" remove | jq -r .ok)" "false"
 
+  # NOTHING TO PUSH IS NOT A REFUSAL, and it must not touch the network to
+  # say so. The popup shows Push whenever a remote exists, so pressing it on
+  # a healthy machine is the normal case, and it ran the visibility probe and
+  # then painted "push not allowed: remote-unverified" red over a repo with
+  # nothing waiting and nothing wrong. Untrusted, nothing ahead, nothing
+  # dirty: the reply is ok with a note, and the recorded verdict is untouched.
+  git -C "$FR" add -A >/dev/null 2>&1; git -C "$FR" commit -qm "settle before the push probe" >/dev/null 2>&1
+  git -C "$FR" push -q -u origin HEAD >/dev/null 2>&1
+  jq '.remote.trusted=false' "$OMABACKUP_CONFIG" > "$T/c51" && mv "$T/c51" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  printf '{"verifiable":true,"reason":"canary","url":"canary","at":1}\n' > "$OMABACKUP_STATE_DIR/push-verdict.json"
+  out51=$(obj push)
+  eq "push with nothing ahead and nothing dirty is ok, not a refusal" \
+    "$(jq -c '[.ok,.pushed,.note]' <<<"$out51")" '[true,0,"nothing to push"]'
+  eq "and it recorded no verdict, because it never probed" \
+    "$(jq -r .reason "$OMABACKUP_STATE_DIR/push-verdict.json")" "canary"
+  # A gate refusal with a commit actually waiting is still a refusal.
+  printf 'ahead\n' > "$FH/.config/mytool/mytool.conf"
+  ob snapshot --no-push >/dev/null 2>&1
+  out51=$(obj push)
+  eq "push with a commit waiting and the gate shut still refuses" "$(jq -r .ok <<<"$out51")" "false"
+  has "and says which gate" "$(jq -r '.problems[0]' <<<"$out51")" "push not allowed"
+  jq '.remote.trusted=true' "$OMABACKUP_CONFIG" > "$T/c51" && mv "$T/c51" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
+  # The commit above settled the list edits the confirm-gate assertions below
+  # are about; put one back so they still have something to confirm.
+  printf '.config/re-dirtied-for-the-confirm-gate/**   # %s widget test\n' "$(date +%F)" >> "$FR/drift-ignore.txt"
+
   # The dynamic push button: confirm-gated scoped commit, never `git add -A`.
   out51=$(obj push)
   eq "push: pending list edits require confirmation" \

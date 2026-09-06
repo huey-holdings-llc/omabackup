@@ -281,6 +281,19 @@ cmd_resolve_gone() {
   printf '{"ok":true,"lint_ok":true,"resolved":%s,"verb":%s}\n' "$(jstr "$rel")" "$(jstr "$verb")"
 }
 
+# push_nothing_ahead: 0 when git can prove there is nothing to send. An
+# upstream must exist (without one the first push is exactly what establishes
+# it, so "nothing ahead" is unprovable and the answer is no) and the ahead
+# count must parse as zero. Every unreadable answer means "carry on and try",
+# which is the fail-closed direction here: the cost is a probe, not a
+# missed backup.
+push_nothing_ahead() {
+  git -C "$DATA_REPO" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1 || return 1
+  local ahead
+  ahead=$(git -C "$DATA_REPO" rev-list --count '@{upstream}..HEAD' 2>/dev/null) || return 1
+  [[ "$ahead" == 0 ]]
+}
+
 # cmd_push [--confirm]: the dynamic push button. Plain push when only commits
 # are waiting; when the four lists (or .gitleaks.toml) are dirty, report the
 # files and require --confirm, then stage EXACTLY those paths (never -A) and
@@ -299,6 +312,18 @@ cmd_push() {
     for p in "${dirty[@]}"; do files_json+=("$(jstr "$p")"); done
     printf '{"ok":false,"needs_confirm":true,"files":[%s]}\n' "$(jjoin "${files_json[@]}")"
     return 1
+  fi
+
+  # NOTHING TO DO IS NOT A REFUSAL, and it must not touch the network to say
+  # so. The popup shows Push whenever a remote exists, so pressing it on a
+  # healthy machine is the normal case -- and that ran the visibility probe
+  # and then painted "push not allowed: remote-unverified" in the urgent
+  # colour, over a repo with nothing waiting and nothing wrong. Answer from
+  # git alone, and record no verdict: a probe that was never asked for must
+  # not overwrite the answer of one that was.
+  if [[ ${#dirty[@]} -eq 0 ]] && push_nothing_ahead; then
+    printf '{"ok":true,"pushed":0,"note":"nothing to push"}\n'
+    return 0
   fi
 
   remote_probe

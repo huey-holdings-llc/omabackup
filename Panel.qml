@@ -171,6 +171,19 @@ Panel {
       : fallback
   }
 
+  // ONE PLACE decides what a reply looks like on screen, so no verb can grow
+  // its own convention. problems[]/error are the refusal shapes and are the
+  // only thing painted in the urgent colour; `note` is a verb saying it did
+  // nothing and had nothing to do, which is not a fault and must not read
+  // like one. Both are cleared on EVERY action: a note left over from the
+  // last button hung around under the next one's result.
+  function reportAction(rep, fallback) {
+    var good = !!(rep && rep.ok === true)
+    root.actionError = good ? "" : root.actionErrorText(rep, fallback)
+    root.actionNote = (good && rep && rep.note) ? String(rep.note) : ""
+    return good
+  }
+
   // ---- actions: every call runs one CLI verb through the service, argv only.
   function markHandled(path) {
     if (path.charAt(path.length - 1) === "/") handledPrefixes.push(path)
@@ -180,8 +193,7 @@ Panel {
   function allowPath(path) {
     if (!root.svc) return
     root.svc.allow(path, function(rep) {
-      root.actionError = (rep && rep.ok === true) ? "" : root.actionErrorText(rep, "allow failed")
-      if (rep && rep.ok) root.markHandled(path)
+      if (root.reportAction(rep, "allow failed")) root.markHandled(path)
     })
   }
   // The ignore entry point every button uses. With notes on, park the path
@@ -194,18 +206,17 @@ Panel {
     pendingNote = null
     if (!root.svc) return
     root.svc.ignore(path, reason, function(rep) {
-      root.actionError = (rep && rep.ok === true) ? "" : root.actionErrorText(rep, "ignore failed")
-      if (rep && rep.ok) root.markHandled(path)
+      if (root.reportAction(rep, "ignore failed")) root.markHandled(path)
     })
   }
   function resolveGone(path, verb) {
     if (!root.svc) return
     root.svc.resolveGone(path, verb, function(rep) {
-      root.actionError = (rep && rep.ok === true) ? "" : root.actionErrorText(rep, "resolve failed")
-      if (rep && rep.ok) root.markHandled(path)
+      if (root.reportAction(rep, "resolve failed")) root.markHandled(path)
     })
   }
   function runSnapshot() {
+    root.actionError = ""; root.actionNote = ""
     if (root.svc) root.svc.snapshotNow()
     // The next report is ground truth for what the decisions actually silenced.
     handledPaths = {}; handledPrefixes = []; handledRev++
@@ -214,19 +225,14 @@ Panel {
   function pushOrConfirm() {
     if (root.uncommitted.length > 0) { confirmOpen = !confirmOpen; return }
     if (!root.svc || !root.hasRemote) return
-    var hadUnpushed = root.unpushed > 0
-    root.svc.pushOrConfirm(false, function(rep) {
-      var good = !!(rep && rep.ok === true)
-      root.actionError = good ? "" : root.actionErrorText(rep, "push failed")
-      root.actionNote = (good && !hadUnpushed) ? "Nothing to push. Every commit is already on the remote." : ""
-    })
+    // The engine answers "nothing to push" from git alone, without probing,
+    // and says so in `note`; reportAction renders that dim rather than red.
+    root.svc.pushOrConfirm(false, function(rep) { root.reportAction(rep, "push failed") })
   }
   function confirmPush() {
     confirmOpen = false
     if (!root.svc) return
-    root.svc.pushOrConfirm(true, function(rep) {
-      root.actionError = (rep && rep.ok === true) ? "" : root.actionErrorText(rep, "push failed")
-    })
+    root.svc.pushOrConfirm(true, function(rep) { root.reportAction(rep, "push failed") })
   }
   function openTriage() { root.close(); if (root.svc) root.svc.openTerminal() }
   function setupAction() {
