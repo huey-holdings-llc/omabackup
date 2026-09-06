@@ -23,7 +23,29 @@ for kind in $(jq -r '.kinds[]' "$m"); do
   ep=$(jq -r --arg k "$key" '.entryPoints[$k] // empty' "$m")
   [[ -n "$ep" && -f "$ep" ]] && ok "entry point for $kind: $ep" || bad "entry point for $kind missing or absent on disk"
 done
-[[ "$(jq -r .version "$m")" == "$(grep -m1 -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md | tr -d '[]# ')" ]] && ok "CHANGELOG top release matches manifest version" || bad "CHANGELOG top release != manifest version"
+# The CHANGELOG's top release must match the shipped version, EXCEPT while that
+# entry is still marked Unreleased. That is the window between writing the
+# release notes and cutting the release, and in it the heading is deliberately
+# ahead of manifest.json: the notes describe the version about to ship, and the
+# release commit is what drops " - Unreleased" (Keep a Changelog puts the date
+# there instead) and bumps manifest.json to match. Once the heading is no
+# longer marked Unreleased this is plain equality again, so nothing can be
+# tagged with notes for a different version.
+cl_head=$(grep -m1 -E '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md)
+cl_ver=$(tr -d '[]# ' <<<"${cl_head%% -*}")
+m_ver=$(jq -r .version "$m")
+if [[ "$cl_head" == *Unreleased* ]]; then
+  if [[ "$cl_ver" == "$m_ver" ]] \
+     || [[ "$(printf '%s\n%s\n' "$m_ver" "$cl_ver" | sort -V | head -1)" == "$m_ver" ]]; then
+    ok "CHANGELOG top release $cl_ver is unreleased (manifest says $m_ver; the release commit bumps it)"
+  else
+    bad "CHANGELOG top release $cl_ver is behind manifest version $m_ver"
+  fi
+elif [[ "$cl_ver" == "$m_ver" ]]; then
+  ok "CHANGELOG top release matches manifest version"
+else
+  bad "CHANGELOG top release $cl_ver != manifest version $m_ver"
+fi
 if find . -path ./.git -prune -o -type l -print | grep -q .; then bad "symlinks in the plugin tree (validator rejects them)"; else ok "no symlinks"; fi
 command -v omarchy-plugin-validate >/dev/null && { omarchy-plugin-validate . >/dev/null && ok "omarchy-plugin-validate" || bad "omarchy-plugin-validate"; }
 
@@ -76,7 +98,7 @@ printf 'id_ed25519.pub\n' | grep -qE "$SECRET_KEY_PUB_RE" \
   && ok "the documented id_*.pub exemption still applies" || bad "id_*.pub is no longer exempt"
 
 step "copy"
-if grep -rn -- $'\xe2\x80\x94' README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md bin/omabackup share/units *.qml ui/*.qml 2>/dev/null; then bad "em dash in user-facing text"; else ok "no em dashes"; fi
+if grep -rn -- $'\xe2\x80\x94' README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE docs bin/omabackup share/units share/*.example *.qml ui/*.qml 2>/dev/null; then bad "em dash in user-facing text"; else ok "no em dashes"; fi
 if grep -nE '\beval\b' bin/omabackup lib/*.sh; then bad "eval in the engine"; else ok "no eval"; fi
 
 step "docs"
