@@ -228,21 +228,34 @@ drift_scan() {
     # deepest first, so a subtree is decided before the directories that
     # contain it. All counts are loaded before any decision: the float-up
     # below reads parents.
-    # $list is NUL-delimited (find -print0), so RS is a NUL here: a newline in
-    # a FILENAME would otherwise be a record separator and one file would be
-    # counted as two, in two different directories. The output records stay
-    # newline-terminated -- they are "depth<TAB>count<TAB>dir" for sort(1), and
-    # a directory name holding a newline is refused by _drift_report anyway.
-    while IFS= read -r a; do
+    # NUL IN, NUL OUT. $list is NUL-delimited (find -print0), so RS is a NUL
+    # here: a newline in a FILENAME would otherwise be a record separator and
+    # one file would be counted as two, in two different directories. The
+    # OUTPUT has to match, and used to not: the records are
+    # "depth<TAB>count<TAB>dir" and a DIRECTORY name holding a newline split
+    # one of them in two, so a fragment reached the loop below, `n` was the
+    # fragment's text rather than a number, and `$(( n - ... ))` died
+    # "unbound variable" inside the scan's command substitution -- exit 1, no
+    # sentinel, and `snapshot --json` printed nothing at all. sort(1) and
+    # cut(1) read and write NUL-terminated records too (-z).
+    while IFS= read -r -d '' a; do
       rows+=("$a"); count["${a#*$'\t'}"]="${a%%$'\t'*}"
     done < <(awk -v home="$HOME/" '
-      BEGIN { RS = "\0" }
+      BEGIN { RS = "\0"; ORS = "\0" }
       { p = $0; if (index(p, home) == 1) p = substr(p, length(home) + 1)
         while ((i = match(p, /\/[^\/]*$/)) > 0) { p = substr(p, 1, i - 1); count[p]++ } }
       END { for (d in count) { depth = gsub(/\//, "/", d); print depth "\t" count[d] "\t" d } }
-    ' "$list" | sort -t$'\t' -k1,1nr | cut -f2-)
+    ' "$list" | sort -z -t$'\t' -k1,1nr | cut -z -f2-)
     for a in "${rows[@]}"; do
       n="${a%%$'\t'*}"; rel="${a#*$'\t'}"
+      # A count that is not a number means the record shape is not what this
+      # function built, and arithmetic on it would take the whole scan down.
+      # Report the gap and carry on: an ERROR row is a fault a human sees.
+      case "$n" in
+        ''|*[!0-9]*)
+          echo "# ERROR: drift scan could not count the files under a directory; that directory is NOT collapsed"
+          found=$((found+1)); continue ;;
+      esac
       residual=$(( n - ${excluded[$rel]:-0} ))
       [ "$residual" -gt "$MAX_SCAN_FILES" ] || continue
       if is_partially_covered "$rel" || is_ignored "$rel"; then

@@ -2975,5 +2975,33 @@ if group 88 "a repo with no remote is a supported state, not a permanent fault";
     "$(obj status | jq -r '[.problems[] | select(test("upstream"))] | length')" "0"
 fi
 
+if group 89 "a newline in a DIRECTORY name does not take the whole scan down"; then
+  # The collapse pass counts the files under every directory in one awk. Its
+  # INPUT was NUL-delimited (find -print0) and its OUTPUT was newline
+  # terminated, so a directory named `bad<LF>dir 2` split one
+  # "depth<TAB>count<TAB>dir" record in two. The fragment reached the decision
+  # loop, `n` held text instead of a number, and `$(( n - ... ))` died
+  # "unbound variable" inside the command substitution that captures the
+  # report: exit 1, no sentinel, and `snapshot --json` printed no JSON object
+  # at all -- the one thing every verb promises. A file with a newline in its
+  # own name never did this: only a DIRECTORY name becomes a record key.
+  mk_fixture g89; seed_home
+  mkdir -p "$FH/.local/share/deep/bad"$'\n'"dir 2"
+  printf 'x\n' > "$FH/.local/share/deep/bad"$'\n'"dir 2/f.conf"
+  d89=$(ob drift)
+  eq "the scan reaches its sentinel" "$(tail -1 <<<"$d89")" "# drift-scan-complete"
+  eq "the unrepresentable name is exactly one ERROR row" \
+    "$(grep -c 'unrepresentable path' <<<"$d89" || true)" "1"
+  eq "no fragment row claims the first half of the name is a file" \
+    "$(grep -cx 'NEW        ~/.local/share/deep/bad' <<<"$d89" || true)" "0"
+  eq "no NEW row is produced under that directory at all" \
+    "$(grep -c '^NEW .*\.local/share/deep' <<<"$d89" || true)" "0"
+  s89=$(obj snapshot --no-push)
+  eq "snapshot --json still prints exactly one JSON object" \
+    "$(jq -s 'length' <<<"$s89" 2>/dev/null || echo 0)" "1"
+  eq "and the run itself completed" "$(jq -r .ok <<<"$s89")" "true"
+  rm -rf "$FH/.local/share/deep"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
