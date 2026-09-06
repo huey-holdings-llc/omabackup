@@ -340,11 +340,19 @@ data_repo_require() {
 # interrupted setup leaves the marker scratch file untracked, and the login
 # check names it as an uncommitted edit at every new terminal forever.
 #
-# What it does NOT do is decide anything about the repo. A missing pattern is
-# a missing SAFETY line (the file is entirely credential classes and the
-# tool's own scratch), so adding it can only ever ignore more, and the lines
-# are appended in the shipped file's own order -- which is what keeps `id_*`
-# ahead of `!id_*.pub` on a repo that has neither.
+# What it does NOT do is remove or reorder anything, and the lines are appended
+# in the shipped file's own order -- which is what keeps `id_*` ahead of
+# `!id_*.pub` on a repo that has neither.
+#
+# "It can only ever ignore MORE" is what this comment used to claim, and it is
+# not true in two directions, because share/data.gitignore carries a negation.
+# Re-adding `!id_*.pub` to a repo where the user deleted it on purpose ignores
+# LESS: public keys go back to being committed. And a shipped line appended
+# below a negation the user wrote themselves shadows it, since git's last
+# matching rule wins. Neither is a reason to stop syncing a file that is
+# entirely credential classes and this tool's own scratch, but both are why
+# the warn tells the user to look at the result, and why the README says to
+# keep your own negations at the end.
 #
 # Comments and blank lines are not compared: they are formatting, not rules.
 # One `printf` writes the whole block, so two verbs racing here append two

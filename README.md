@@ -194,8 +194,10 @@ to back anything up on its own.
 ## Requirements
 
 Four tools are hard requirements: without `git`, `rsync`, `jq` or `flock` the
-CLI refuses to set up at all. Everything else below is used when it is there
-and skipped, or reported, when it is not.
+CLI refuses to set up at all. Not listed, because a system without them is not
+a system: `bash` 4.4 or newer and the `coreutils`, `findutils`, `grep`, `sed`,
+`gawk` and `diffutils` programs every Arch install already has. Everything
+else below is used when it is there and skipped, or reported, when it is not.
 
 **Required**
 
@@ -309,7 +311,8 @@ modes.txt            file and directory permissions, replayed on restore
 home/                the mirrored config itself (mode 700)
 etc/                 the reference copies named in etc-allowlist.txt
 manifests/           generated facts about the machine, plus drift.txt
-.gitignore           belt-and-braces excludes, copied from share/ at setup
+.gitignore           belt-and-braces excludes, copied from share/ at setup and topped
+                     up on upgrade with the patterns a newer version ships
 .omabackup           marker: {"format": 1, "createdBy": "<version>"}
                      a marker whose format is HIGHER than this version knows
                      is refused, never rewritten, so the newer machine in a
@@ -441,12 +444,26 @@ you about a file it does not manage, and its maintainer has declined to add
 that. OmaBackup's whole job is the file nobody told it about.
 
 **Why is push off?**
-One of three reasons, all visible in the setup card or `setup check`:
-gitleaks is not installed (commits happen, nothing pushes until it is);
-the remote could not be verified private (a non-GitHub remote you have not
-marked trusted, or a GitHub probe that came back inconclusive); or the
-remote turned out to be public, in which case the whole run refuses rather
-than pushing anywhere.
+`status` prints the gate's own reason as `push_reason`, and that is the
+field to read. The ones you will see: `gitleaks-missing` (commits happen,
+nothing pushes until you install it), `remote-unverified` (a non-GitHub
+remote you have not marked trusted, or a GitHub repo the API would not
+confirm), `net-disabled` (the visibility probe was switched off and the
+remote is not trusted), `probe-<code>` (GitHub answered something that
+proves nothing either way, `probe-403` for a rate limit, `probe-000` for no
+network), `pushurl-differs` (origin fetches from one URL and pushes to
+another, so nothing verified about the first says anything about the
+second; fix it with `git remote set-url --push --delete origin`),
+`no-remote`, `unprobed` (nothing has probed this origin yet, or the last
+verdict was recorded against a different one) and `stale` (the last verdict
+is older than `staleDays`, and an old yes is not a yes). A remote that turns
+out to be public is not in this list because it is not a reason push is off:
+an HTTP 200 refuses the whole run.
+
+`setup check` answers a narrower question, "is this install wired up", so it
+shows the tools, the marker, the units and the remote's kind and trust flag,
+and it does not run the probe or report `pushurl-differs`. For why a push
+did not happen, ask `omabackup status`.
 
 **What does the alert triangle mean?**
 Any entry in `problems[]`, things a plain drift count cannot express: no
@@ -516,6 +533,19 @@ actually broken.
   so `status` reports it. Unset it wherever it came from, usually
   `~/.config/environment.d` or a shell rc file, and remember a
   `systemd --user` unit inherits it too.
+* **"added N ignore pattern(s) this version ships"**: an upgrade found
+  patterns in `share/data.gitignore` that your data repo's `.gitignore` did
+  not have, and appended them under a dated comment. It is a warning and not
+  a fault: nothing is removed and nothing is reordered, the run carried on,
+  and the edit is reported as an uncommitted change until you commit it (the
+  popup's Commit button offers `.gitignore`, or `omabackup push --confirm`).
+  Two things are worth a look at the result, both of them a consequence of
+  appending. A shipped line landing below a negation you wrote yourself
+  shadows it, because git's last matching rule wins, so keep your own `!`
+  lines at the end of the file or move them back down after a sync. And a
+  shipped negation you had deliberately deleted (`!id_*.pub` is the only one)
+  is re-added, which ignores less rather than more. Delete a re-added line
+  again if you meant it, and commit that.
 * **"timer settings not validated: systemd-analyze missing"**: `timer.calendar`
   and `timer.jitter` are normally checked against systemd's own grammar
   before they can reach a unit file. Without `systemd-analyze` only a
@@ -563,14 +593,18 @@ inherits the user manager's environment, so any of these set once in
 `~/.config/environment.d` or `.bashrc` would otherwise have reached the daily
 timer forever with nothing saying so.
 
-Design docs: [docs/superpowers/specs/2026-09-03-omabackup-design.md](docs/superpowers/specs/2026-09-03-omabackup-design.md)
-and [docs/superpowers/plans/2026-09-03-omabackup-1.0.md](docs/superpowers/plans/2026-09-03-omabackup-1.0.md).
+Design docs: [docs/superpowers/specs/2026-09-03-omabackup-design.md](docs/superpowers/specs/2026-09-03-omabackup-design.md),
+the build plan it was built from
+[docs/superpowers/plans/2026-09-03-omabackup-1.0.md](docs/superpowers/plans/2026-09-03-omabackup-1.0.md),
+and what comes next in
+[docs/superpowers/plans/2026-09-05-omabackup-1.0-roadmap.md](docs/superpowers/plans/2026-09-05-omabackup-1.0-roadmap.md).
 Contribution principles: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-The roadmap lives in the
-[issue tracker](https://github.com/huey-holdings-llc/omabackup/issues).
+What is planned for 1.0, and what was deliberately left out of 0.7.0, is
+written down in
+[docs/superpowers/plans/2026-09-05-omabackup-1.0-roadmap.md](docs/superpowers/plans/2026-09-05-omabackup-1.0-roadmap.md).
 
 Not planned: syncing two machines, and sending anything anywhere but the
 remote you configured. It is also not designed or tested to run as root.

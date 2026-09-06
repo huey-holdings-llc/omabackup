@@ -52,8 +52,24 @@ If you adopted a data repo under an earlier version, the first run on 0.7.0
 appends any ignore pattern this version ships that your repo's `.gitignore`
 does not already have, under a dated comment, and tells you to commit it.
 Nothing is ever removed or reordered, so lines you added yourself stay where
-they are. The popup's Commit button now offers `.gitignore` alongside the four
-lists, so that edit has somewhere to go.
+they are, but appending is not neutral in both directions and it is worth one
+look at the result: a shipped line landing below a negation you wrote yourself
+shadows it, because git's last matching rule wins, and a shipped negation you
+had deleted on purpose (`!id_*.pub` is the only one) is put back, which
+ignores less rather than more. Keep your own `!` lines at the end of the file.
+The popup's Commit button now offers `.gitignore` alongside the four lists, so
+that edit has somewhere to go.
+
+Two more upgrade notes for an adopted repo. `setup` no longer lays down a
+`.gitleaks.toml`: the content scan always runs with the plugin's own
+`share/gitleaks.toml`, so the copy in the repo was never read and setting it
+down said otherwise. A repo seeded by an earlier version still has one, it is
+inert, and to be rid of it: `git -C <data repo> rm .gitleaks.toml && git -C
+<data repo> commit -m "drop the inert gitleaks rules copy"`. And unlike
+`.gitignore`, `drift-ignore.txt` is not topped up on an existing repo, so the
+entries this version's seed list ships (omabackup's own systemd units among
+them) are not added to a repo that predates them; add the ones you want from
+`share/drift-ignore.example` by hand, or from the popup as they show up.
 
 ### Security
 

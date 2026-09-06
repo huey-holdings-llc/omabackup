@@ -47,7 +47,7 @@ Column {
 
   readonly property string explainText:
       entry.type === "TOOBIG"   ? "over maxFileSize, so it is allowlisted but not copied. Allow cannot help; raise maxFileSize in the config, or ignore it."
-    : entry.type === "EXCLUDED" ? "matched by .gitignore, so it is allowlisted but not committed. Allow cannot help; edit the repo's .gitignore, or ignore it."
+    : entry.type === "EXCLUDED" ? "matched by .gitignore, so it is allowlisted but not committed. Allow cannot help; add a negation line (for example !name) to the repo's .gitignore, or ignore it."
     : entry.type === "ERROR"    ? "part of the scan failed; see omabackup status"
     : ""
 
