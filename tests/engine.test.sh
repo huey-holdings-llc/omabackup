@@ -1137,6 +1137,8 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
     printf 'GONE       ~/.config/gonezo\n'
     printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
 
+  eq "a file row says it is not a directory" \
+    "$(obj status | jq -r '.drift[] | select(.path | endswith("z.toml")) | .dir')" "false"
   eq "allow: accepted and lint-gated" \
     "$(obj allow "$(tp .config/appz/z.toml)" | jq -c '[.ok,.lint_ok]')" "[true,true]"
   grep -qx '.config/appz/z.toml' "$FR/allowlist.txt" && ok "allow: appended to allowlist.txt" || bad "allowlist not updated"
@@ -1219,6 +1221,11 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
   # shellcheck disable=SC2088  # expected literal string, not a path to expand
   eq "a directory row reaches the widget with no trailing slash" \
     "$(obj status | jq -r '[.drift[].path] | join(",")')" '~/.mozilla,~/.config/appdir,~/.local/share/bigq'
+  # The slash is stripped, so the FACT it carried is published instead: the
+  # popup's wording for Allow on a folder is deciding for everything put in
+  # it later, and "back this up" does not say that.
+  eq "and the row says it is a directory" \
+    "$(obj status | jq -r '[.drift[].dir] | join(",")')" "true,true,true"
   eq "allow: takes a directory row exactly as the JSON names it" \
     "$(obj allow "$(tp .config/appdir)" | jq -c '[.ok,.added]')" '[true,".config/appdir"]'
   grep -qx '.config/appdir' "$FR/allowlist.txt" && ok "allow: the directory entry was written" || bad "directory allow entry missing"

@@ -612,7 +612,7 @@ cmd_drift() {
 # set at file scope and leaked into every other verb for the rest of the
 # process, the same class of leak Task 5 fixed for nullglob.
 drift_items_json() {
-  local items=() path line opt rel
+  local items=() path line opt rel dir
   drift_optional_load
   while IFS= read -r line; do
     drift_line_split "$line" || continue
@@ -625,7 +625,15 @@ drift_items_json() {
       rel=${path#\~/}
       [[ -z "${DRIFT_OPTIONAL[$rel]:-}" ]] || opt=true
     fi
-    items+=("{\"type\":$(jstr "$DRIFT_TYPE"),\"path\":$(jstr "$path"),\"note\":$(jstr "$DRIFT_NOTE"),\"optional\":$opt}")
+    # `dir` is the fact the trailing slash carried before this function
+    # stripped it, published rather than thrown away. The write verbs recover
+    # it the same way (DRIFT_TARGET_DIR, lib/widget.sh) to decide whether an
+    # ignore is a subtree; the popup needs it for a different reason, because
+    # "Add to allowlist (back this up)" is the wrong sentence about a folder
+    # whose whole future contents the click is deciding for.
+    dir=false
+    case "$DRIFT_PATH" in */) dir=true ;; esac
+    items+=("{\"type\":$(jstr "$DRIFT_TYPE"),\"path\":$(jstr "$path"),\"note\":$(jstr "$DRIFT_NOTE"),\"optional\":$opt,\"dir\":$dir}")
   done
   jjoin "${items[@]}"
 }
