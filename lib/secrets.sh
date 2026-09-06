@@ -65,10 +65,18 @@ SECRET_NAME_RE='(ghp_|gho_|github_pat_|AKIA[0-9A-Z]{16}|sk-ant-|BEGIN.*PRIVATE'\
 # share/data.gitignore says `id_*` then `!id_*.pub`, nothing wider. A bare
 # `\.pub$` here would have exempted every other class too, so ghp_token.pub,
 # AKIA....pub and sk-ant-oat01-....pub would all have walked straight through
-# a gate that refused them before. Anchored at both ends for that reason, and
-# the character class stays narrow here on purpose: an `id_` name carrying
-# anything odder than this is refused rather than exempted.
-SECRET_KEY_PUB_RE='^id_[A-Za-z0-9._-]+\.pub$'
+# a gate that refused them before. Anchored at both ends for that reason.
+#
+# The stem is `[^/]+`, the same class the widened `id_` rule above uses, and
+# it has to be: a narrower one here does not narrow what is EXEMPT, it
+# narrows it against a wider refusal, and the difference is a name the gate
+# stops dead. `id_ed25519 (copy).pub` is what a file manager hands you when
+# you duplicate a public key; the space and the parentheses fell outside
+# `[A-Za-z0-9._-]`, so the widened refusal caught it and the exemption did
+# not, and a snapshot refused over a file share/data.gitignore's own
+# `!id_*.pub` keeps. The two halves are one rule and now spell it the same
+# way; anything that is not an `id_` name is still refused by name.
+SECRET_KEY_PUB_RE='^id_[^/]+\.pub$'
 RULES_FILE="$PLUGIN_DIR/share/gitleaks.toml"
 
 gitleaks_available() { have gitleaks; }

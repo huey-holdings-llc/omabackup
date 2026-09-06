@@ -485,6 +485,23 @@ if group 13 "filename that looks like a credential"; then
   printf 'ssh-ed25519 AAAA comment\n' > "$FH/.config/mytool/id_ed25519.pub"
   check "a public key is not treated as a credential" env HOME="$FH" "$CLI" snapshot --no-push
 
+  # The exemption has to cover the same names the widened id_ class refuses.
+  # It did not: `id_*` matches anything after the prefix, while the exemption
+  # spelled its stem `[A-Za-z0-9._-]+`, so the copy a file manager makes of a
+  # public key was refused over a name share/data.gitignore's own `!id_*.pub`
+  # keeps. Innocuous body, so only the filename can explain the answer.
+  printf 'ssh-ed25519 AAAA comment\n' > "$FH/.config/mytool/id_ed25519 (copy).pub"
+  check "a public key whose name a file manager copied is still exempt" \
+    env HOME="$FH" "$CLI" snapshot --no-push
+  # ...and the private half of that same name is still refused, so the wider
+  # stem widened the exemption and nothing else.
+  printf 'nothing secret in here\n' > "$FH/.config/mytool/id_ed25519 (copy)"
+  out=$(ob snapshot --no-push); rc=$?
+  [[ $rc -ne 0 ]] && ok "the private key beside it is still refused" \
+    || bad "the wider .pub stem let a private key name through"
+  has "and that refusal names the filename gate" "$out" "credential-looking filename"
+  rm -f "$FH/.config/mytool/id_ed25519 (copy)"
+
   # That exemption belongs to the id_ class ALONE. A .pub suffix on any other
   # credential name is not a public key, it is a credential with a suffix.
   # Contents are deliberately innocuous in both: only the FILENAME may
