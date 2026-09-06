@@ -213,6 +213,23 @@ cmd_ignore() {
   printf '{"ok":true,"lint_ok":true,"ignored":%s}\n' "$(jstr "$entry")"
 }
 
+# widget_entry_vanished REL: 0 when allowlist.txt carries an entry for REL
+# (optional or not) that does not resolve in $HOME at this moment. The entry
+# is compared whole, comments stripped, because an entry is a glob and
+# building a regex out of one is the kind of code that rots.
+widget_entry_vanished() {
+  local rel=$1
+  awk -v rel="$rel" '
+    { line=$0; sub(/[ \t]+#.*$/,"",line); sub(/[ \t]+$/,"",line) }
+    line==rel || line=="?"rel { found=1; exit }
+    END { exit !found }' "$DATA_REPO/allowlist.txt" 2>/dev/null || return 1
+  # snapshot_entry_exists (lib/snapshot.sh) is the one matcher that knows an
+  # entry may be a glob, may hold a space, and may be a literal path that
+  # nullglob leaves standing.
+  snapshot_entry_exists "$rel" && return 1
+  return 0
+}
+
 # cmd_resolve_gone PATH remove|optional: edit exactly the one matching
 # allowlist.txt line -- delete it, or mark it '?' (optional).
 cmd_resolve_gone() {
@@ -222,8 +239,17 @@ cmd_resolve_gone() {
   [[ -n "${2:-}" ]] && assert_argv_safe "$2"
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
   case "$verb" in remove|optional) ;; *) widget_reply_fail "usage: resolve-gone <path> remove|optional"; return 1 ;; esac
-  drift_has "$raw" 'GONE' \
-    || { widget_reply_fail "the drift report does not list that path as GONE"; return 1; }
+  # THE GATE HAS TWO HALVES, and it needs both. The mass-disappearance refusal
+  # names this verb as the way out, and that run DIES before it writes a drift
+  # report: the entries that caused the refusal are precisely the ones the last
+  # committed report does not list as GONE, so the named way out could not be
+  # taken and a hand edit of allowlist.txt was the only fix left. An allowlist
+  # entry that does not resolve in $HOME right now is the same fact the report
+  # would have recorded, checked live instead of read from yesterday's file.
+  if ! drift_has "$raw" 'GONE' && ! widget_entry_vanished "$rel"; then
+    widget_reply_fail "the drift report does not list that path as GONE, and allowlist.txt has no entry for it that has stopped resolving"
+    return 1
+  fi
   # "Mark optional" on an entry that is ALREADY optional used to reprint the
   # line unchanged and still reply ok, so the popup marked the row handled, it
   # disappeared, and the next snapshot brought it straight back. Every seed

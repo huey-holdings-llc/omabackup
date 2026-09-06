@@ -3033,5 +3033,58 @@ if group 89 "a newline in a DIRECTORY name does not take the whole scan down"; t
   rm -rf "$FH/.local/share/deep"
 fi
 
+if group 90 "the way out of a refused run is one a user can actually take"; then
+  # The mass-disappearance refusal names `omabackup resolve-gone <path> remove`.
+  # resolve-gone accepted only paths the last COMMITTED drift report lists as
+  # GONE, and the refused run dies in the allowlist assertion, long before it
+  # writes a report -- so the entries that caused the refusal were exactly the
+  # ones resolve-gone would not touch. The named way out could not be taken and
+  # the only fix left was a hand edit of allowlist.txt the message never
+  # mentioned.
+  mk_fixture g90
+  i90=1
+  while [ "$i90" -le 25 ]; do
+    mkdir -p "$FH/.config/e$i90"
+    for j90 in 1 2 3 4; do printf 'setting=%d\n' "$j90" > "$FH/.config/e$i90/f$j90.conf"; done
+    printf '?.config/e%d\n' "$i90" >> "$FR/allowlist.txt"
+    i90=$((i90+1))
+  done
+  git -C "$FR" commit -qam "25 optional entries, 100 files"
+  check "the baseline run commits all of it" env HOME="$FH" "$CLI" snapshot --no-push
+  i90=1
+  while [ "$i90" -le 8 ]; do rm -rf "$FH/.config/e$i90"; i90=$((i90+1)); done
+  r90=$(obj snapshot --no-push)
+  eq "the run refuses" "$(jq -r .ok <<<"$r90")" "false"
+  has "and names resolve-gone as the way out" "$(jq -r .error <<<"$r90")" "resolve-gone <path> remove"
+  has "and the hand edit as the other one" "$(jq -r .error <<<"$r90")" "edit allowlist.txt by hand"
+  eq "the report the refused run never wrote does not list them as GONE" \
+    "$(grep -c '^GONE .*\.config/e1$' "$FR/manifests/drift.txt" || true)" "0"
+
+  ok90=true
+  i90=1
+  while [ "$i90" -le 8 ]; do
+    # shellcheck disable=SC2088 # the literal "~/" the popup sends, not a path to expand
+    [[ "$(obj resolve-gone "~/.config/e$i90" remove | jq -r .ok)" == true ]] || ok90=false
+    i90=$((i90+1))
+  done
+  eq "resolve-gone removes every entry that caused the refusal" "$ok90" "true"
+  eq "the entries are gone from the allowlist" \
+    "$(grep -c '^?\.config/e[1-8]$' "$FR/allowlist.txt" || true)" "0"
+  eq "the ones that still resolve are untouched" \
+    "$(grep -c '^?\.config/e' "$FR/allowlist.txt" || true)" "17"
+  check "and the next snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
+
+  # The gate did not become "anything the user names": an entry that is still
+  # there, and a path no allowlist entry names at all, are both refused.
+  # shellcheck disable=SC2088 # literal "~/" prefix, not a path to expand
+  n90=$(obj resolve-gone '~/.config/e25' remove)
+  eq "an entry that still resolves is refused" "$(jq -r .ok <<<"$n90")" "false"
+  eq "and it stays in the allowlist" \
+    "$(grep -c '^?\.config/e25$' "$FR/allowlist.txt" || true)" "1"
+  # shellcheck disable=SC2088 # literal "~/" prefix, not a path to expand
+  eq "a path no entry names is refused too" \
+    "$(obj resolve-gone '~/.config/never-listed' remove | jq -r .ok)" "false"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

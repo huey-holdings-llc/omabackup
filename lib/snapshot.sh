@@ -218,7 +218,7 @@ snapshot_assert_allowlist() {
       pct=$(( ${#vanished[@]} * 100 / (entry_count > 0 ? entry_count : 1) ))
       if [[ "$pct" -ge "${CFG_MAX_MISSING_PCT:-25}" ]]; then
         printf '  vanished: %s\n' "${vanished[@]}" >&2
-        die "${#vanished[@]} of $entry_count allowlist entries ($pct%) no longer exist; refusing to run. Wrong \$HOME, or an unmounted partition? If they are gone for good: omabackup resolve-gone <path> remove"
+        die "${#vanished[@]} of $entry_count allowlist entries ($pct%) no longer exist; refusing to run. Wrong \$HOME, or an unmounted partition? If they are gone for good: omabackup resolve-gone <path> remove, or edit allowlist.txt by hand and commit it"
       fi
     fi
   fi

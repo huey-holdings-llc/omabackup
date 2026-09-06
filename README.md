@@ -151,7 +151,9 @@ to back anything up on its own.
   above `maxMissingPct` it refuses, counting every entry this repo has ever
   backed up and $HOME no longer has, optional ones included, so erosion a
   little at a time still adds up and a second machine's first run is guarded
-  too), a producer whose
+  too; clear it with `omabackup resolve-gone <path> remove` for each entry
+  that is gone for good, or by editing `allowlist.txt` and committing it),
+  a producer whose
   output the `/etc` scan cannot parse, a floor breach (staged files or
   allowlist entries dropping far below the last commit), a symlinked
   directory inside the backup, an `index.lock` that cannot be proven
