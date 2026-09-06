@@ -44,13 +44,20 @@ drift_path_representable() {
 # look, and the basename is %q-escaped so the row itself stays one line with
 # no TAB in it. A parent that is ITSELF unrepresentable is escaped too, or the
 # stand-in would carry the same byte it exists to keep out.
+#
+# The wording says what happened: the scan DID complete, and one name in it
+# cannot be written as a row. It used to read "unrepresentable path under
+# <dir>", which health then quoted under "drift scan could not complete a
+# check" -- two statements about the same row that contradicted each other,
+# and neither told the reader what to do about it (rename the file, or add a
+# drift-ignore glob for its directory; README Troubleshooting).
 drift_error_unrepresentable() {
   local p=$1 parent name
   parent=${p%/*}
   [ "$parent" = "$p" ] && parent="."
   name=${p##*/}
   case "$parent" in *$'\t'*|*$'\n'*) parent=$(printf '%q' "$parent") ;; esac
-  printf '# ERROR: unrepresentable path under %s (%s)\n' "$parent" "$(printf '%q' "$name")"
+  printf '# ERROR: a name the report cannot represent: %s/%s\n' "$parent" "$(printf '%q' "$name")"
 }
 
 # drift_line_split LINE: split one report line into DRIFT_TYPE, DRIFT_PATH and

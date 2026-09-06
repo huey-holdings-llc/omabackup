@@ -443,6 +443,12 @@ actually broken.
   repo private, or point `remote.url` at a different one.
 * **gitleaks missing**: snapshots still commit locally, they just never
   push; `setup check` prints the exact `pacman -S gitleaks` to fix it.
+* **"a name the report cannot represent"**: a file whose name holds a TAB or a
+  newline cannot be written as a drift row, so the scan reports the directory
+  it is in and marks the state a fault rather than writing a row that names a
+  different file. The scan itself finished. Rename the file, or add a dated
+  `<its directory>/**` line to `drift-ignore.txt` if the whole directory is
+  noise.
 
 ## Development
 

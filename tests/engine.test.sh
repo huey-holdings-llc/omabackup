@@ -1960,11 +1960,20 @@ if group 70 "a filename the report cannot name never renames someone else's row"
   eq "no actionable row claims the truncated prefix" \
     "$(jq -r '[.drift[] | select(.type != "ERROR") | select(.path == "~/.config/creds")] | length' <<<"$s70")" "0"
   eq "both unrepresentable names become ERROR rows" \
-    "$(jq -r '[.drift[] | select(.type == "ERROR") | select(.path | test("unrepresentable"))] | length' <<<"$s70")" "2"
+    "$(jq -r '[.drift[] | select(.type == "ERROR") | select(.path | test("cannot represent"))] | length' <<<"$s70")" "2"
   has "the ERROR row names the parent and escapes the basename" \
     "$(jq -r '.drift[] | select(.type=="ERROR") | .path' <<<"$s70")" \
-    "unrepresentable path under ~/.config"
+    "a name the report cannot represent: ~/.config/"
   eq "an ERROR row makes the state a fault" "$(jq -r .state <<<"$s70")" "fault"
+  # ...and health says what actually happened. The scan COMPLETED; one name in
+  # it cannot be written as a row. "drift scan could not complete a check"
+  # said the opposite of the row it was quoting, and named no way out.
+  has "the problem repeats the row's own words" \
+    "$(jq -r '.problems[]' <<<"$s70")" "a name the report cannot represent"
+  eq "and does not claim a check failed to run" \
+    "$(jq -r '[.problems[] | select(test("could not complete a check"))] | length' <<<"$s70")" "0"
+  has "the problem names the two ways out" \
+    "$(jq -r '.problems[]' <<<"$s70")" "rename the file, or add a drift-ignore glob"
   # shellcheck disable=SC2088 # literal "~/" prefix, not a path to expand
   a70b=$(obj allow '~/.config/creds')
   eq "allow still refuses the truncated prefix" "$(jq -r .ok <<<"$a70b")" "false"
@@ -1998,9 +2007,9 @@ if group 70 "a filename the report cannot name never renames someone else's row"
   printf 'x\n' > "$FH/.local/share/deep/bad"$'\n'"name"
   d70=$(ob drift)
   eq "the newline name yields exactly one ERROR row" \
-    "$(grep -c 'unrepresentable path' <<<"$d70" || true)" "1"
+    "$(grep -c 'a name the report cannot represent' <<<"$d70" || true)" "1"
   eq "the ERROR row names the directory it is in" \
-    "$(grep -c 'unrepresentable path under .*/.local/share/deep' <<<"$d70" || true)" "1"
+    "$(grep -c 'cannot represent: ~/.local/share/deep/' <<<"$d70" || true)" "1"
   eq "no row claims the truncated fragment is a file" \
     "$(grep -cx 'NEW        ~/.local/share/deep/bad' <<<"$d70" || true)" "0"
   eq "and no row names a path in someone else's part of \$HOME" \
@@ -3021,7 +3030,7 @@ if group 89 "a newline in a DIRECTORY name does not take the whole scan down"; t
   d89=$(ob drift)
   eq "the scan reaches its sentinel" "$(tail -1 <<<"$d89")" "# drift-scan-complete"
   eq "the unrepresentable name is exactly one ERROR row" \
-    "$(grep -c 'unrepresentable path' <<<"$d89" || true)" "1"
+    "$(grep -c 'a name the report cannot represent' <<<"$d89" || true)" "1"
   eq "no fragment row claims the first half of the name is a file" \
     "$(grep -cx 'NEW        ~/.local/share/deep/bad' <<<"$d89" || true)" "0"
   eq "no NEW row is produced under that directory at all" \
@@ -3100,13 +3109,13 @@ if group 91 "every find reader is NUL-delimited, so a newline cannot forge a row
   chmod +x "$FH/.local/bin/bad"$'\n'"script"
   d91=$(ob drift)
   eq "the hand-written unit yields one ERROR row" \
-    "$(grep -c 'unrepresentable path under ~/\.config/systemd/user' <<<"$d91" || true)" "1"
+    "$(grep -c 'cannot represent: ~/\.config/systemd/user/' <<<"$d91" || true)" "1"
   eq "no row names the suffix fragment as a file in another directory" \
     "$(grep -cx 'NEW        ~/unit.service' <<<"$d91" || true)" "0"
   eq "no row claims the prefix fragment is a file" \
     "$(grep -cx 'NEW        ~/.config/systemd/user/bad' <<<"$d91" || true)" "0"
   eq "the ~/.local/bin script yields one ERROR row" \
-    "$(grep -c 'unrepresentable path under ~/\.local/bin' <<<"$d91" || true)" "1"
+    "$(grep -c 'cannot represent: ~/\.local/bin/' <<<"$d91" || true)" "1"
   eq "and no row names either half of it" \
     "$(grep -c '^NEW .*\.local/bin' <<<"$d91" || true)" "0"
   eq "the scan still reaches its sentinel" "$(tail -1 <<<"$d91")" "# drift-scan-complete"
@@ -3119,7 +3128,7 @@ if group 91 "every find reader is NUL-delimited, so a newline cannot forge a row
   head -c 12000000 /dev/urandom > "$FH/.config/mytool/huge"$'\n'"name.dat"
   check "the snapshot still runs" env HOME="$FH" "$CLI" snapshot --no-push
   eq "the oversized name is one ERROR row" \
-    "$(grep -c 'unrepresentable path under ~/\.config/mytool' "$FR/manifests/drift.txt" || true)" "1"
+    "$(grep -c 'cannot represent: ~/\.config/mytool/' "$FR/manifests/drift.txt" || true)" "1"
   eq "and no TOOBIG row names a fragment" \
     "$(grep -c '^TOOBIG' "$FR/manifests/drift.txt" || true)" "0"
   rm -f "$FH/.config/mytool/huge"$'\n'"name.dat"
@@ -3139,7 +3148,7 @@ if group 91 "every find reader is NUL-delimited, so a newline cannot forge a row
     d91e=$(ob drift)
     export OMABACKUP_SKIP_ETC=1; unset OMABACKUP_ETC_ROOT
     eq "the drop-in with a newline in its name is one ERROR row" \
-      "$(grep -c 'unrepresentable path under /etc/modprobe.d' <<<"$d91e" || true)" "1"
+      "$(grep -c 'cannot represent: /etc/modprobe.d/' <<<"$d91e" || true)" "1"
     eq "no row names either fragment of it" \
       "$(grep -c '^NEW .*dropin.conf' <<<"$d91e" || true)" "0"
     has "the ordinary drop-in beside it is still reported" "$d91e" \

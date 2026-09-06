@@ -103,7 +103,15 @@ health_collect() {
     local err
     while IFS= read -r err; do
       [[ -n "$err" ]] || continue
-      H_PROBLEMS+=("drift scan could not complete a check: $err")
+      case "$err" in
+        # A name the report cannot write is not an unfinished scan: the scan
+        # ran, and one file in it cannot be named as a row. Saying "could not
+        # complete a check" about that row contradicted the row itself, and
+        # told the reader nothing they could act on.
+        'a name the report cannot represent:'*)
+          H_PROBLEMS+=("drift report: $err -- rename the file, or add a drift-ignore glob for its directory") ;;
+        *) H_PROBLEMS+=("drift scan could not complete a check: $err") ;;
+      esac
     done < <(jq -r '.[] | select(.type == "ERROR") | .path' <<<"$arr")
     if (( count > WIDGET_DRIFT_LIMIT )); then
       H_DRIFT_TRUNCATED=true
