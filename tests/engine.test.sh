@@ -1353,6 +1353,15 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
     "$(jq -c '[.ok,.pushed,.note]' <<<"$out51")" '[true,0,"nothing to push"]'
   eq "and it recorded no verdict, because it never probed" \
     "$(jq -r .reason "$OMABACKUP_STATE_DIR/push-verdict.json")" "canary"
+  # And the shortcut only speaks for the remote the config names: a
+  # `git remote set-url origin` by hand leaves refs/remotes/origin/* pointing
+  # at commits the NEW remote may not have, so "nothing to push" would be an
+  # answer about a remote this repo no longer talks to.
+  git -C "$FR" remote set-url origin "$T/repointed.git"
+  eq "a repointed origin does not get the nothing-to-push shortcut" \
+    "$(obj push | jq -r .ok)" "false"
+  git -C "$FR" remote set-url origin "$BARE"
+
   # A gate refusal with a commit actually waiting is still a refusal.
   printf 'ahead\n' > "$FH/.config/mytool/mytool.conf"
   ob snapshot --no-push >/dev/null 2>&1

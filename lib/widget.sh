@@ -322,9 +322,19 @@ cmd_resolve_gone() {
 # upstream must exist (without one the first push is exactly what establishes
 # it, so "nothing ahead" is unprovable and the answer is no) and the ahead
 # count must parse as zero. Every unreadable answer means "carry on and try",
-# which is the fail-closed direction here: the cost is a probe, not a
-# missed backup.
+# which is the fail-closed direction here: the cost is a probe, not a missed
+# backup.
+#
+# ORIGIN MUST STILL BE THE REMOTE THE CONFIG NAMES. refs/remotes/origin/* is a
+# LOCAL cache of a remote this repo may no longer be pointed at: `git remote
+# set-url origin` does not invalidate it, so after a repoint "nothing ahead"
+# is an answer about the remote git used to talk to, and the new one may have
+# none of these commits at all. That is the same "trust belongs to one remote"
+# rule remote_trust_ok enforces, and here it decides whether the shortcut is
+# allowed to speak at all.
 push_nothing_ahead() {
+  local url; url=$(remote_origin_url)
+  [[ -n "$url" && "$url" == "${CFG_REMOTE_URL:-}" ]] || return 1
   git -C "$DATA_REPO" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1 || return 1
   local ahead
   ahead=$(git -C "$DATA_REPO" rev-list --count '@{upstream}..HEAD' 2>/dev/null) || return 1
