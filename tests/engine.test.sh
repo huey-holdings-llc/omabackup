@@ -1564,6 +1564,16 @@ if group 61 "setup --import adopts an existing engine repo; unattended trust sta
   else
     bad "the marker was not committed" "$(git -C "$FR" log -1 --oneline --name-only)"
   fi
+  # An INTERRUPTED adoption leaves the scratch file the atomic write used, and
+  # it is untracked at the repo root: nothing ever commits it, so it was
+  # reported as an uncommitted edit at every login, forever, over a file the
+  # user has no way to act on.
+  printf 'half a marker\n' > "$FR/.omabackup.tmpXYZ"
+  eq "a leftover marker scratch file is not an uncommitted edit" \
+    "$(obj status | jq -r '[.uncommitted[]] | length')" "0"
+  eq "and the run has nothing to report about it either" \
+    "$(ob snapshot --no-push | grep -c 'omabackup.tmpXYZ' || true)" "0"
+  rm -f "$FR/.omabackup.tmpXYZ"
   # $FR's origin is $BARE, a local path: not GitHub. An unattended run
   # (--yes, no tty, no --trust-remote) must never turn trust on for it.
   eq "unattended import never turns trust ON for a non-GitHub remote" \
@@ -3021,8 +3031,10 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
     eq "the unit never gets written with an injected directive" \
       "$(grep -c 'ExecStart=/bin/sh' "$FH/.config/systemd/user/omabackup-snapshot.timer" || true)" "0"
   else
-    # A skip says what it skipped and how much: a silent one reads as five
-    # assertions that passed, and the suite total moves with no explanation.
+    # A skip says what it skipped and how much. A silent one does not add five
+    # passes, it takes five assertions out of the total, and a suite that
+    # reports 5 fewer than the last run with nothing said about why reads as a
+    # count nobody can check.
     echo "  (could not build a systemd-analyze-free PATH: 5 assertions skipped)"
   fi
 fi

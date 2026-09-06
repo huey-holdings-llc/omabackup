@@ -1,6 +1,10 @@
 # Belt-and-braces. The allowlist already governs what is copied in, but if any
 # of these ever appear in this tree it is a bug -- fail closed, don't commit.
 .staging/
+# The marker is written atomically (mktemp beside it, then mv), so an
+# interrupted setup leaves .omabackup.XXXXXX behind. The marker itself is
+# tracked; only its scratch files match this.
+.omabackup.*
 *.bak.*
 id_*
 !id_*.pub
