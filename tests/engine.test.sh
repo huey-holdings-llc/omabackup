@@ -20,7 +20,12 @@ MANIFEST_VERSION=$(jq -r .version "$HERE/../manifest.json")
 
 pass=0; fail=0
 ok()   { pass=$((pass+1)); echo "  ✓ $1"; }
-bad()  { fail=$((fail+1)); echo "  ✗ $1"; [[ -n "${2:-}" ]] && echo "      $2"; }
+# RETURNS 0, deliberately. Many assertions are written `cond && bad "..." ||
+# ok "..."`, so a bad() that returns non-zero (which it did whenever no detail
+# argument was passed, the `[[ -n "${2:-}" ]] && echo` being the last command)
+# ran the ok() branch too: one failing assertion recorded a fail AND a pass,
+# and the totals said more assertions had run than there are.
+bad()  { fail=$((fail+1)); echo "  ✗ $1"; [[ -n "${2:-}" ]] && echo "      $2"; return 0; }
 check() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then ok "$d"; else bad "$d" "cmd: $*"; fi; }
 fails() { local d="$1"; shift; if "$@" >/dev/null 2>&1; then bad "$d" "unexpectedly succeeded: $*"; else ok "$d"; fi; }
 eq()   { [[ "$2" == "$3" ]] && ok "$1" || bad "$1" "got '$2' expected '$3'"; }
