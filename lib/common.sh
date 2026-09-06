@@ -64,13 +64,31 @@ notify() {
   fi
 }
 
-# cmd_notify_failure snapshot|selftest: hidden verb, called from ExecStopPost
-# / OnFailure= in the shipped units. Not in `usage`; not something a user
-# types day to day.
+# cmd_notify_failure snapshot|selftest [RESULT]: hidden verb, called from
+# ExecStopPost / OnFailure= in the shipped units. Not in `usage`; not something
+# a user types day to day.
+#
+# RESULT is systemd's $SERVICE_RESULT, passed by the self-test unit. A run that
+# was killed for taking too long and a run whose assertions failed are the same
+# EXIT_STATUS (KILL), and only one of them means a guard stopped working, so
+# they get different words and different urgency. Anything else, or nothing at
+# all, reads as a real failure: that is the fail-closed direction.
+#
+# The snapshot body names `omabackup status` before journalctl. The journal is
+# the complete answer and the unreadable one; status is what a person can act
+# on, and it is the tool's own summary of why the run refused.
 cmd_notify_failure() {
+  local result=${2:-}
   case "${1:-}" in
-    snapshot) notify "OmaBackup: snapshot FAILED" "Run: journalctl --user -u omabackup-snapshot -n 50" critical ;;
-    selftest) notify "OmaBackup: self-test FAILED" "A safety guard has stopped working. Run: omabackup self-test --real" critical ;;
-    *) usage_die "notify-failure snapshot|selftest" ;;
+    snapshot) notify "OmaBackup: snapshot FAILED" "Run: omabackup status, then journalctl --user -u omabackup-snapshot -n 50" critical ;;
+    selftest)
+      if [[ "$result" == timeout ]]; then
+        notify "OmaBackup: weekly self-test ran out of time" \
+          "It was stopped before it finished, so nothing was proven either way. Run: omabackup self-test --real (backups are still running)"
+      else
+        notify "OmaBackup: weekly self-test failed" \
+          "Run: omabackup self-test --real (backups are still running)" critical
+      fi ;;
+    *) usage_die "notify-failure snapshot|selftest [RESULT]" ;;
   esac
 }

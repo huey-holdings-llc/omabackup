@@ -143,6 +143,36 @@ if group 00 "baseline: version, help, config validation"; then
   nf_out=$(ob notify-failure snapshot); nf_rc=$?
   eq "notify-failure snapshot exits 0" "$nf_rc" "0"
   eq "notify-failure snapshot is silent with OMABACKUP_NOTIFY=0" "$nf_out" ""
+
+  # The WORDING, read the way a user reads it: through a notifier on PATH.
+  # notify() prefers omarchy-notification-send and falls back to notify-send,
+  # so both are stubbed (group 49 does the same). Three things are asserted
+  # here because all three are wrong when they are wrong and nobody sees it
+  # until the notification fires on somebody's laptop:
+  #   - the snapshot body names `omabackup status`, the readable answer,
+  #     before the journal command;
+  #   - a self-test FAILURE no longer says "a safety guard has stopped
+  #     working", which reads like data loss for a suite that can go red for a
+  #     dozen benign reasons, and it says backups are still running;
+  #   - a self-test the unit KILLED for running past TimeoutStartSec says so,
+  #     and is not critical, because a run that was stopped proved nothing.
+  mkdir -p "$T/fakebin"
+  for n in notify-send omarchy-notification-send; do
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/nf.log"\n' "$T" > "$T/fakebin/$n"
+    chmod +x "$T/fakebin/$n"
+  done
+  nf() { : > "$T/nf.log"; env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_NOTIFY=1 "$CLI" notify-failure "$@" >/dev/null 2>&1; cat "$T/nf.log"; }
+  nf_snap=$(nf snapshot)
+  has "the snapshot notification sends the user to status first" "$nf_snap" "omabackup status, then journalctl"
+  nf_fail=$(nf selftest)
+  has "a self-test failure says backups are still running" "$nf_fail" "backups are still running"
+  eq "a self-test failure does not claim a guard has stopped working" \
+    "$(grep -c 'safety guard' <<<"$nf_fail" || true)" "0"
+  eq "a self-test failure is still critical" "$(grep -c -- '-u critical' <<<"$nf_fail" || true)" "1"
+  nf_to=$(nf selftest timeout)
+  has "a timed-out self-test says it ran out of time" "$nf_to" "ran out of time"
+  eq "a timed-out self-test is not critical: it proved nothing either way" \
+    "$(grep -c -- '-u critical' <<<"$nf_to" || true)" "0"
 fi
 
 # Later tasks append groups here, in numeric order, each starting with mk_fixture.
