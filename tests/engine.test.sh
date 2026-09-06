@@ -2673,6 +2673,75 @@ if group 80 "a mass disappearance halts the run, and slow erosion does not slip 
     "$(jq -r .error <<<"$g80" | grep -c '^20 of 25 allowlist entries (80%)' || true)" "1"
   eq "the backup the run would have drained is untouched" \
     "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "100"
+
+  # RENAMED ENTRIES, which is how Omarchy actually moves config around. The
+  # history listing asked git for `--diff-filter=A`, and rename detection is on
+  # by default (diff.renames, git 2.9 onward): a path that entered the repo by
+  # a detected rename is reported as R, never as A. So the moment an entry was
+  # renamed it dropped out of "ever backed up", answered "this repo never held
+  # it", and the guard went silent on the very files it was tracking.
+  mk_fixture g80m
+  i80=1
+  while [ "$i80" -le 25 ]; do
+    mkdir -p "$FH/.config/ren$i80"
+    for j80 in 1 2 3 4; do printf 'setting=%d-%d\n' "$i80" "$j80" > "$FH/.config/ren$i80/f$j80.conf"; done
+    printf '?.config/ren%d\n' "$i80" >> "$FR/allowlist.txt"
+    i80=$((i80+1))
+  done
+  git -C "$FR" commit -qam "25 optional directory entries, 100 files"
+  check "the baseline run before the rename commits all of it" env HOME="$FH" "$CLI" snapshot --no-push
+  # The rename, followed by the allowlist edit that follows it: one commit that
+  # deletes 100 paths and adds the same 100 bodies under new names, which is
+  # precisely what git reports as a rename.
+  i80=1
+  while [ "$i80" -le 25 ]; do mv "$FH/.config/ren$i80" "$FH/.config/moved$i80"; i80=$((i80+1)); done
+  sed -i 's|^?\.config/ren|?.config/moved|' "$FR/allowlist.txt"
+  git -C "$FR" commit -qam "the entries move"
+  check "the run after the rename commits the new paths" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the backup still holds 100 files" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "100"
+  # The premise, stated out loud: if git ever stops detecting these as renames
+  # this assertion is the one that says the group is no longer testing it.
+  eq "and git did record that commit as renames" \
+    "$(( $(git -C "$FR" show --diff-filter=R --name-only --format= HEAD | grep -c . || true) > 0 ))" "1"
+  i80=1
+  while [ "$i80" -le 20 ]; do rm -rf "$FH/.config/moved$i80"; i80=$((i80+1)); done
+  r80=$(obj snapshot --no-push)
+  eq "20 of 25 renamed entries vanishing refuses the run" "$(jq -r .ok <<<"$r80")" "false"
+  has "with the maxMissingPct refusal" "$(jq -r .error <<<"$r80")" "no longer exist; refusing to run"
+  eq "counting the paths that entered the repo by a rename" \
+    "$(jq -r .error <<<"$r80" | grep -c '^20 of 25 allowlist entries (80%)' || true)" "1"
+  eq "the backup the rename would have drained is untouched" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "100"
+
+  # THE LISTING ITSELF, both ways round. A `git log` that cannot walk the
+  # history disappeared into a process substitution: the set came back empty,
+  # every vanished entry answered "never backed up", and the guard fell silent
+  # on the one run that could prove nothing. And the listing was taken before
+  # anything asked for it, so a healthy run paid for the whole log every day
+  # and would now die over a question it never had to ask.
+  mk_fixture g80h
+  i80=1
+  while [ "$i80" -le 25 ]; do
+    mkdir -p "$FH/.config/hist$i80"
+    for j80 in 1 2 3 4; do printf 'setting=%d-%d\n' "$i80" "$j80" > "$FH/.config/hist$i80/f$j80.conf"; done
+    printf '?.config/hist%d\n' "$i80" >> "$FR/allowlist.txt"
+    i80=$((i80+1))
+  done
+  git -C "$FR" commit -qam "25 optional directory entries, 100 files"
+  check "the baseline run commits all of it" env HOME="$FH" "$CLI" snapshot --no-push
+  # Break the walk without touching HEAD: the fixture's root commit object is
+  # not needed to read HEAD's tree, but `git log` has to walk through it.
+  root80=$(git -C "$FR" rev-list --max-parents=0 HEAD)
+  rm -f "$FR/.git/objects/${root80:0:2}/${root80:2}"
+  fails "the history really is unreadable now" git -C "$FR" log --format= --name-only
+  check "a healthy run never asks the history anything" env HOME="$FH" "$CLI" snapshot --no-push
+  rm -rf "$FH/.config/hist1"
+  h80=$(obj snapshot --no-push)
+  eq "but one vanished entry over an unreadable history refuses" "$(jq -r .ok <<<"$h80")" "false"
+  has "and the refusal says what it could not read" "$(jq -r .error <<<"$h80")" "cannot read the repo history"
+  eq "nothing was committed by the run that could not prove anything" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "100"
 fi
 if group 81 "a pacman whose wording changed is an error, never a clean /etc scan"; then
   # Both /etc sections read pacman's prose, not an API: the field name

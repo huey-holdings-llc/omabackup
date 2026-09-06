@@ -78,13 +78,34 @@ snapshot_entry_exists() {
 # threshold passes every run forever, because each run's losses leave HEAD
 # before the next run looks. `-z` because a filename may contain a newline,
 # and git would otherwise quote it into something that is not the path.
+#
+# `--no-renames` because rename detection is ON by default (diff.renames, git
+# 2.9 onward) and a detected rename is reported as R, never as A. So every
+# path that entered the repo by a rename was missing from this set, answered
+# "this repo never backed it up", and could not count as vanished. Measured:
+# rename the entries once, then delete 20 of 25, and the run drains the backup
+# where the same repo refused before the rename.
+#
+# The listing goes through a file, not a process substitution, so a `git log`
+# that fails can still be seen. It used to vanish: the loop read nothing, every
+# entry answered "never backed up", and the guard went quiet on exactly the run
+# that could not prove anything. Fail closed instead.
 snapshot_ever_added_load() {
   EVER_ADDED=()
-  local p
+  local p hist
+  # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
+  mkdir -m 700 -p "$STATE_DIR"
+  hist=$(mktemp "$STATE_DIR/.ever-added.XXXXXX") \
+    || die "cannot write scratch under $STATE_DIR; refusing to judge vanished entries"
+  if ! git -C "$DATA_REPO" log --no-renames --diff-filter=A --name-only --format= -z -- home/ >"$hist" 2>/dev/null; then
+    rm -f "$hist"
+    die "cannot read the repo history; refusing to judge vanished entries. Run: git -C $DATA_REPO fsck"
+  fi
   while IFS= read -r -d '' p; do
     [[ -n "$p" ]] || continue
     EVER_ADDED+=("$p")
-  done < <(git -C "$DATA_REPO" log --diff-filter=A --name-only --format= -z -- home/ 2>/dev/null | sort -zu)
+  done < <(sort -zu "$hist")
+  rm -f "$hist"
 }
 
 # snapshot_entry_was_backed_up ENTRY: 0 when this data repo has ever held
@@ -207,7 +228,11 @@ snapshot_assert_allowlist() {
   # The gate is PREV_TRACKED, from the same history: under 20 tracked files
   # there is no real backup yet, nothing to destroy, and nothing to compare
   # against.
-  if [[ "${PREV_TRACKED:-0}" -ge 20 ]]; then
+  # Nothing absent means nothing to judge, so the history listing is never
+  # walked on a healthy run: it is the one expensive read here (the whole log,
+  # every commit), and a run with a full $HOME has no question for it to
+  # answer.
+  if [[ "${PREV_TRACKED:-0}" -ge 20 && ( ${#missing[@]} -gt 0 || ${#GONE[@]} -gt 0 ) ]]; then
     local e
     local -a vanished=()
     snapshot_ever_added_load
