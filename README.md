@@ -13,8 +13,8 @@ your machine except a push to the private remote you chose.
 OmaBackup was built with AI assistance (Claude Code) by a hobbyist, not a
 professional developer. Every effort was made to follow good practice
 anyway: larger pull requests get a review from OpenAI Codex, requested by the
-maintainer, every guard has a test that proves it fires, and every claim in
-this README was checked against the code. Please read the
+maintainer, every guard has a test that proves it fires, and every behaviour
+this README describes has a test or a line of code behind it. Please read the
 source with that in mind, and if you know better, open an issue or a pull
 request. See [CONTRIBUTING.md](CONTRIBUTING.md) for the principles the
 project follows and a help-wanted list: other git hosts' visibility checks,
@@ -60,7 +60,9 @@ to back anything up on its own.
   normalised), and the owner/repo it asks about has to be exactly that, so a
   URL it cannot reduce to one is treated as unverifiable and never probed.
   An HTTP 200 is the only proof the repo is public, and the run refuses
-  outright; a 404 is proof it is private and the push goes ahead; anything
+  outright; a 404 means the repo is private or does not exist yet, and the
+  push goes ahead (a push to a repo that is not there fails on its own);
+  anything
   else (rate-limited, an outage) commits locally and skips the push rather
   than guessing. The probe is only worth anything if git pushes where it
   fetches, so a `remote.origin.pushurl` that differs from the fetch URL
@@ -85,8 +87,9 @@ to back anything up on its own.
   known, short list of places: the data repo it owns; its own config
   (`~/.config/omabackup/config.json`) and state files; the five unit files
   it installs into `~/.config/systemd/user/`; the `~/.local/bin/omabackup`
-  symlink; one opt-in line appended to `~/.bashrc`, offered at setup and
-  added only if you say yes (`setup --remove` takes that line back out again,
+  symlink; a three-line login check appended to `~/.bashrc` (a blank line, a
+  comment naming OmaBackup, and the command), offered at setup and
+  added only if you say yes (`setup --remove` takes those lines back out again,
   along with the timers, the symlink and the config, and leaves the rest of
   your `.bashrc` byte for byte as it was); and your `$HOME` itself, but only
   when you run `restore --apply`.
@@ -129,13 +132,16 @@ to back anything up on its own.
   generates manifests, checks the floors and the secret gates, and commits
   to the data repo; the timer runs it once a day with jitter, and pushes
   when the visibility probe or the trust flag says it can.
-* **Drift report, five categories**: `omabackup drift` walks `$HOME` (and,
+* **Drift report, six categories**: `omabackup drift` walks `$HOME` (and,
   unless skipped, `/etc`) for config that looks user-authored but is not
   covered by the allowlist: `NEW` (no stock counterpart), `MODIFIED`
   (differs from Omarchy's stock default), `GONE` (an allowlist entry that no
   longer resolves, whether marked optional or simply under the missing-entry
   threshold), `TOOBIG` (over the size cap), `EXCLUDED` (matched `.gitignore`
-  after staging).
+  after staging), and `ERROR` (a part of the scan that could not run, so the
+  count is a floor and not a total). An `ERROR` row is the one class that
+  says the report itself cannot be trusted, so it is always a problem, never
+  just a number to triage.
 * **Popup triage**: `NEW` files grouped by folder, biggest first; one click
   Allows or Ignores a whole directory (folder groups are only formed two
   segments deep or more, because a depth-one target is refused so
@@ -177,8 +183,11 @@ to back anything up on its own.
   `restore --configs` read the data repo's working tree, so both refuse while
   `home`, `etc`, `manifests` or `modes.txt` hold uncommitted changes: that is
   the signature of a run that copied your config in and never committed it.
-* **Self-test**: a weekly timer re-runs the black-box test suite end to end;
-  `--real` also runs `lint` and `verify` against your actual data repo.
+* **Self-test**: a weekly timer runs `self-test --real`, which is the
+  black-box test suite end to end plus two groups that run `lint` and
+  `verify` against your actual data repo. A run that fails says a guard has
+  stopped firing; a run the timer had to stop says only that it ran out of
+  time.
 
 ## Requirements
 
@@ -193,7 +202,7 @@ and skipped, or reported, when it is not.
 | `git` | `git` | the data repo: commits, remotes, pushes | yes |
 | `rsync` | `rsync` | staging config into the repo and restoring it back | yes |
 | `jq` | `jq` | every JSON object the CLI reads or writes | yes |
-| `flock` | `util-linux` | one snapshot (or lint, or verify) at a time | yes |
+| `flock` | `util-linux` | one snapshot, lint, verify, restore or list edit at a time | yes |
 
 **Strongly recommended**
 
@@ -201,7 +210,7 @@ and skipped, or reported, when it is not.
 |---|---|---|---|
 | `gitleaks` | `gitleaks` | the content secret scan. Without it nothing is ever pushed | no, `pacman -S gitleaks` |
 | `systemd` (`systemctl`) | `systemd` | the snapshot and self-test timers, and the services manifest | yes |
-| `gum` | `gum` | the setup wizard's prompts (without it every prompt takes its default) | yes |
+| `gum` | `gum` | the setup wizard's prompts. Without it, text prompts take their default and yes/no gates answer no, so `setup --remove` needs `--yes` | yes |
 
 **Used when present**
 
@@ -212,7 +221,7 @@ and skipped, or reported, when it is not.
 | `fuser` | `psmisc` | proving an abandoned `.git/index.lock` really is abandoned | yes |
 | `setsid` | `util-linux` | starting a snapshot, or a terminal, detached from the widget | yes |
 | `python3` | `python` | re-parsing a normalized JSON file to prove the rule did not break it | yes |
-| `xdg-terminal-exec` or `omarchy-launch-floating-terminal-with-presentation` | `xdg-terminal-exec`, Omarchy | the popup's "open a terminal in the data repo" button | yes |
+| `omarchy-launch-floating-terminal-with-presentation` or `xdg-terminal-exec` | Omarchy, `xdg-terminal-exec` | the popup's "open a terminal in the data repo" button (the Omarchy launcher is preferred) | yes |
 | `wl-copy` | `wl-clipboard` | copying the gitleaks install command from the setup card | yes |
 | `omarchy-notification-send` or `notify-send` | Omarchy, `libnotify` | desktop notifications for a failed or diverged run | yes |
 | `gh` | `github-cli` | `setup --create-private` only | no, optional |
@@ -229,8 +238,9 @@ packages, and prompts you the way those tools normally do. Nothing else in
 OmaBackup ever uses `sudo`; the dry run (no `--apply`) only prints what it
 would install.
 
-`omabackup setup check` names anything missing from the first two tables and
-the package that provides it.
+`omabackup setup check` reports each tool in the first two tables as present
+or missing. It names the package for `gitleaks` alone, since that is the one
+Omarchy does not ship; for the rest the Package column above is the answer.
 
 ## Install
 
@@ -270,7 +280,7 @@ run `setup --remove` from a checkout of this repo: `bash bin/omabackup setup
 
 `setup --remove` disables and deletes the timers, the
 `~/.local/bin/omabackup` symlink, `~/.config/omabackup/config.json`, and the
-two-line login check it added to `~/.bashrc` (nothing else in that file is
+three-line login check it added to `~/.bashrc` (nothing else in that file is
 touched). It asks first; with no `gum` to ask with, pass `--yes`. Your data
 repo and its remote are never touched by either command.
 
@@ -344,7 +354,7 @@ omabackup <verb> [args] [--json]
   setup [--data-repo DIR] [--remote URL] [--create-private] [--import DIR]
         [--trust-remote] [--no-timers] [--yes]     first-run wizard
   setup check                                       doctor
-  setup --remove                                    remove units, symlink, config
+  setup --remove [--yes]                            remove units, symlink, config
   snapshot [--dry-run] [--no-push]                  the daily pipeline
   drift                                             report unbacked config
   status                                            health (writes status.json)
@@ -362,7 +372,11 @@ omabackup <verb> [args] [--json]
 ```
 
 Every verb accepts `--json`, which prints exactly one JSON object, even on
-failure. Exit codes: 0 ran, 1 refused or unhealthy, 2 usage.
+failure. Two caveats: `jq` is what builds that object, so on a machine without
+it the CLI prints one plain line and exits 1 before any verb runs; and the
+triage verbs (`allow`, `ignore`, `resolve-gone`, `push`, `timer`, `open`)
+answer in JSON whether or not you asked, because the popup is their main
+caller. Exit codes: 0 ran, 1 refused or unhealthy, 2 usage.
 
 ### Popup keys
 
@@ -373,6 +387,7 @@ failure. Exit codes: 0 ran, 1 refused or unhealthy, 2 usage.
 | `t` | Open a terminal in the data repo |
 | `n` | Toggle ask-for-a-reason mode on Ignore |
 | `r` | Refresh |
+| `Tab` | Move to the next bar panel |
 | `Esc` | Close |
 
 Right-click the bar icon to refresh without opening the popup. The bar shows
@@ -454,6 +469,45 @@ actually broken.
   different file. The scan itself finished. Rename the file, or add a dated
   `<its directory>/**` line to `drift-ignore.txt` if the whole directory is
   noise.
+* **"N of M allowlist entries no longer exist; refusing to run"**: the
+  mass-disappearance guard. It counts every entry this repo has ever backed
+  up that `$HOME` no longer has, optional ones included, so it fires on a
+  wrong `$HOME` or an unmounted partition before the next commit throws the
+  missing files away, and the entries it counted are listed on the line above
+  the refusal. Two ways out: if those paths really are gone for good,
+  `omabackup resolve-gone <path> remove` for each one, or edit
+  `allowlist.txt` by hand and commit it.
+* **"data repo marker has no usable format field"**: `.omabackup` is the file
+  that says the repo is OmaBackup's and what format it is in, and a marker
+  that is not readable JSON is refused rather than overwritten, because
+  rewriting it would tell a newer machine its own repo is older than it is.
+  The marker is committed, so the fix is
+  `git -C <data repo> checkout -- .omabackup`. A marker whose format is
+  higher than this version understands is a different message and the fix is
+  to upgrade OmaBackup.
+* **"a remote was configured but the repo has no origin"**: `status` reports
+  `remote: missing` and a fault. The config records that you set a remote up
+  and git no longer has one, usually after a `git remote remove` or a
+  re-cloned `.git`, and every commit since has gone nowhere. Re-run
+  `omabackup setup` (or add origin back by hand). Having no remote at all is
+  a different, supported state: `remote: none`, and the widget stays green.
+* **"glob characters in a path"**: `allow` and `ignore` refuse a path
+  containing `*`, `?` or `[`. The lists are globs, so writing such a path into
+  one would silently claim more than the file you clicked. Edit
+  `allowlist.txt` or `drift-ignore.txt` by hand, quoting or reshaping the
+  entry so it means what you want, then `omabackup push --confirm`.
+* **"OMABACKUP_IN_SUITE is set outside a test run"**: the marker that lets the
+  test suite weaken its own guards is set in your environment. It does
+  nothing on its own (see Development below), but nothing legitimate sets it,
+  so `status` reports it. Unset it wherever it came from, usually
+  `~/.config/environment.d` or a shell rc file, and remember a
+  `systemd --user` unit inherits it too.
+* **"timer settings not validated: systemd-analyze missing"**: `timer.calendar`
+  and `timer.jitter` are normally checked against systemd's own grammar
+  before they can reach a unit file. Without `systemd-analyze` only a
+  character-class check runs, which is a floor and not a substitute, so the
+  problem is reported rather than assumed away. Install `systemd` tooling, or
+  leave the timer settings at their defaults.
 
 ## Development
 

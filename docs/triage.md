@@ -61,15 +61,21 @@ just that it was.
 
 6. **Snapshot.** `omabackup snapshot` copies every newly allowlisted path
    into the data repo, regenerates the manifests, commits, and pushes that
-   commit. Run `omabackup drift` again afterward; a clean report (no
-   unclaimed `NEW` or `GONE` entries) is the goal, not zero output.
+   commit when the push gate allows it. The gate needs gitleaks installed and
+   a remote it can prove is safe, so on a stock Omarchy install the commit is
+   local until you install gitleaks; the README's "Why is push off?" lists the
+   three reasons and `omabackup status` shows how many commits are waiting.
+   Run `omabackup drift` again afterward; a clean report (no unclaimed `NEW`
+   or `GONE` entries) is the goal, not zero output.
 
-7. **Push the list changes.** The snapshot above commits and pushes the
-   backed-up files and the manifests, but not the four lists you just
-   edited (allow, ignore and resolve-gone only change your working copy).
-   Run `omabackup push --confirm` to commit and push those; it shows
-   exactly which files it is about to stage first, since a list edit is
-   worth a second look before it leaves the machine.
+7. **Push the list changes.** The snapshot above commits the backed-up files
+   and the manifests, and pushes them under the same gate, but it never
+   touches the four lists you just edited (allow, ignore and resolve-gone
+   only change your working copy). Run `omabackup push` on its own first: with
+   list edits waiting it refuses and prints exactly which files it would
+   stage, since a list edit is worth a second look before it leaves the
+   machine. Then `omabackup push --confirm` commits and pushes them, again
+   only as far as the gate allows.
 
 ## Classification
 
@@ -85,6 +91,11 @@ just that it was.
 | A file under an `/etc` drop-in directory that no package owns | Allow | etc-allowlist |
 | A path reported `GONE` whose app is never coming back | Remove the entry | allowlist |
 | A path reported `GONE` whose app might return | Mark optional | allowlist |
+
+`/etc` rows are the one exception to step 4. The triage verbs only take paths
+under `$HOME`, so `omabackup allow /etc/modprobe.d/foo.conf` is always refused:
+add the line to `etc-allowlist.txt` by hand instead, then `omabackup push
+--confirm` to commit it. Everything under `$HOME` goes through the verbs.
 
 Prefer allowing the specific config file over the whole directory when the
 directory also holds logs or state next to it; the file is what you want

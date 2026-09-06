@@ -16,12 +16,40 @@ any other work.
 
 ## What counts
 
-Any way to get a file outside the allowlist into the data repo; any push to
-a remote the probe reported public; any write outside the data repo and the
-engine's own config and state directories; a guard that can be made to pass
-without actually running (a check that always reports success, or one that
-can be skipped and still leaves the pipeline looking healthy); shell strings
-built from paths or reasons instead of passed as arguments.
+Five things can go wrong here that cannot be undone. A way to cause any of
+them is a vulnerability, whether or not it needs an unusual config, a
+hand-edited list or an unlucky filename to reach.
+
+1. **A secret reaches the data repo.** A credential-shaped file getting past
+   the filename gate, or a token inside an allowlisted file getting past the
+   content scan, or either gate being made to pass without running. Once it
+   is committed it is in the local history and in every later clone, whether
+   or not it was ever pushed.
+2. **A push to a remote whose visibility was not actually proven.** Not only
+   "the probe said public and it pushed anyway": also the probe never running,
+   answering about a different repository than the one git pushes to, or a
+   trust flag standing in for a proof it was never asked to give.
+3. **A file outside the allowlists reaches the repo.** Nothing under `$HOME`
+   outside `allowlist.txt`, and nothing under `/etc` outside
+   `etc-allowlist.txt`, is meant to be staged. A path that gets in anyway,
+   through a glob, a symlink, a rename or a report the triage verbs read
+   differently from the scanner, counts.
+4. **User data destroyed, or its permissions weakened.** Restore and setup are
+   the two paths that write outside the data repo, and the README's "What it
+   writes, and what it only reads" is the whole list of places they are
+   allowed to touch: the data repo, `~/.config/omabackup`, the state
+   directory, the five unit files in `~/.config/systemd/user`, the
+   `~/.local/bin/omabackup` symlink, the login check in `~/.bashrc`, and
+   `$HOME` itself under `restore --apply`. A write outside that list, a file
+   removed without the `.bak.<epoch>` copy first, or a mode replay that
+   loosens a file (or reaches one through a symlinked parent), all count.
+5. **Code execution out of the data repo or the environment.** Nothing in the
+   data repo is ever interpreted as a program: not the normalize rules, not
+   the ignore globs, not `modes.txt`, not a manifest line handed to another
+   tool. Paths and reasons travel as arguments, never as an interpolated
+   shell string, a `jq` filter or a systemd unit body. Guards must not be
+   weakenable from the ambient environment either, since a `systemd --user`
+   unit inherits it.
 
 ## Scope notes
 

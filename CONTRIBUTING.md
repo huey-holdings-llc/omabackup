@@ -14,10 +14,12 @@ keeps to them is easy to merge; one that breaks them will get a conversation
 first.
 
 1. **Base Omarchy first.** The engine should work on a fresh Omarchy install
-   with nothing extra added. Everything it needs (bash, git, rsync, jq, gum,
-   systemd, `flock`) already ships with Omarchy. The one exception is
-   gitleaks, an Arch extra package: it gates a push, never a local commit,
-   and setup names it explicitly rather than assuming it is there.
+   with nothing extra added. The four it cannot start without (git, rsync,
+   jq, `flock`) all ship with Omarchy, as do the ones it uses when they are
+   there: gum for the wizard's prompts, systemd for the timers. The one
+   exception is gitleaks, an Arch extra package: it gates a push, never a
+   local commit, and setup names it explicitly rather than assuming it is
+   there.
 2. **Simplicity and efficiency over features.** No daemons, no polling, no
    background work the user did not ask for. The shell watches one small
    status file; the timer runs the CLI once a day and exits. A feature that
@@ -71,10 +73,11 @@ first.
 * **Second-model review**: larger pull requests get a review from OpenAI
   Codex, requested by the maintainer with a `@codex review` comment. Treat
   its findings as a starting point for the discussion, not as a verdict
-  either way. (The review instructions live in a tracked `AGENTS.md` for
-  local use; the Omarchy marketplace does not allow agent-instruction files
-  in a distributed plugin, since an install is a plain git clone, so the
-  file is excluded from the deployed tree by `scripts/dev-install.sh`.)
+  either way. (The review instructions live in an `AGENTS.md` that is kept out
+  of git by `.gitignore`, so a clone of this repository does not carry one:
+  the Omarchy marketplace does not allow agent-instruction files in a
+  distributed plugin, since an install is a plain git clone, and
+  `scripts/dev-install.sh` excludes the file from the deployed tree as well.)
 * **Style**: bash with `set -euo pipefail` and shellcheck clean; QML in the
   style of the existing files; plain, direct English in docs and messages.
 * **Reporting a bug**: include `omabackup setup check --json`, the relevant

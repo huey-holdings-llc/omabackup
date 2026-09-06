@@ -33,7 +33,7 @@ omabackup <verb> [args] [--json]
   setup [--data-repo DIR] [--remote URL] [--create-private] [--import DIR]
         [--trust-remote] [--no-timers] [--yes]     first-run wizard
   setup check                                       doctor
-  setup --remove                                    remove units, symlink, config
+  setup --remove [--yes]                            remove units, symlink, config
   snapshot [--dry-run] [--no-push]                  the daily pipeline
   drift                                             report unbacked config
   status                                            health (writes status.json)
