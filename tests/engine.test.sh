@@ -2933,6 +2933,15 @@ if group 87 "a repo or a config from a newer version is refused or ignored, neve
   c87=$(obj status)
   eq "an unparseable marker is refused" "$(jq -r .ok <<<"$c87")" "false"
   has "the refusal names the marker" "$(jq -r .error <<<"$c87")" ".omabackup"
+  # A marker this tool refuses to read is one a user has no in-tool way to
+  # repair: every verb stops at it, including the ones that would rewrite it.
+  # It is a committed file, so git has the answer, and the refusal says so.
+  has "and the refusal names the recovery" "$(jq -r .error <<<"$c87")" \
+    "git -C $FR checkout -- .omabackup"
+  i87=$(env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes 2>&1 || true)
+  has "the import refusal names the recovery too" "$i87" "git -C $FR checkout -- .omabackup"
+  s87b=$(env HOME="$FH" "$CLI" setup --data-repo "$FR" --no-timers --yes 2>&1 || true)
+  has "and so does the flagless rerun" "$s87b" "git -C $FR checkout -- .omabackup"
   fails "setup will not adopt an unparseable marker either" \
     env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
   eq "and the unparseable marker is left byte for byte alone" \

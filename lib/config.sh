@@ -290,7 +290,7 @@ data_repo_require() {
   # existing format, so the newer machine in a synced pair keeps working.
   local fmt
   fmt=$(data_repo_marker_format "$DATA_REPO/.omabackup") \
-    || die "data repo marker has no usable format field: $DATA_REPO/.omabackup"
+    || die "data repo marker has no usable format field: $DATA_REPO/.omabackup. The marker is committed, so restore it with: git -C $DATA_REPO checkout -- .omabackup"
   [[ "$fmt" -le 1 ]] || die "data repo format $fmt is newer than this version understands; upgrade omabackup"
   data_repo_assert_mode
 }

@@ -216,10 +216,21 @@ setup_marker() {
     # half-written) format:2 marker was quietly replaced by one saying the
     # repo is older than it is. Refuse and leave the file exactly as found.
     prev=$(data_repo_marker_format "$DATA_REPO/.omabackup") \
-      || die "data repo marker is not readable JSON: $DATA_REPO/.omabackup -- refusing to overwrite it"
+      || die "data repo marker is not readable JSON: $DATA_REPO/.omabackup -- refusing to overwrite it. The marker is committed, so restore it with: git -C $DATA_REPO checkout -- .omabackup"
   fi
   [[ "$prev" -le 1 ]] || fmt=$prev
-  jq -cn --arg v "$VERSION" --argjson f "$fmt" '{format:$f, createdBy:$v}' > "$DATA_REPO/.omabackup"
+  # Atomic, like config_write: the marker IS the contract that says this repo
+  # is ours and what format it is in, and a redirect straight onto it leaves a
+  # truncated file behind if the write is interrupted -- which every later run
+  # then refuses, marker unreadable, until a human restores it by hand.
+  local tmp
+  tmp=$(mktemp "$DATA_REPO/.omabackup.XXXXXX") \
+    || die "could not create a temporary file beside the data repo marker"
+  if ! { jq -cn --arg v "$VERSION" --argjson f "$fmt" '{format:$f, createdBy:$v}' > "$tmp" \
+         && chmod 600 "$tmp" && mv -f "$tmp" "$DATA_REPO/.omabackup"; }; then
+    rm -f "$tmp"
+    die "could not write the data repo marker: $DATA_REPO/.omabackup"
+  fi
   # Both setup paths reach here, and only here is the marker on disk. The repo
   # root and .git hold every backed-up config in full history, `mkdir -m 700
   # -p` leaves an existing directory's mode alone, and import chmod'd nothing.
@@ -241,7 +252,7 @@ setup_import() {
   if [[ -f "$dir/.omabackup" ]]; then
     local ifmt
     ifmt=$(data_repo_marker_format "$dir/.omabackup") \
-      || die "$dir has a .omabackup marker that is not readable JSON; refusing to adopt it"
+      || die "$dir has a .omabackup marker that is not readable JSON; refusing to adopt it. The marker is committed, so restore it with: git -C $dir checkout -- .omabackup"
     [[ "$ifmt" -le 1 ]] \
       || die "data repo format $ifmt is newer than this version understands; upgrade omabackup"
   fi
