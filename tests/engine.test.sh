@@ -1292,6 +1292,49 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
     "$(obj status | jq -r '.drift[] | select(.type == "GONE") | .optional')" "false"
   eq "resolve-gone optional: still accepted on a required entry" \
     "$(obj resolve-gone "$(tp .config/gonezo)" optional | jq -r .ok)" "true"
+  # A path is not a glob. The lists are MATCHED as globs (lists_load expands
+  # every allowlist entry, is_ignored runs each ignore entry as a pattern), so
+  # a file genuinely named `*` would have had one Allow click write an entry
+  # matching every sibling it has.
+  # The report NAMES all three, so the refusal below is about the glob
+  # characters and nothing else.
+  printf 'x\n' > "$FH/.config/appz/*"; printf 'x\n' > "$FH/.config/appz/?"; printf 'x\n' > "$FH/.config/appz/[a]"
+  printf 'y\n' > "$FH/.config/appz/slashme.toml"
+  { printf 'NEW        ~/.config/appz/*\n'
+    printf 'NEW        ~/.config/appz/?\n'
+    printf 'NEW        ~/.config/appz/[a]\n'
+    printf 'NEW        ~/.config/appz/slashme.toml\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  out51=$(obj allow "$(tp '.config/appz/*')")
+  eq "allow: refuses a path holding a glob character" "$(jq -r .ok <<<"$out51")" "false"
+  has "and says to edit the list by hand" "$(jq -r '.problems[0]' <<<"$out51")" "glob characters in a path"
+  eq "and nothing was written" "$(grep -c '^\.config/appz/\*$' "$FR/allowlist.txt")" "0"
+  eq "ignore: refuses a question mark too" "$(obj ignore "$(tp '.config/appz/?')" | jq -r .ok)" "false"
+  eq "ignore: refuses a bracket too" "$(obj ignore "$(tp '.config/appz/[a]')" | jq -r .ok)" "false"
+  eq "and no ignore entry was written for either" \
+    "$(grep -cE '^\.config/appz/(\?|\[a\])' "$FR/drift-ignore.txt")" "0"
+
+  # A slashed argument names a DIRECTORY, and a file row is not one. The
+  # report's own slash is the only authority for that; taking the argument's
+  # as well let this spelling write a subtree ignore for a plain file.
+  eq "allow: a trailing slash on a file row is refused" \
+    "$(obj allow "$(tp .config/appz/slashme.toml/)" | jq -r .ok)" "false"
+  eq "and nothing was written for it either" \
+    "$(grep -c '^\.config/appz/slashme\.toml$' "$FR/allowlist.txt")" "0"
+  eq "ignore: the same spelling is refused there too" \
+    "$(obj ignore "$(tp .config/appz/slashme.toml/)" | jq -r .ok)" "false"
+  rm -f "$FH/.config/appz/*" "$FH/.config/appz/?" "$FH/.config/appz/[a]" "$FH/.config/appz/slashme.toml"
+  cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
+
+  # Both halves of the GONE gate can pass with no allowlist line left to edit
+  # (a hand-deleted entry, a report from before it went). A rewrite that
+  # changes nothing must not report a decision.
+  printf 'GONE       ~/.config/no-entry-at-all\n# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  out51=$(obj resolve-gone "$(tp .config/no-entry-at-all)" remove)
+  eq "resolve-gone: refused when no allowlist line matches" "$(jq -r .ok <<<"$out51")" "false"
+  has "and says why" "$(jq -r '.problems[0]' <<<"$out51")" "no entry for that path"
+  cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
+
   eq "resolve-gone: refuses a path drift does not list as GONE" \
     "$(obj resolve-gone "$(tp .config/appz/z.toml)" remove | jq -r .ok)" "false"
 

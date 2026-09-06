@@ -58,6 +58,21 @@ rel_from_tilde() {
 # so the next scan enumerated the whole tree the row existed to collapse.
 DRIFT_TARGET_DIR=0
 
+# widget_no_glob_chars PATH: 0 when PATH holds none of the glob characters an
+# allowlist or drift-ignore entry is MATCHED with.
+#
+# The lists are globs, not literal paths: lists_load expands every allowlist
+# entry against $HOME and is_ignored runs each ignore entry as a `case`
+# pattern. A file genuinely named `*` (or holding `?` or `[`) is a legal
+# filename the scan will report, and one Allow click would then have written
+# an entry matching every sibling it has. Refusing here rather than escaping
+# is the honest answer: there is no escaping syntax in these file formats to
+# escape it INTO.
+widget_no_glob_chars() {
+  case "$1" in *'*'*|*'?'*|*'['*) return 1 ;; esac
+  return 0
+}
+
 # drift_has WANT TYPES: does the current drift report name this exact path
 # under one of the pipe-separated TYPES? The line is split by
 # drift_line_split (lib/drift.sh), the same function that builds the JSON the
@@ -79,10 +94,12 @@ drift_has() {
   while IFS= read -r line; do
     drift_line_split "$line" || continue
     [[ "${DRIFT_PATH%/}" == "$w" ]] || continue
-    # Either side saying "directory" makes it one: the report's own slash is
-    # the authority, and a user who typed the slash on the CLI meant it too.
+    # THE REPORT'S OWN SLASH IS THE ONLY AUTHORITY. Taking the argument's as
+    # well meant `allow '~/.config/foo.conf/'` matched a FILE row and then
+    # wrote a subtree ignore for a path that is not a directory; before Wave C
+    # that spelling was refused, and it goes back to being refused.
+    case "$want" in */) [[ "$DRIFT_PATH" == */ ]] || continue ;; esac
     case "$DRIFT_PATH" in */) DRIFT_TARGET_DIR=1 ;; esac
-    case "$want"       in */) DRIFT_TARGET_DIR=1 ;; esac
     return 0
   done < <(grep -E "^($types)" "$DATA_REPO/manifests/drift.txt" 2>/dev/null)
   return 1
@@ -169,6 +186,8 @@ cmd_allow() {
   local raw=${1:-} rel
   assert_argv_safe "$raw"
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
+  widget_no_glob_chars "$rel" \
+    || { widget_reply_fail "glob characters in a path: edit allowlist.txt by hand"; return 1; }
   drift_names_target "$raw" 'MODIFIED|NEW|EXCLUDED|TOOBIG' \
     || { widget_reply_fail "the drift report does not name that path (or the folder is too broad); refresh and retry"; return 1; }
   rel=${rel%/}
@@ -190,6 +209,8 @@ cmd_ignore() {
   assert_argv_safe "$raw"
   [[ -n "${2:-}" ]] && assert_argv_safe "$2"
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
+  widget_no_glob_chars "$rel" \
+    || { widget_reply_fail "glob characters in a path: edit drift-ignore.txt by hand"; return 1; }
   drift_names_target "$raw" 'MODIFIED|NEW|EXCLUDED|TOOBIG' \
     || { widget_reply_fail "the drift report does not name that path (or the folder is too broad); refresh and retry"; return 1; }
   # A directory becomes the explicit /** subtree form drift-ignore.txt
@@ -258,8 +279,19 @@ cmd_resolve_gone() {
   if [[ "$verb" == optional ]] && awk -v rel="$rel" '
       { line=$0; sub(/[ \t]+#.*$/,"",line); sub(/[ \t]+$/,"",line) }
       line=="?"rel { found=1; exit }
-      END { exit !found }' "$DATA_REPO/allowlist.txt"; then
+      END { exit !found }' "$DATA_REPO/allowlist.txt" 2>/dev/null; then
     widget_reply_fail "already optional; use Remove to drop the entry"
+    return 1
+  fi
+  # Both halves of the gate above can pass with NO allowlist line to edit: a
+  # GONE row survives in yesterday's report after the entry behind it was
+  # deleted by hand. The edit would then rewrite the file unchanged and reply
+  # ok, and the popup would strike the row off for a decision nobody recorded.
+  if ! awk -v rel="$rel" '
+      { line=$0; sub(/[ \t]+#.*$/,"",line); sub(/[ \t]+$/,"",line) }
+      line==rel || line=="?"rel { found=1; exit }
+      END { exit !found }' "$DATA_REPO/allowlist.txt" 2>/dev/null; then
+    widget_reply_fail "allowlist.txt has no entry for that path; nothing to resolve"
     return 1
   fi
   _widget_edit_gone() {
@@ -274,7 +306,12 @@ cmd_resolve_gone() {
         next
       }
       { print }
-    ' "$DATA_REPO/allowlist.txt" > "$tmp" && mv -f "$tmp" "$DATA_REPO/allowlist.txt"
+      # A no-op rewrite is not an edit. The pre-check above is what a user
+      # sees, but this is the one that cannot be raced: if the line went away
+      # between the two, the edit fails and edited_with_lint_gate rolls back
+      # rather than reporting a decision that was never recorded.
+      END { exit !done }
+    ' "$DATA_REPO/allowlist.txt" > "$tmp" && mv -f "$tmp" "$DATA_REPO/allowlist.txt" || { rm -f "$tmp"; return 1; }
   }
   edited_with_lint_gate "allowlist.txt" _widget_edit_gone || return 1
   health_write_status
