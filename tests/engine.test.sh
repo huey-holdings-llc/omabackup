@@ -3477,5 +3477,30 @@ if group 91 "every find reader is NUL-delimited, so a newline cannot forge a row
   fi
 fi
 
+if group 92 "omabackup's own unit files are not drift, and their neighbours still are"; then
+  # Section 3 of the drift scan reports every regular file under
+  # ~/.config/systemd/user, because on a stock machine those are all
+  # hand-written units (the packaged ones are symlinks into /usr/lib). So a
+  # fresh install opened the popup on five NEW rows the tool had just written
+  # about itself, which is precisely the noise that teaches people to ignore
+  # the list. share/drift-ignore.example carries a dated entry for them.
+  mk_fixture g92; seed_home
+  mkdir -p "$FH/.config/systemd/user"
+  # The names come from the SHIPPED units, so renaming one there without
+  # touching the seed line is caught here rather than on somebody's machine.
+  for u92 in "$HERE/../share/units"/*; do
+    printf '[Unit]\nDescription=fixture\n' > "$FH/.config/systemd/user/$(basename "$u92")"
+  done
+  printf '[Unit]\nDescription=mine\n' > "$FH/.config/systemd/user/my-own.service"
+  d92=$(ob drift)
+  eq "none of omabackup's own units is reported as drift" \
+    "$(grep -c 'systemd/user/omabackup-' <<<"$d92" || true)" "0"
+  # The entry is a name pattern, NOT a subtree ignore: the directory is one of
+  # the best detectors there is, and silencing it wholesale is the fail-open
+  # shape this tool exists to prevent.
+  has "a hand-written unit beside them is still reported" "$d92" "systemd/user/my-own.service"
+  eq "and lint is happy with the seeded entry" "$(obj lint --no-walk | jq -r .ok)" "true"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
