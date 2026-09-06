@@ -61,6 +61,10 @@ mk_fixture() {
   cp "$HERE/../share/etc-allowlist.example" "$FR/etc-allowlist.txt"
   cp "$HERE/../share/normalize.example" "$FR/normalize.txt"
   cp "$HERE/../share/data.gitignore" "$FR/.gitignore"
+  # A pre-0.7.0 repo shape on purpose: setup used to copy the rules file in
+  # here, and the copy is inert (lib/secrets.sh always scans with the plugin's
+  # own share/gitleaks.toml). Group 41 removes it to prove the scan does not
+  # depend on it; groups 51, 60 and 61 prove nothing writes or watches it.
   cp "$HERE/../share/gitleaks.toml" "$FR/.gitleaks.toml"
   printf '{"format":1,"createdBy":"test"}\n' > "$FR/.omabackup"
   # The repo root and .git are 0700 on a real install (setup chmods both, and
@@ -1408,7 +1412,7 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
   printf '# dirty manifest line\n' >> "$FR/manifests/drift.txt"
   if command -v gitleaks >/dev/null 2>&1; then
     eq "push --confirm: succeeded" "$(obj push --confirm | jq -r .ok)" "true"
-    [[ -z "$(git -C "$FR" status --porcelain -- allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt .gitleaks.toml)" ]] \
+    [[ -z "$(git -C "$FR" status --porcelain -- allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt)" ]] \
       && ok "push --confirm: tracked list edits committed" || bad "tracked list edits still dirty"
     git -C "$FR" status --porcelain -- manifests | grep -q drift.txt \
       && ok "push --confirm: snapshot-owned paths were NOT swept up" || bad "scoped add leaked into manifests/"
@@ -1417,6 +1421,15 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
   else
     echo "  (gitleaks not installed: skipping push --confirm assertions)"
   fi
+  # The watch list is the four lists, and only those. `.gitleaks.toml` was
+  # watched here too, which told the user an edit to it was a live rules
+  # change worth confirming; the scan has always used the plugin's own
+  # share/gitleaks.toml, so the repo copy does nothing and the confirmation
+  # was about nothing.
+  printf '\n# an edit an older version would have asked about\n' >> "$FR/.gitleaks.toml"
+  eq "push does not watch the inert .gitleaks.toml" \
+    "$(obj push | jq -r '[.files[]? | select(. == ".gitleaks.toml")] | length')" "0"
+  git -C "$FR" checkout -q -- .gitleaks.toml
   # Back to the crafted report: checkout would resurrect the last COMMITTED
   # drift.txt, which never named appz, and the lock test below needs it named.
   cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
@@ -1510,7 +1523,12 @@ if group 60 "setup creates a data repo, seeds, marker, config"; then
 
   check "unattended setup, local only, no timers" env HOME="$FH" "$CLI" setup --data-repo "$T/data" --no-timers --yes
   [[ -f "$T/data/.omabackup" ]] && ok "marker written" || bad "no marker"
-  [[ -f "$T/data/allowlist.txt" && -f "$T/data/drift-ignore.txt" && -f "$T/data/.gitleaks.toml" ]] && ok "seeds copied" || bad "seeds missing"
+  [[ -f "$T/data/allowlist.txt" && -f "$T/data/drift-ignore.txt" && -f "$T/data/normalize.txt" ]] && ok "seeds copied" || bad "seeds missing"
+  # NOT a seed. The rules file the scan actually uses is the plugin's own, and
+  # a copy in the data repo is read by nothing, so laying one down told the
+  # user their edits to it would matter.
+  [[ -e "$T/data/.gitleaks.toml" ]] && bad "setup seeded a .gitleaks.toml the engine never reads" \
+    || ok "setup lays down no .gitleaks.toml"
   eq "config dataRepo set" "$(jq -r .dataRepo "$OMABACKUP_CONFIG")" "$T/data"
   eq "config is 0600" "$(stat -c %a "$OMABACKUP_CONFIG")" "600"
   eq "phase recorded as done" "$(jq -r .setupPhase "$OMABACKUP_CONFIG")" "done"
@@ -1548,6 +1566,11 @@ fi
 
 if group 61 "setup --import adopts an existing engine repo; unattended trust stays opt-in"; then
   mk_fixture g61; seed_home; rm "$FR/.omabackup"
+  # Adopt a repo that has no .gitleaks.toml, so the assertion below is about
+  # what import writes rather than about what mk_fixture left lying around.
+  git -C "$FR" rm -q --cached .gitleaks.toml >/dev/null 2>&1
+  rm -f "$FR/.gitleaks.toml"
+  git -C "$FR" commit -qm "drop the inert rules copy" >/dev/null
   # mk_fixture pre-authors a config that already trusts $BARE, and a rerun
   # against an unchanged remote now keeps a trust decision the operator
   # already made. Clear it first, so the assertion below tests what it says:
@@ -1556,7 +1579,7 @@ if group 61 "setup --import adopts an existing engine repo; unattended trust sta
   check "import writes the marker" env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
   eq "marker format 1" "$(jq -r .format "$FR/.omabackup")" "1"
   # Nothing else ever commits the marker: the snapshot commits its four output
-  # paths and push --confirm the five lists, so an uncommitted .omabackup meant
+  # paths and push --confirm the four lists, so an uncommitted .omabackup meant
   # a clone of the adopted repo carried no marker and every verb refused it.
   eq "the adoption leaves the repo clean" "$(git -C "$FR" status --porcelain | grep -c . || true)" "0"
   if git -C "$FR" log -1 --name-only --format= | grep -qx '.omabackup'; then
@@ -1578,6 +1601,8 @@ if group 61 "setup --import adopts an existing engine repo; unattended trust sta
   # (--yes, no tty, no --trust-remote) must never turn trust on for it.
   eq "unattended import never turns trust ON for a non-GitHub remote" \
     "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "false"
+  [[ -e "$FR/.gitleaks.toml" ]] && bad "import wrote a .gitleaks.toml the engine never reads" \
+    || ok "import lays down no .gitleaks.toml either"
 
   git init -q "$T/notarepo"
   fails "import refuses a directory without the lists" env HOME="$FH" "$CLI" setup --import "$T/notarepo" --no-timers --yes

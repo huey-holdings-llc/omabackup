@@ -175,8 +175,12 @@ setup_seed() {
   done
   [[ -f "$DATA_REPO/.gitignore" ]] \
     || { cp "$PLUGIN_DIR/share/data.gitignore" "$DATA_REPO/.gitignore"; laid+=(.gitignore); }
-  [[ -f "$DATA_REPO/.gitleaks.toml" ]] \
-    || { cp "$PLUGIN_DIR/share/gitleaks.toml" "$DATA_REPO/.gitleaks.toml"; laid+=(.gitleaks.toml); }
+  # NO .gitleaks.toml. lib/secrets.sh pins the rules file to the plugin's own
+  # share/gitleaks.toml precisely so the data repo cannot blind its own gate,
+  # so a copy in the repo was never read: a user adding a rule for their
+  # employer's token format, or loosening one, changed nothing, while setup
+  # laying it down and push --confirm watching it said the opposite. A repo
+  # seeded by an older version keeps its copy; it is simply inert.
   [[ -f "$DATA_REPO/modes.txt" ]] || { : > "$DATA_REPO/modes.txt"; laid+=(modes.txt); }
   mkdir -p "$DATA_REPO/home" "$DATA_REPO/etc" "$DATA_REPO/manifests"
   chmod 700 "$DATA_REPO/home"
@@ -190,7 +194,7 @@ setup_seed() {
   # section 6's "point at an existing empty repo"), and untracked means there
   # is no human edit to a tracked file to sweep up.
   local s
-  for s in allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt modes.txt .gitignore .gitleaks.toml; do
+  for s in allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt modes.txt .gitignore; do
     case " ${laid[*]} " in *" $s "*) continue ;; esac
     git -C "$DATA_REPO" ls-files --error-unmatch -- "$s" >/dev/null 2>&1 || laid+=("$s")
   done
@@ -245,7 +249,7 @@ setup_import() {
   # THE MARKER FIRST, before this function touches anything. The format
   # refusal used to fire much later -- data_repo_require, reached through the
   # first drift scan -- by which time the config had been rewritten to point
-  # at the repo, .gitignore and .gitleaks.toml had been copied in, the marker
+  # at the repo, .gitignore had been copied in, the marker
   # had been rewritten and a commit had been made. So "this repo is newer than
   # I understand" was announced only after adopting it. A repo this version
   # cannot read must be left exactly as it was found.
@@ -287,12 +291,11 @@ setup_import() {
   local -a adopted=()
   [[ -f "$DATA_REPO/.gitignore" ]] \
     || { cp "$PLUGIN_DIR/share/data.gitignore" "$DATA_REPO/.gitignore"; adopted+=(.gitignore); }
-  [[ -f "$DATA_REPO/.gitleaks.toml" ]] \
-    || { cp "$PLUGIN_DIR/share/gitleaks.toml" "$DATA_REPO/.gitleaks.toml"; adopted+=(.gitleaks.toml); }
+  # No .gitleaks.toml here either, for the reason setup_seed gives.
   setup_marker
   adopted+=(.omabackup)
   # Commit the marker. Nothing else ever does: the snapshot commits its four
-  # output paths and push --confirm the five lists, so an uncommitted
+  # output paths and push --confirm the four lists, so an uncommitted
   # .omabackup meant a clone of the adopted repo carried no marker at all and
   # every verb refused it there. `|| true` for the same reason as setup_seed:
   # a rerun with nothing new to write must be a silent no-op, not a failure.

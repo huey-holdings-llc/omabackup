@@ -342,14 +342,20 @@ push_nothing_ahead() {
 }
 
 # cmd_push [--confirm]: the dynamic push button. Plain push when only commits
-# are waiting; when the four lists (or .gitleaks.toml) are dirty, report the
-# files and require --confirm, then stage EXACTLY those paths (never -A) and
-# commit with a message naming them.
+# are waiting; when the four lists are dirty, report the files and require
+# --confirm, then stage EXACTLY those paths (never -A) and commit with a
+# message naming them.
+#
+# The list is FOUR files, not five. `.gitleaks.toml` used to be watched here,
+# which told the user an edit to it was a live rules change worth a second
+# look; lib/secrets.sh has always scanned with the plugin's own
+# share/gitleaks.toml and never with a copy in the repo, so the confirmation
+# was about a file that does nothing.
 cmd_push() {
   data_repo_require
   local confirm=${1:-} dirty=() line p files_json=() out
   [[ -n "$confirm" ]] && assert_argv_safe "$confirm"
-  local -a watch=(allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt .gitleaks.toml)
+  local -a watch=(allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt)
   while IFS= read -r -d '' line; do
     p=${line:3}
     [[ -n "$p" ]] && dirty+=("$p")
@@ -395,8 +401,8 @@ cmd_push() {
     git -C "$DATA_REPO" add -- "${dirty[@]}" \
       || { drop_lock; widget_reply_fail "git add failed for the listed files"; return 1; }
     # AUTHORITATIVE GATE, the same one the snapshot pipeline runs before its
-    # own commit (lib/snapshot.sh). This path stages five files a human just
-    # edited -- .gitleaks.toml among them -- and committed them with no
+    # own commit (lib/snapshot.sh). This path stages list files a human just
+    # edited and committed them with no
     # content scan at all, so a token pasted into a list could be committed
     # and then pushed by the very next line. secrets_scan_staged die()s on a
     # hit, so it runs in a command substitution (its own subshell): the die
@@ -414,7 +420,7 @@ cmd_push() {
     fi
     # Same identity fallback as every other commit path: a machine with no
     # ~/.gitconfig cannot commit at all, and this one failed with "Author
-    # identity unknown" and left the five lists staged behind it. The reset on
+    # identity unknown" and left the lists staged behind it. The reset on
     # failure is what keeps a refusal from leaving that mess.
     git_ident_args
     out=$(git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -q -m "lists: update ${dirty[*]} via widget" 2>&1) \

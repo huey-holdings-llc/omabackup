@@ -6,7 +6,9 @@
 # lives inside the mutable data repo -- the engine preferred a repo-local
 # .gitleaks.toml when present, so deleting that file silently fell back to
 # gitleaks' bundled defaults (no ANTHROPIC_API_KEY rule, for one). Pinning the
-# path here means the data repo cannot blind its own gate.
+# path here means the data repo cannot blind its own gate. Setup no longer
+# lays a copy down either (lib/setup.sh), so nothing tells a user that editing
+# a repo-local .gitleaks.toml would change what the scan looks for.
 # shellcheck shell=bash
 
 # SECRET_NAME_GLOBS: the credential filename classes, written in gitignore

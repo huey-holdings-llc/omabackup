@@ -298,12 +298,16 @@ home/                the mirrored config itself (mode 700)
 etc/                 the reference copies named in etc-allowlist.txt
 manifests/           generated facts about the machine, plus drift.txt
 .gitignore           belt-and-braces excludes, copied from share/ at setup
-.gitleaks.toml       the secret-scan rules, copied from share/ at setup
 .omabackup           marker: {"format": 1, "createdBy": "<version>"}
                      a marker whose format is HIGHER than this version knows
                      is refused, never rewritten, so the newer machine in a
                      synced pair keeps working
 ```
+
+A repo set up before 0.7.0 also holds a `.gitleaks.toml` that an older setup
+copied in. Nothing reads it: the content scan always runs with the plugin's
+own `share/gitleaks.toml`, so a rule added to the repo copy never took effect
+in either direction. The copy is inert, and deleting it changes nothing.
 
 `allowlist.txt` entries are directories (recursive) or files, relative to
 `$HOME`, and support shell globs; a leading `?` marks an entry optional, so
