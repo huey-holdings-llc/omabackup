@@ -346,20 +346,24 @@ push_nothing_ahead() {
 }
 
 # cmd_push [--confirm]: the dynamic push button. Plain push when only commits
-# are waiting; when the four lists are dirty, report the files and require
+# are waiting; when a watched file is dirty, report the files and require
 # --confirm, then stage EXACTLY those paths (never -A) and commit with a
 # message naming them.
 #
-# The list is FOUR files, not five. `.gitleaks.toml` used to be watched here,
-# which told the user an edit to it was a live rules change worth a second
-# look; lib/secrets.sh has always scanned with the plugin's own
-# share/gitleaks.toml and never with a copy in the repo, so the confirmation
-# was about a file that does nothing.
+# `.gitleaks.toml` used to be watched here, which told the user an edit to it
+# was a live rules change worth a second look; lib/secrets.sh has always
+# scanned with the plugin's own share/gitleaks.toml and never with a copy in
+# the repo, so the confirmation was about a file that does nothing.
+#
+# `.gitignore` IS watched, for the opposite reason: it is a rules file this
+# repo really uses, and data_repo_gitignore_sync (lib/config.sh) can now
+# append to it. Every file status reports as an uncommitted edit needs a
+# button that commits it, or the widget shows a count nothing can clear.
 cmd_push() {
   data_repo_require
   local confirm=${1:-} dirty=() line p files_json=() out
   [[ -n "$confirm" ]] && assert_argv_safe "$confirm"
-  local -a watch=(allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt)
+  local -a watch=(allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt .gitignore)
   while IFS= read -r -d '' line; do
     p=${line:3}
     [[ -n "$p" ]] && dirty+=("$p")

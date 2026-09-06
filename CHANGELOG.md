@@ -47,6 +47,13 @@ something is waiting on your decision, and an alert triangle only when a guard
 has actually fired. Those are three different things and they no longer look
 the same.
 
+If you adopted a data repo under an earlier version, the first run on 0.7.0
+appends any ignore pattern this version ships that your repo's `.gitignore`
+does not already have, under a dated comment, and tells you to commit it.
+Nothing is ever removed or reordered, so lines you added yourself stay where
+they are. The popup's Commit button now offers `.gitignore` alongside the four
+lists, so that edit has somewhere to go.
+
 ### Security
 
 Nothing is pushed unless the engine can show the push is safe. A filename gate

@@ -3529,5 +3529,51 @@ if group 92 "omabackup's own unit files are not drift, and their neighbours stil
   eq "and lint is happy with the seeded entry" "$(obj lint --no-walk | jq -r .ok)" "true"
 fi
 
+if group 93 "an existing repo's .gitignore gains the patterns this version ships"; then
+  # Both cp sites in setup are conditional (`[[ -f .gitignore ]] || cp`), which
+  # is right on its own -- a rewrite would take lines the user added -- but
+  # together they meant a repo created before a class was added to
+  # share/data.gitignore never got it, and nothing was going to. `.omabackup.*`
+  # is the live example: on such a repo the marker's interrupted-setup scratch
+  # file is an untracked file the login check names at every new terminal.
+  mk_fixture g93; seed_home
+  # A pre-0.7.0 .gitignore: the shipped file minus two of its lines, plus one
+  # of the user's own that nothing may touch.
+  grep -vxF -e '.omabackup.*' -e 'Cookies*' "$HERE/../share/data.gitignore" > "$FR/.gitignore"
+  printf '\n# mine, not omabackup\nmy-own-scratch/\n' >> "$FR/.gitignore"
+  git -C "$FR" commit -qam "a .gitignore from an older version"
+
+  eq "status still answers about this repo" "$(obj status | jq -r .repo)" "$FR"
+  eq "the marker-scratch pattern is there now" \
+    "$(grep -cxF '.omabackup.*' "$FR/.gitignore")" "1"
+  eq "and so is every other shipped line it lacked" \
+    "$(grep -cxF 'Cookies*' "$FR/.gitignore")" "1"
+  eq "the line the user added is untouched" \
+    "$(grep -cxF 'my-own-scratch/' "$FR/.gitignore")" "1"
+  eq "nothing shipped was removed" "$(grep -cxF '.staging/' "$FR/.gitignore")" "1"
+  # ONCE. Every verb calls data_repo_require, so a sync that cannot tell
+  # "already there" from "missing" would append the same block on every run.
+  n93=$(wc -l < "$FR/.gitignore")
+  obj status >/dev/null; obj lint --no-walk >/dev/null; ob drift >/dev/null
+  eq "three more verbs append nothing" "$(wc -l < "$FR/.gitignore")" "$n93"
+  eq "and no pattern is duplicated" "$(grep -cxF '.omabackup.*' "$FR/.gitignore")" "1"
+  # A repo that already has every line is the normal case, and it must not be
+  # written to at all: mk_fixture copies the shipped file verbatim.
+  mk_fixture g93b; seed_home
+  obj status >/dev/null
+  eq "a current repo is left completely alone" \
+    "$(git -C "$FR" status --porcelain -- .gitignore)" ""
+  # The edit the sync makes is reported as an uncommitted edit, so it needs a
+  # button that commits it. Without .gitignore in push's watch list the widget
+  # shows a count nothing it offers can clear.
+  mk_fixture g93c; seed_home
+  grep -vxF '.omabackup.*' "$HERE/../share/data.gitignore" > "$FR/.gitignore"
+  git -C "$FR" commit -qam "a .gitignore from an older version"
+  eq "the sync's own edit is reported" \
+    "$(obj status | jq -r '[.uncommitted[] | select(test("gitignore"))] | length')" "1"
+  eq "and push offers to commit exactly that file" \
+    "$(obj push | jq -r '[.files[]? | select(. == ".gitignore")] | length')" "1"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

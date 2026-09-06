@@ -293,4 +293,50 @@ data_repo_require() {
     || die "data repo marker has no usable format field: $DATA_REPO/.omabackup. The marker is committed, so restore it with: git -C $DATA_REPO checkout -- .omabackup"
   [[ "$fmt" -le 1 ]] || die "data repo format $fmt is newer than this version understands; upgrade omabackup"
   data_repo_assert_mode
+  data_repo_gitignore_sync
+}
+
+# data_repo_gitignore_sync: bring an EXISTING repo's .gitignore up to the set
+# this version ships. Warn and fix; never remove, never reorder.
+#
+# Both cp sites in lib/setup.sh are conditional (`[[ -f ... ]] || cp`), which
+# is the right call on its own -- a rewrite would take lines the user added --
+# but together they mean a repo created before a class was added to
+# share/data.gitignore never gets it, and nothing was ever going to. The live
+# example is `.omabackup.*`: on a repo set up before that line existed, an
+# interrupted setup leaves the marker scratch file untracked, and the login
+# check names it as an uncommitted edit at every new terminal forever.
+#
+# What it does NOT do is decide anything about the repo. A missing pattern is
+# a missing SAFETY line (the file is entirely credential classes and the
+# tool's own scratch), so adding it can only ever ignore more, and the lines
+# are appended in the shipped file's own order -- which is what keeps `id_*`
+# ahead of `!id_*.pub` on a repo that has neither.
+#
+# Comments and blank lines are not compared: they are formatting, not rules.
+# One `printf` writes the whole block, so two verbs racing here append two
+# whole blocks rather than interleaving halves of them, and a repo that has
+# every line writes nothing at all -- which is every repo from the second run
+# on, and every repo setup created.
+data_repo_gitignore_sync() {
+  local shipped="$PLUGIN_DIR/share/data.gitignore" have="$DATA_REPO/.gitignore"
+  [[ -r "$shipped" ]] || return 0
+  local exists=0
+  if [[ -f "$have" ]]; then exists=1; fi
+  local line missing=()
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    if [[ "$exists" == 1 ]] && grep -qxF -- "$line" "$have"; then continue; fi
+    missing+=("$line")
+  done < "$shipped"
+  (( ${#missing[@]} > 0 )) || return 0
+  local block
+  block=$(
+    printf '\n# %s: ignore patterns this version of omabackup ships that this\n' "$(date +%F)"
+    printf '# file did not have. Nothing here is ever removed by the tool.\n'
+    printf '%s\n' "${missing[@]}"
+  )
+  printf '%s\n' "$block" >> "$have" \
+    || { warn "cannot write $have; ${#missing[@]} shipped ignore pattern(s) are missing from it"; return 0; }
+  warn "added ${#missing[@]} ignore pattern(s) this version ships to $have; commit it with the popup's Commit button, or omabackup push --confirm"
 }
