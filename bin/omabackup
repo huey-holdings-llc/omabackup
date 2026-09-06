@@ -91,7 +91,22 @@ main() {
         fi
         exit 1
       fi ;;
-    snapshot|drift|allow|ignore|resolve-gone|push|lint|restore|verify|timer|self-test|open|notify-failure) config_load ;;
+    # notify-failure is the unit's OnFailure= hook: the one verb whose whole
+    # job is to speak up when something else has already gone wrong. A missing
+    # or unparsable config is exactly such a failure, and requiring config_load
+    # here meant the broken config silenced the notification about itself --
+    # the snapshot unit failed, its ExecStopPost died on the same config, and
+    # the user's only signal was a red line in a journal nobody reads.
+    # So: read the config best-effort, for the one value notify() consults.
+    # config_load die()s, and die exits the process rather than returning, so
+    # it runs in a subshell and only its answer is carried back. notify()
+    # already defaults CFG_NOTIFY to true, which is the fail-loud direction.
+    notify-failure)
+      if config_exists; then
+        local nv; nv=$( (config_load >/dev/null 2>&1 && printf '%s' "${CFG_NOTIFY:-true}") || true )
+        if [[ "$nv" == false ]]; then CFG_NOTIFY=false; fi
+      fi ;;
+    snapshot|drift|allow|ignore|resolve-gone|push|lint|restore|verify|timer|self-test|open) config_load ;;
     *) usage_die "unknown verb '$verb'" ;;
   esac
   case "$verb" in

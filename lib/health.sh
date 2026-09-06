@@ -435,8 +435,13 @@ cmd_health() {
     if [[ "$sig" != "$last_sig" || "$days" -ge "$NAG_DAYS" ]]; then
       lines+=("reminder: ${#unc[@]} uncommitted edit(s) to the repo's own lists/scripts. Run: git -C $DATA_REPO add -A && git -C $DATA_REPO commit")
       # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
-      mkdir -m 700 -p "$STATE_DIR"
-      printf '%s %s\n' "$now" "$sig" > "$stamp"
+      # WARN AND SKIP, not die: the reminder has already been decided and
+      # added above, and a state directory that cannot be written must not
+      # turn `health` into a failed run. The cost of skipping is that the
+      # same reminder is due again on the next login.
+      if ! mkdir -m 700 -p "$STATE_DIR" || ! printf '%s %s\n' "$now" "$sig" > "$stamp"; then
+        warn "cannot record the reminder stamp under $STATE_DIR; this reminder may repeat"
+      fi
     fi
   fi
 

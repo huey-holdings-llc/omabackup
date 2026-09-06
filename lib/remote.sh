@@ -201,7 +201,12 @@ remote_probe_derive() {
 # gitleaks here, not just at scan time, closes the gap where a machine with
 # no gitleaks would otherwise scan nothing and still push.
 remote_push_allowed() {
-  gitleaks_available || { PUSH_REASON="gitleaks-missing"; return 1; }
+  # PUSH_VERIFIABLE goes with the reason. It is the probe's answer until this
+  # gate has run, and once the gate has refused it is this verb's answer to
+  # "can anything be pushed" -- so a snapshot's own JSON and the status.json
+  # written from the recorded verdict cannot disagree on a machine that has no
+  # scanner, which is the one field the widget reads to say a commit can leave.
+  gitleaks_available || { PUSH_VERIFIABLE=false; PUSH_REASON="gitleaks-missing"; return 1; }
   [[ "$PUSH_VERIFIABLE" == true ]]
 }
 
@@ -286,8 +291,13 @@ remote_push_if_ahead() {
 Run: git -C $DATA_REPO pull --rebase"
         if [[ -n "$remote_head" ]]; then
           # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
-          mkdir -m 700 -p "$STATE_DIR"
-          printf '%s\n' "$remote_head" > "$stamp"
+          # WARN AND SKIP: the notification has already gone out, and a
+          # state directory that cannot be written must not fail a run whose
+          # push work is done. The cost is that the same divergence may be
+          # announced again.
+          if ! mkdir -m 700 -p "$STATE_DIR" || ! printf '%s\n' "$remote_head" > "$stamp"; then
+            warn "cannot record the diverged stamp under $STATE_DIR; this may be announced again"
+          fi
         fi
       fi
     else

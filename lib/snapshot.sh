@@ -798,6 +798,13 @@ cmd_snapshot() {
   if [[ $nopush == 1 ]]; then
     # shellcheck disable=SC2034  # read by lib/remote.sh and lib/health.sh
     SKIP_PUSH=1
+    # The verdict remote_probe just wrote is the PROBE's answer. The gate is
+    # stricter (no gitleaks, no push, ever), and skipping the push does not
+    # make the gate any wider: record the gate's refusal here, or a machine
+    # with no scanner that only ever runs --no-push keeps a status.json saying
+    # its commits can be pushed. Nothing is written on the allowed path: there
+    # the probe's answer already IS the gate's.
+    remote_push_allowed || remote_verdict_write false "${PUSH_REASON:-unknown}"
   else
     remote_push_if_ahead
   fi

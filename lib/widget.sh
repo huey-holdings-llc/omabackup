@@ -142,7 +142,8 @@ drift_names_target() {
 edited_with_lint_gate() {
   local file=$1 editor=$2 bak lint_json lint_ok problems
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
-  mkdir -m 700 -p "$STATE_DIR"
+  mkdir -m 700 -p "$STATE_DIR" \
+    || { widget_reply_fail "could not create $STATE_DIR to back the list up before editing it"; return 1; }
   bak=$(mktemp "$STATE_DIR/.widget-list.XXXXXX") \
     || { widget_reply_fail "could not create a backup file under $STATE_DIR"; return 1; }
   if ! take_lock; then
@@ -192,8 +193,24 @@ cmd_allow() {
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
   widget_no_glob_chars "$rel" \
     || { widget_reply_fail "a file whose name contains * ? or [ cannot be backed up by name; rename it, or ignore the folder it is in"; return 1; }
-  drift_names_target "$raw" 'MODIFIED|NEW|EXCLUDED|TOOBIG' \
-    || { widget_reply_fail "the drift report does not name that path (or the folder is too broad); refresh and retry"; return 1; }
+  # ALLOW IS NOT OFFERED FOR TOOBIG OR EXCLUDED, and the engine has to say so
+  # too. Both classes are paths the allowlist ALREADY covers: one is held back
+  # by maxFileSize, the other by .gitignore. Taking the click wrote an entry
+  # that lifted neither limit, so the row struck itself out and came back
+  # unchanged on the next scan. The popup hides the button (ui/DriftRow.qml);
+  # a CLI caller gets the same sentence the row's explain line carries, naming
+  # the limit that is actually holding the file.
+  if ! drift_names_target "$raw" 'MODIFIED|NEW'; then
+    local bare=${rel%/} msg
+    if drift_names_target "$raw" 'TOOBIG'; then
+      msg="$bare is over maxFileSize, so it is allowlisted but not copied; raise maxFileSize in the config, or ignore the file"
+    elif drift_names_target "$raw" 'EXCLUDED'; then
+      msg="$bare is matched by .gitignore, so it is allowlisted but not committed; add a negation line (for example !${bare##*/}) to the repo's .gitignore, or ignore the file"
+    else
+      msg="the drift report does not name that path (or the folder is too broad); refresh and retry"
+    fi
+    widget_reply_fail "$msg" || return 1
+  fi
   rel=${rel%/}
   if grep -qxF -e "$rel" -e "?$rel" "$DATA_REPO/allowlist.txt"; then
     widget_reply_fail "already allowlisted: $rel"; return 1
@@ -388,7 +405,16 @@ cmd_push() {
   fi
 
   remote_probe
-  remote_push_allowed || { widget_reply_fail "push not allowed: $PUSH_REASON"; return 1; }
+  # THE RECORDED VERDICT IS THE GATE'S, NOT THE PROBE'S. remote_probe has just
+  # written what the probe alone decided, and the gate is stricter than the
+  # probe: no gitleaks means no push whatever the remote turned out to be. Left
+  # as it was, a machine with no scanner refused this button and status.json
+  # went on saying push_verifiable:true, which is the one field the widget uses
+  # to tell the user their commits can leave the machine.
+  remote_push_allowed || {
+    remote_verdict_write false "${PUSH_REASON:-unknown}"
+    widget_reply_fail "push not allowed: $PUSH_REASON"; return 1
+  }
 
   if [[ ${#dirty[@]} -gt 0 ]]; then
     if ! take_lock; then widget_reply_fail "the repo lock is held (a snapshot may be running); try again shortly"; return 1; fi

@@ -9,7 +9,10 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CLI="$HERE/../bin/omabackup"
-ROOT="${OMABACKUP_TEST_TMP:-$HERE/tmp}/$$"; mkdir -p "$ROOT"
+# $$ alone is not unique enough: two checkouts, or a rerun after a PID wrap,
+# share a fixture root and then delete each other's fixtures mid-run. The
+# suffix costs nothing and makes a concurrent run merely slow, not wrong.
+ROOT="${OMABACKUP_TEST_TMP:-$HERE/tmp}/$$.$RANDOM"; mkdir -p "$ROOT"
 trap 'rm -rf "$ROOT"' EXIT
 # Marks a suite as already running, so a self-test verb exercised BY the
 # suite (group 00's misuse/recursion assertions) refuses instead of forking
@@ -143,6 +146,20 @@ if group 00 "baseline: version, help, config validation"; then
   nf_out=$(ob notify-failure snapshot); nf_rc=$?
   eq "notify-failure snapshot exits 0" "$nf_rc" "0"
   eq "notify-failure snapshot is silent with OMABACKUP_NOTIFY=0" "$nf_out" ""
+
+  # THE FAILURE THIS VERB EXISTS TO ANNOUNCE INCLUDES THE CONFIG ITSELF. It was
+  # in the config_load list, so a config that no longer parses -- or was
+  # removed while the timer stayed installed -- died here too, and the one
+  # signal the user had about a snapshot that stopped working was a line in a
+  # journal nobody reads. It reads the config best-effort now: notify() already
+  # defaults CFG_NOTIFY to true, which is the fail-loud direction.
+  printf 'not json at all {\n' > "$T/broken.json"
+  nfb_rc=$(OMABACKUP_CONFIG=$T/broken.json ob notify-failure snapshot >/dev/null 2>&1; echo $?)
+  eq "notify-failure snapshot exits 0 with an unparsable config" "$nfb_rc" "0"
+  nfm_rc=$(OMABACKUP_CONFIG=/nonexistent ob notify-failure snapshot >/dev/null 2>&1; echo $?)
+  eq "notify-failure snapshot exits 0 with no config at all" "$nfm_rc" "0"
+  eq "a bad arg is still a usage error, config or no config" \
+    "$(OMABACKUP_CONFIG=/nonexistent ob notify-failure bogus >/dev/null 2>&1; echo $?)" "2"
 
   # The WORDING, read the way a user reads it: through a notifier on PATH.
   # notify() prefers omarchy-notification-send and falls back to notify-send,
@@ -1244,6 +1261,32 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
     "$(obj allow "$(tp ../outside.conf)" | jq -r .ok)" "false"
   cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
 
+  # ALLOW IS NOT THE FIX FOR A TOOBIG OR AN EXCLUDED ROW, and the engine has to
+  # say so rather than write an entry that lifts neither limit. Both classes
+  # name paths the allowlist ALREADY covers -- one held back by maxFileSize,
+  # the other by .gitignore -- so the click struck the row out and the next
+  # scan brought it back unchanged. The popup hides the button; the refusal
+  # here is what a CLI caller (and the popup, if it ever regressed) gets.
+  mkdir -p "$FH/.config/appbig"
+  printf 'x\n' > "$FH/.config/appbig/huge.img"; printf 'x\n' > "$FH/.config/appbig/keep.key"
+  { printf 'TOOBIG     ~/.config/appbig/huge.img\t(exceeds 8m; NOT backed up)\n'
+    printf 'EXCLUDED   ~/.config/appbig/keep.key\t(matches .gitignore; NOT backed up)\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  a51b=$(obj allow "$(tp .config/appbig/huge.img)")
+  eq "allow: refuses a TOOBIG row" "$(jq -r .ok <<<"$a51b")" "false"
+  eq "allow: the TOOBIG refusal is one JSON object" "$(jq -sc 'length' <<<"$a51b")" "1"
+  has "allow: the TOOBIG refusal names the limit that holds the file" "$a51b" "maxFileSize"
+  a51e=$(obj allow "$(tp .config/appbig/keep.key)")
+  eq "allow: refuses an EXCLUDED row" "$(jq -r .ok <<<"$a51e")" "false"
+  has "allow: the EXCLUDED refusal names .gitignore" "$a51e" ".gitignore"
+  has "allow: ...and the negation line that lifts it" "$a51e" "negation line"
+  eq "allow: neither refusal appended anything" \
+    "$(grep -c 'appbig' "$FR/allowlist.txt" || true)" "0"
+  # Ignore still takes both classes: it is the triage that does apply.
+  eq "ignore: still accepts a TOOBIG row" \
+    "$(obj ignore "$(tp .config/appbig/huge.img)" 'too big to keep' | jq -r .ok)" "true"
+  cp "$T/drift51.tmp" "$FR/manifests/drift.txt"
+
   # Ignore: dated entry, reason recorded, collapsed trees become subtree ignores.
   eq "ignore: accepted" \
     "$(obj ignore "$(tp .local/share/bigz/)" 'huge store, regenerable' | jq -r .ok)" "true"
@@ -1969,6 +2012,19 @@ if group 66 "guards that had no proving assertion"; then
   g66=$(env HOME="$FH" PATH="$T/nogl" "$CLI" push --json 2>/dev/null)
   eq "push refuses outright when gitleaks is not installed" "$(jq -r .ok <<<"$g66")" "false"
   has "the refusal names gitleaks" "$g66" "gitleaks-missing"
+
+  # A $STATE_DIR NOBODY CAN WRITE STILL GETS AN ANSWER OUT. status decides
+  # first and writes status.json afterwards, and that write ran unguarded: under
+  # `set -e` the mkdir/mktemp pair took the process down between the decision
+  # and the print, so `status --json` emitted no object at all -- the one thing
+  # the JSON contract forbids. The write is best effort now (the widget keeps
+  # reading the file it already has, which health calls stale soon enough).
+  mkdir -p "$T/ro-state"; chmod 500 "$T/ro-state"
+  s66=$(env HOME="$FH" OMABACKUP_STATE_DIR="$T/ro-state" "$CLI" status --json 2>/dev/null)
+  eq "status with an unwritable state dir still prints one JSON object" \
+    "$(jq -sc 'length' <<<"$s66" 2>/dev/null || echo 0)" "1"
+  eq "and the object is a status, not an empty line" "$(jq -r 'has("state")' <<<"$s66")" "true"
+  chmod 700 "$T/ro-state"
 
   # The snapshot lock timeout: warn, exit 0, and commit nothing. A manual run
   # overlapping the timer must queue briefly and then step aside, never fail.
@@ -3000,6 +3056,49 @@ if group 83 "status.json's push_verifiable is the push gate's answer, not git's 
   # The two objects status can emit must still carry the same key set.
   eq "not-configured status carries the same keys as a configured one" \
     "$(OMABACKUP_CONFIG=/nonexistent obj status | jq -S 'keys')" "$(obj status | jq -S 'keys')"
+
+  # THE RECORDED VERDICT IS THE GATE'S, NOT THE PROBE'S. Two paths refuse a
+  # push without ever calling remote_push_if_ahead -- the popup's Push button
+  # when the gate says no, and `snapshot --no-push` -- and both used to leave
+  # the probe's "trusted" answer standing in push-verdict.json. On a machine
+  # with no gitleaks that is a widget reading push_verifiable:true over a repo
+  # whose commits can never leave, which is the exact confusion this group
+  # exists to prevent.
+  mk_fixture g83b; seed_home
+  # A PATH mirroring this machine's, minus gitleaks. Mirrored rather than
+  # hand-listed because a whole snapshot runs under it, not just one verb.
+  mkdir -p "$T/nogl"; IFS=: read -ra pdirs83 <<<"$PATH"
+  for d83 in ${pdirs83[@]+"${pdirs83[@]}"}; do
+    [[ -d "$d83" ]] || continue
+    for f83 in "$d83"/*; do
+      b83=${f83##*/}
+      [[ "$b83" == gitleaks ]] && continue
+      [[ -x "$f83" && ! -d "$f83" ]] || continue
+      [[ -e "$T/nogl/$b83" ]] || ln -s "$f83" "$T/nogl/$b83"
+    done
+  done
+  if [[ -e "$T/nogl/gitleaks" ]]; then bad "the no-gitleaks PATH still carries gitleaks"; else ok "the no-gitleaks PATH carries no gitleaks" ; fi
+  check "a snapshot with gitleaks present records a verdict" env HOME="$FH" "$CLI" snapshot
+  eq "which reads as verifiable, because the remote is trusted" \
+    "$(obj status | jq -r .push_verifiable)" "true"
+
+  # (a) the popup's Push button, refused by the gate.
+  printf '# an edit for the push button to carry\n' >> "$FR/allowlist.txt"
+  p83=$(env HOME="$FH" PATH="$T/nogl" "$CLI" push --confirm --json 2>/dev/null)
+  eq "push refuses when gitleaks is missing" "$(jq -r .ok <<<"$p83")" "false"
+  eq "the refusal leaves push_verifiable false" "$(obj status | jq -r .push_verifiable)" "false"
+  eq "with the gate's own reason, not the probe's" "$(obj status | jq -r .push_reason)" "gitleaks-missing"
+  git -C "$FR" checkout -q -- allowlist.txt
+
+  # (b) snapshot --no-push, which skips the push without asking the gate.
+  check "a fresh snapshot with gitleaks records a verifiable verdict again" env HOME="$FH" "$CLI" snapshot
+  eq "the verdict is verifiable before the --no-push run" "$(obj status | jq -r .push_verifiable)" "true"
+  printf 'later\n' >> "$FH/.bashrc"
+  n83=$(env HOME="$FH" PATH="$T/nogl" "$CLI" snapshot --no-push --json 2>/dev/null)
+  eq "snapshot --no-push still runs without gitleaks" "$(jq -r .ok <<<"$n83")" "true"
+  eq "and its own JSON says the gate is shut" "$(jq -r .push_verifiable <<<"$n83")" "false"
+  eq "the recorded verdict says the same" "$(obj status | jq -r .push_verifiable)" "false"
+  eq "and names gitleaks, not the remote" "$(obj status | jq -r .push_reason)" "gitleaks-missing"
 fi
 
 if group 84 "the wizard's own first snapshot uses the remote the wizard just configured"; then
@@ -3573,6 +3672,23 @@ if group 93 "an existing repo's .gitignore gains the patterns this version ships
     "$(obj status | jq -r '[.uncommitted[] | select(test("gitignore"))] | length')" "1"
   eq "and push offers to commit exactly that file" \
     "$(obj push | jq -r '[.files[]? | select(. == ".gitignore")] | length')" "1"
+
+  # GREP HAS THREE EXIT CODES, and only two of them are an answer. 0 is "the
+  # line is there", 1 is "it is not", and anything above 1 is grep saying it
+  # could not look. Read as a plain boolean, that third code means "absent",
+  # so a .gitignore this tool cannot READ but can WRITE had the entire shipped
+  # block appended to it -- on every verb, forever, to a file that may already
+  # have had every line. A sync that cannot compare does not sync.
+  mk_fixture g93d; seed_home
+  before93=$(wc -c < "$FR/.gitignore")
+  chmod 200 "$FR/.gitignore"
+  w93=$(ob status || true)
+  chmod 600 "$FR/.gitignore"
+  eq "an unreadable .gitignore is left byte for byte as it was" \
+    "$(wc -c < "$FR/.gitignore")" "$before93"
+  has "and the run says it could not read it" "$w93" "cannot read"
+  eq "the repo is still clean afterwards" \
+    "$(git -C "$FR" status --porcelain -- .gitignore)" ""
 fi
 
 echo; echo "passed=$pass failed=$fail"

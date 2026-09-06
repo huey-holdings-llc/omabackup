@@ -81,10 +81,28 @@ CONFIG_KNOWN='["dataRepo","remote","maxFileSize","staleDays","maxMissingPct","ma
 CONFIG_KNOWN_DOTTED='["remote.url","remote.trusted","timer.calendar","timer.jitter"]'
 CONFIG_DEFAULTS='{"remote":{"url":"","trusted":false},"maxFileSize":"8m","staleDays":2,"maxMissingPct":25,"maxScanFiles":2000,"notify":true,"shellNag":false,"timer":{"calendar":"daily","jitter":"30m"},"setupPhase":""}'
 
+# logf LINE: append to the tool's own log. Never fatal, and never noisy about
+# itself: a log line is a record of work that has already happened, so a
+# $STATE_DIR that cannot be written must not end the run that was writing it
+# (under `set -e` the bare mkdir and the bare append both did). One warn per
+# process, not one per line: the first is the diagnosis and the rest is noise.
+# The mode matches every other creator of this directory -- it holds the log,
+# the status file and the push verdict, and 0700 is the whole reason scratch
+# is allowed to live there.
+LOGF_WARNED=0
 logf() {
-  mkdir -p "$STATE_DIR"
+  # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
+  if ! mkdir -m 700 -p "$STATE_DIR"; then
+    [[ "$LOGF_WARNED" == 1 ]] || warn "cannot create $STATE_DIR; this run is not being logged"
+    LOGF_WARNED=1
+    return 0
+  fi
   if [[ -f "$LOG_FILE" ]] && (( $(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0) > 1000000 )); then mv -f "$LOG_FILE" "$LOG_FILE.1"; fi
-  printf '%s %s\n' "$(date +%FT%T)" "$*" >> "$LOG_FILE"
+  if ! printf '%s %s\n' "$(date +%FT%T)" "$*" >> "$LOG_FILE"; then
+    [[ "$LOGF_WARNED" == 1 ]] || warn "cannot write $LOG_FILE; this run is not being logged"
+    LOGF_WARNED=1
+  fi
+  return 0
 }
 
 config_exists() { [[ -r "$CONFIG_FILE" ]]; }
@@ -231,11 +249,26 @@ config_write() {
 }
 
 # state_write_status JSON: atomic rename so the widget's FileView never sees a torn file.
+#
+# WARN AND SKIP on every step. This runs AFTER the verb has done its work and
+# decided its answer, and that answer still has to reach stdout: under `set -e`
+# an unwritable $STATE_DIR killed the process here, so `status --json` on a
+# state directory nobody can write printed NOTHING at all -- no object, not
+# even a refusal, which is the one thing the JSON contract forbids. The widget
+# keeps reading the file it already has (health calls it stale soon enough).
 state_write_status() {
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
-  mkdir -m 700 -p "$STATE_DIR"
-  local tmp; tmp=$(mktemp "$STATE_DIR/.status.XXXXXX")
-  printf '%s\n' "$1" > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$STATUS_FILE"
+  mkdir -m 700 -p "$STATE_DIR" \
+    || { warn "cannot create $STATE_DIR; status.json was not updated"; return 0; }
+  local tmp
+  tmp=$(mktemp "$STATE_DIR/.status.XXXXXX") \
+    || { warn "cannot write scratch under $STATE_DIR; status.json was not updated"; return 0; }
+  if printf '%s\n' "$1" > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$STATUS_FILE"; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  warn "cannot update $STATUS_FILE; the widget is reading an older status"
+  return 0
 }
 
 # data_repo_assert_mode: the repo root and .git must be 0700. .git holds every
@@ -323,10 +356,23 @@ data_repo_gitignore_sync() {
   [[ -r "$shipped" ]] || return 0
   local exists=0
   if [[ -f "$have" ]]; then exists=1; fi
-  local line missing=()
+  # grep's THREE exit codes, not two. 0 is "the line is there", 1 is "it is
+  # not", and anything above 1 is grep saying it could not answer -- an
+  # unreadable file, a permission error. Read as a plain boolean, that third
+  # answer meant "absent", so a .gitignore this tool cannot read would have had
+  # every shipped pattern appended to it, in a duplicate block, on every single
+  # run. A sync that cannot compare does not sync.
+  local line missing=() rc
   while IFS= read -r line; do
     case "$line" in ''|'#'*) continue ;; esac
-    if [[ "$exists" == 1 ]] && grep -qxF -- "$line" "$have"; then continue; fi
+    if [[ "$exists" == 1 ]]; then
+      rc=0; grep -qxF -- "$line" "$have" || rc=$?
+      [[ $rc -eq 0 ]] && continue
+      if [[ $rc -gt 1 ]]; then
+        warn "cannot read $have (grep exited $rc); leaving its ignore patterns alone"
+        return 0
+      fi
+    fi
     missing+=("$line")
   done < "$shipped"
   (( ${#missing[@]} > 0 )) || return 0

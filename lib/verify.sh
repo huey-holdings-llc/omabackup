@@ -98,8 +98,13 @@ cmd_verify() {
   # either -- it also fires when restore_stage_configs (called below)
   # returns, deleting the throwaway mid-comparison.
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
-  mkdir -m 700 -p "$STATE_DIR"
-  VERIFY_R=$(mktemp -d "$STATE_DIR/verify.XXXXXX")
+  # Guarded, both of them: under `set -e` a failing mkdir or mktemp ends the
+  # process with no line of its own, so a read-only or full $STATE_DIR made
+  # `verify` look like a crash rather than a refusal it could explain.
+  mkdir -m 700 -p "$STATE_DIR" \
+    || die "cannot create $STATE_DIR; refusing to verify without a scratch directory"
+  VERIFY_R=$(mktemp -d "$STATE_DIR/verify.XXXXXX") \
+    || die "cannot create scratch under $STATE_DIR; refusing to verify"
   trap 'rm -rf "${VERIFY_R:-}"' EXIT
   local R="$VERIFY_R"
 
