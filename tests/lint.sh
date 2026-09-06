@@ -46,8 +46,63 @@ elif [[ "$cl_ver" == "$m_ver" ]]; then
 else
   bad "CHANGELOG top release $cl_ver != manifest version $m_ver"
 fi
-if find . -path ./.git -prune -o -type l -print | grep -q .; then bad "symlinks in the plugin tree (validator rejects them)"; else ok "no symlinks"; fi
-command -v omarchy-plugin-validate >/dev/null && { omarchy-plugin-validate . >/dev/null && ok "omarchy-plugin-validate" || bad "omarchy-plugin-validate"; }
+# THE SHIPPED TREE ONLY, for both checks below.
+#
+# They used to walk the whole working directory, which includes tests/tmp: the
+# suite's fixture root, gitignored, and full of symlinks on purpose (a group
+# builds a PATH of symlinks to prove the tool behaves when one binary is
+# absent). A run that was interrupted leaves one behind, and from then on the
+# release gate failed over a directory that ships to nobody. `git ls-files`
+# is the shipping manifest -- what a clone gets, tracked plus not-yet-added,
+# never anything ignored -- so that is what both checks look at.
+shipped_paths() { git ls-files -z --cached --others --exclude-standard; }
+in_git=0
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 && in_git=1
+
+sym_found=0
+if [[ $in_git == 1 ]]; then
+  while IFS= read -r -d '' f; do
+    [[ -L "$f" ]] || continue
+    bad "symlink in the plugin tree (validator rejects them): $f"; sym_found=1
+  done < <(shipped_paths)
+else
+  # No git (a tarball, a plugin dir copied into place): fall back to the walk,
+  # with the suite's own scratch root pruned by name.
+  if find . -path ./.git -prune -o -path ./tests/tmp -prune -o -type l -print | grep -q .; then
+    bad "symlinks in the plugin tree (validator rejects them)"; sym_found=1
+  fi
+fi
+[[ $sym_found == 0 ]] && ok "no symlinks"
+
+# The validator walks a directory and has no exclude of its own, so it gets a
+# throwaway copy of exactly the shipped set. The copy lives under tests/tmp
+# (ours, inside the worktree, gitignored) and never in /tmp, and it is removed
+# on the way out however this script ends.
+lint_tree=""
+# shellcheck disable=SC2317  # called from the EXIT trap below
+lint_tree_clean() { [[ -n "$lint_tree" ]] && rm -rf "$lint_tree"; return 0; }
+trap lint_tree_clean EXIT
+if command -v omarchy-plugin-validate >/dev/null; then
+  if [[ $in_git == 1 ]]; then
+    mkdir -p "$HERE/tests/tmp"
+    if lint_tree=$(mktemp -d "$HERE/tests/tmp/lint-tree.XXXXXX"); then
+      copy_ok=1
+      while IFS= read -r -d '' f; do
+        mkdir -p "$lint_tree/$(dirname "$f")" && cp -p "$f" "$lint_tree/$f" || copy_ok=0
+      done < <(shipped_paths)
+      if [[ $copy_ok == 1 ]]; then
+        omarchy-plugin-validate "$lint_tree" >/dev/null && ok "omarchy-plugin-validate (shipped tree)" \
+          || bad "omarchy-plugin-validate"
+      else
+        bad "could not assemble the shipped tree to validate"
+      fi
+    else
+      bad "could not create a scratch directory under tests/tmp"
+    fi
+  else
+    omarchy-plugin-validate . >/dev/null && ok "omarchy-plugin-validate" || bad "omarchy-plugin-validate"
+  fi
+fi
 
 step "QML hygiene"
 if grep -nE '"bash", *"-c"|"sh", *"-c"|bash -c' -- *.qml ui/*.qml; then bad "shell strings built in QML"; else ok "no shell strings in QML"; fi
