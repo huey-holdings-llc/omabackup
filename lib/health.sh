@@ -385,8 +385,14 @@ health_print_human() {
   printf 'drift: %s item(s)' "$H_DRIFT_COUNT"
   [[ "$H_DRIFT_TRUNCATED" == true ]] && printf ' (truncated)'
   printf '\n'
+  # Three states, three lines. A `missing` remote has no upstream to count
+  # against, so "unpushed commits: 0" was arithmetic about a remote that is
+  # not there, and it read as the one reassuring answer this state must never
+  # give. The problems list below carries the fix; this line carries the fact.
   if [[ "$H_REMOTE" == none ]]; then
     printf 'remote: none (local only)\n'
+  elif [[ "$H_REMOTE" == missing ]]; then
+    printf 'remote: missing (origin removed)\n'
   else
     printf 'unpushed commits: %s\n' "$H_UNPUSHED"
   fi

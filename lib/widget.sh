@@ -67,7 +67,11 @@ DRIFT_TARGET_DIR=0
 # filename the scan will report, and one Allow click would then have written
 # an entry matching every sibling it has. Refusing here rather than escaping
 # is the honest answer: there is no escaping syntax in these file formats to
-# escape it INTO.
+# escape it INTO -- which is also why neither refusal below sends the user to
+# a hand edit any more. There is no allowlist spelling that resolves to a
+# literal `[`, so "edit allowlist.txt by hand" named an action nobody can
+# take. The two that exist are renaming the file and ignoring the folder it
+# sits in, and the messages say so.
 widget_no_glob_chars() {
   case "$1" in *'*'*|*'?'*|*'['*) return 1 ;; esac
   return 0
@@ -187,7 +191,7 @@ cmd_allow() {
   assert_argv_safe "$raw"
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
   widget_no_glob_chars "$rel" \
-    || { widget_reply_fail "glob characters in a path: edit allowlist.txt by hand"; return 1; }
+    || { widget_reply_fail "a file whose name contains * ? or [ cannot be backed up by name; rename it, or ignore the folder it is in"; return 1; }
   drift_names_target "$raw" 'MODIFIED|NEW|EXCLUDED|TOOBIG' \
     || { widget_reply_fail "the drift report does not name that path (or the folder is too broad); refresh and retry"; return 1; }
   rel=${rel%/}
@@ -210,7 +214,7 @@ cmd_ignore() {
   [[ -n "${2:-}" ]] && assert_argv_safe "$2"
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
   widget_no_glob_chars "$rel" \
-    || { widget_reply_fail "glob characters in a path: edit drift-ignore.txt by hand"; return 1; }
+    || { widget_reply_fail "a file whose name contains * ? or [ cannot be ignored by name; rename it, or ignore the folder it is in"; return 1; }
   drift_names_target "$raw" 'MODIFIED|NEW|EXCLUDED|TOOBIG' \
     || { widget_reply_fail "the drift report does not name that path (or the folder is too broad); refresh and retry"; return 1; }
   # A directory becomes the explicit /** subtree form drift-ignore.txt

@@ -93,8 +93,12 @@ snapshot_entry_exists() {
 snapshot_ever_added_load() {
   EVER_ADDED=()
   local p hist
+  # Guarded, and with the same message shape as the mktemp below it: under
+  # `set -e` a failing mkdir kills the process with no line of its own, so a
+  # read-only or full $STATE_DIR ended a snapshot with nothing said about why.
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
-  mkdir -m 700 -p "$STATE_DIR"
+  mkdir -m 700 -p "$STATE_DIR" \
+    || die "cannot create $STATE_DIR; refusing to judge vanished entries"
   hist=$(mktemp "$STATE_DIR/.ever-added.XXXXXX") \
     || die "cannot write scratch under $STATE_DIR; refusing to judge vanished entries"
   if ! git -C "$DATA_REPO" log --no-renames --diff-filter=A --name-only --format= -z -- home/ >"$hist" 2>/dev/null; then

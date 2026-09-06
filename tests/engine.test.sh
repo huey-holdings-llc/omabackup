@@ -1368,7 +1368,10 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
     printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
   out51=$(obj allow "$(tp '.config/appz/*')")
   eq "allow: refuses a path holding a glob character" "$(jq -r .ok <<<"$out51")" "false"
-  has "and says to edit the list by hand" "$(jq -r '.problems[0]' <<<"$out51")" "glob characters in a path"
+  # The message has to name an action that exists. "Edit allowlist.txt by
+  # hand" did not: no allowlist spelling resolves a literal `[`.
+  has "and names the two things a user can actually do" \
+    "$(jq -r '.problems[0]' <<<"$out51")" "rename it, or ignore the folder it is in"
   eq "and nothing was written" "$(grep -c '^\.config/appz/\*$' "$FR/allowlist.txt")" "0"
   eq "ignore: refuses a question mark too" "$(obj ignore "$(tp '.config/appz/?')" | jq -r .ok)" "false"
   eq "ignore: refuses a bracket too" "$(obj ignore "$(tp '.config/appz/[a]')" | jq -r .ok)" "false"
@@ -3280,6 +3283,13 @@ if group 88 "a repo with no remote is a supported state, not a permanent fault";
     "$(jq -r '.problems[]' <<<"$s88")" "but the repo has no origin"
   eq "the login check is no longer silent about it" \
     "$(ob health >/dev/null 2>&1; echo $?)" "1"
+  # The human line has to say the same thing the JSON does. It used to fall
+  # through to the push counter and print "unpushed commits: 0", which is
+  # arithmetic about a remote that is not there and reads as the all-clear.
+  h88=$(ob status; true)
+  has "the human status names the missing origin" "$h88" "remote: missing (origin removed)"
+  eq "and does not report a push count for a remote that is gone" \
+    "$(grep -c '^unpushed commits:' <<<"$h88" || true)" "0"
 
   # A remote that EXISTS and has never been pushed to is the third state: that
   # one really is "your backup is not off this machine yet".

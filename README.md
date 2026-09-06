@@ -491,11 +491,11 @@ actually broken.
   re-cloned `.git`, and every commit since has gone nowhere. Re-run
   `omabackup setup` (or add origin back by hand). Having no remote at all is
   a different, supported state: `remote: none`, and the widget stays green.
-* **"glob characters in a path"**: `allow` and `ignore` refuse a path
-  containing `*`, `?` or `[`. The lists are globs, so writing such a path into
-  one would silently claim more than the file you clicked. Edit
-  `allowlist.txt` or `drift-ignore.txt` by hand, quoting or reshaping the
-  entry so it means what you want, then `omabackup push --confirm`.
+* **"a file whose name contains `*` `?` or `[` cannot be backed up by
+  name"**: `allow` and `ignore` refuse such a path. Both lists are matched as
+  globs and neither format has an escape, so writing the name into one would
+  silently claim every sibling it matches. There is no hand edit that fixes
+  it: rename the file, or ignore the folder it is in.
 * **"OMABACKUP_IN_SUITE is set outside a test run"**: the marker that lets the
   test suite weaken its own guards is set in your environment. It does
   nothing on its own (see Development below), but nothing legitimate sets it,
