@@ -2536,6 +2536,36 @@ if group 80 "a mass disappearance halts the run, and slow erosion does not slip 
   eq "the unresolved seed entries are recorded as GONE" \
     "$(( $(grep -c '^GONE' "$FR/manifests/drift.txt" || true) > 5 ))" "1"
   check "and the run after it is not refused either" env HOME="$FH" "$CLI" snapshot --no-push
+
+  # GLOB ENTRIES, which is most of what a real allowlist is made of. "Has this
+  # repo ever backed it up" was asked of git one entry at a time, as a literal
+  # path (`cat-file -e HEAD:home/<entry>`, then a `:(literal)` rev-list), and
+  # neither can match `.config/g1/*.conf` -- one entry covering four real
+  # files. So every glob entry answered "never backed up", could not count as
+  # vanished, and the guard was blind to the entries covering the most files.
+  # Measured: 20 of 25 glob entries removed was counted as 0 vanished, the run
+  # committed, and rsync --delete took the backup from 100 files to 20.
+  mk_fixture g80g
+  i80=1
+  while [ "$i80" -le 25 ]; do
+    mkdir -p "$FH/.config/g$i80"
+    for j80 in 1 2 3 4; do printf 'setting=%d\n' "$j80" > "$FH/.config/g$i80/f$j80.conf"; done
+    printf '?.config/g%d/*.conf\n' "$i80" >> "$FR/allowlist.txt"
+    i80=$((i80+1))
+  done
+  git -C "$FR" commit -qam "25 optional glob entries, 100 files"
+  check "the baseline run commits every glob entry" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the backup holds 100 files" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "100"
+  i80=1
+  while [ "$i80" -le 20 ]; do rm -rf "$FH/.config/g$i80"; i80=$((i80+1)); done
+  g80=$(obj snapshot --no-push)
+  eq "20 of 25 glob entries vanishing refuses the run" "$(jq -r .ok <<<"$g80")" "false"
+  has "with the maxMissingPct refusal" "$(jq -r .error <<<"$g80")" "no longer exist; refusing to run"
+  eq "and the count includes the glob entries" \
+    "$(jq -r .error <<<"$g80" | grep -c '^20 of 25 allowlist entries (80%)' || true)" "1"
+  eq "the backup the run would have drained is untouched" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "100"
 fi
 if group 81 "a pacman whose wording changed is an error, never a clean /etc scan"; then
   # Both /etc sections read pacman's prose, not an API: the field name

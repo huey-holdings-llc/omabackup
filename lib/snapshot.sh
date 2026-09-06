@@ -68,25 +68,50 @@ snapshot_entry_exists() {
   return "$rc"
 }
 
+# snapshot_ever_added_load: fill EVER_ADDED with every path this data repo has
+# ever ADDED under home/. One listing per run, built where the vanish check
+# needs it and never cached beyond this process.
+#
+# `--diff-filter=A --name-only` over the whole history, so a path an earlier
+# run's `rsync --delete` has since removed is still in the set: that is what
+# makes the check cumulative, and without it erosion at just under the
+# threshold passes every run forever, because each run's losses leave HEAD
+# before the next run looks. `-z` because a filename may contain a newline,
+# and git would otherwise quote it into something that is not the path.
+snapshot_ever_added_load() {
+  EVER_ADDED=()
+  local p
+  while IFS= read -r -d '' p; do
+    [[ -n "$p" ]] || continue
+    EVER_ADDED+=("$p")
+  done < <(git -C "$DATA_REPO" log --diff-filter=A --name-only --format= -z -- home/ 2>/dev/null | sort -zu)
+}
+
 # snapshot_entry_was_backed_up ENTRY: 0 when this data repo has ever held
-# content for home/ENTRY. That, and not "is it in today's drift report", is
+# content that ENTRY names. That, and not "is it in today's drift report", is
 # what makes an absence a DISAPPEARANCE: a seed entry that never resolved on
 # this machine was never backed up, so it is not something that went missing.
 #
-# HEAD first, because it answers in constant time and covers the common case
-# (a file backed up yesterday, gone today). A path absent from HEAD may still
-# have been backed up and then removed by an earlier run's `rsync --delete`,
-# and that case is the whole point: without it, erosion at just under the
-# threshold passes forever, because every run's losses leave HEAD before the
-# next run looks. `git rev-list -1` finds the commit that deleted it.
+# AN ALLOWLIST ENTRY IS A PATTERN, not always a path. This used to ask git
+# about one entry at a time -- `cat-file -e HEAD:home/<entry>`, then a
+# `rev-list` walk with `:(literal)` -- and neither of those can match
+# `.config/g1/*.conf`, an entry that covers four real files. So every glob
+# entry answered "this repo never backed it up", could never count as
+# vanished, and the guard was blind to exactly the entries that cover the most
+# files: 20 of 25 glob entries disappearing was measured as 0, the run
+# committed, and rsync --delete took the backup from 100 files to 20.
 #
-# `:(literal)` because an allowlist entry may contain glob characters, which
-# git would otherwise read as pathspec wildcards and match half the tree.
+# Matching is bash's own, against the set of paths the repo has ever added, so
+# a glob answers the same way the rest of this tool reads the lists. The RHS
+# is deliberately unquoted: it is a pattern. A directory entry matches its
+# children too, which is how `.config/hypr` covers what is under it.
 snapshot_entry_was_backed_up() {
-  local p="home/$1" seen
-  if git -C "$DATA_REPO" cat-file -e "HEAD:$p" 2>/dev/null; then return 0; fi
-  seen=$(git -C "$DATA_REPO" rev-list -1 HEAD -- ":(literal)$p" 2>/dev/null || true)
-  [[ -n "$seen" ]]
+  local entry=$1 p
+  for p in ${EVER_ADDED[@]+"${EVER_ADDED[@]}"}; do
+    # shellcheck disable=SC2053  # the entry is a pattern; matching it literally is the defect this fixes
+    if [[ "$p" == home/$entry || "$p" == home/$entry/* ]]; then return 0; fi
+  done
+  return 1
 }
 
 # ---------------------------------------------------------------- 1. assert
@@ -185,6 +210,7 @@ snapshot_assert_allowlist() {
   if [[ "${PREV_TRACKED:-0}" -ge 20 ]]; then
     local e
     local -a vanished=()
+    snapshot_ever_added_load
     for e in ${missing[@]+"${missing[@]}"} ${GONE[@]+"${GONE[@]}"}; do
       if snapshot_entry_was_backed_up "$e"; then vanished+=("$e"); fi
     done
