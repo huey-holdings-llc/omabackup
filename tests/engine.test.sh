@@ -2432,9 +2432,16 @@ if group 79 "a restore stage that fails still leaves one JSON object and a relea
   has "the unreadable tree is named in skipped[]" "$(jq -r '.skipped[].reason' <<<"$r79")" "not readable"
   # ...and the stage's own non-zero return is counted, not discarded. `|| true`
   # left ok:false resting on the stage having remembered to warn on its way
-  # out; a stage that fails silently must still be a failure.
-  eq "the failing stage is counted as a failure of its own" \
-    "$(jq -r '.failures >= 2' <<<"$r79")" "true"
+  # out; a stage that fails silently must still be a failure. Counted ONCE:
+  # the etc stage warns about the unreadable tree and then returns non-zero,
+  # and the generic "did not complete" line used to add a second failure for
+  # the same event, so one problem was reported as two.
+  eq "the failing stage is counted once, not twice" \
+    "$(jq -r .failures <<<"$r79")" "1"
+  chmod 000 "$FR/etc"
+  h79=$(env HOME="$FH" "$CLI" restore --etc --services 2>&1 || true)
+  chmod 700 "$FR/etc"
+  has "and the human summary says one problem, not two" "$h79" "1 problem(s) during restore"
   # The stage AFTER the failing one still ran: that is what proves the chain
   # continued rather than the process having died inside restore_stage_etc.
   eq "the later stage still ran" \

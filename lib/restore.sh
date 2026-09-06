@@ -22,6 +22,17 @@ restore_warn() { warn "$*"; RESTORE_FAILURES=$((RESTORE_FAILURES+1)); }
 # restore_skip PATH REASON: record a stage (or an item within one) that was
 # not attempted.
 restore_skip() { RESTORE_SKIPPED+=("{\"path\":$(jstr "$1"),\"reason\":$(jstr "$2")}"); }
+# restore_stage_failed NAME BEFORE: a stage returned non-zero. Count it, unless
+# it already counted a failure of its own on the way out -- one problem is one
+# problem, and the generic line used to add a second, so a single unreadable
+# etc/ tree was reported as "2 problem(s) during restore" and the JSON's
+# failures count was one more than the number of things that went wrong.
+restore_stage_failed() {
+  local name=$1 before=$2
+  if [[ "$RESTORE_FAILURES" -eq "$before" ]]; then
+    restore_warn "the $name stage did not complete"
+  fi
+}
 
 # ---------------------------------------------------------- argv hygiene
 # Manifest lines are repo-controlled strings that become ARGUMENTS to pacman,
@@ -545,11 +556,12 @@ cmd_restore() {
     # remembered to call restore_warn itself. restore_warn here makes it
     # structural -- a stage that returns non-zero is a failure whether or not
     # it said so on its way out.
-    if [[ "$do_configs" == 1 ]];  then restore_stage_configs "$apply"  || restore_warn "the configs stage did not complete"; fi
-    if [[ "$do_etc" == 1 ]];      then restore_stage_etc "$apply"      || restore_warn "the etc stage did not complete"; fi
-    if [[ "$do_packages" == 1 ]]; then restore_stage_packages "$apply" || restore_warn "the packages stage did not complete"; fi
-    if [[ "$do_plugins" == 1 ]];  then restore_stage_plugins "$apply"  || restore_warn "the plugins stage did not complete"; fi
-    if [[ "$do_services" == 1 ]]; then restore_stage_services "$apply" || restore_warn "the services stage did not complete"; fi
+    local before
+    if [[ "$do_configs" == 1 ]];  then before=$RESTORE_FAILURES; restore_stage_configs "$apply"  || restore_stage_failed configs "$before"; fi
+    if [[ "$do_etc" == 1 ]];      then before=$RESTORE_FAILURES; restore_stage_etc "$apply"      || restore_stage_failed etc "$before"; fi
+    if [[ "$do_packages" == 1 ]]; then before=$RESTORE_FAILURES; restore_stage_packages "$apply" || restore_stage_failed packages "$before"; fi
+    if [[ "$do_plugins" == 1 ]];  then before=$RESTORE_FAILURES; restore_stage_plugins "$apply"  || restore_stage_failed plugins "$before"; fi
+    if [[ "$do_services" == 1 ]]; then before=$RESTORE_FAILURES; restore_stage_services "$apply" || restore_stage_failed services "$before"; fi
     drop_lock
   fi
 
