@@ -278,7 +278,9 @@ restore_stage_etc() {
     restore_skip "etc" "the repo's etc/ directory is not readable"
     return 1
   fi
-  while IFS= read -r rel; do
+  # NUL-delimited: a filename in the repo's etc/ tree may hold a newline, and
+  # a line-oriented read would compare two fragments against /etc instead.
+  while IFS= read -r -d '' rel; do
     if [[ ! -e "$etc_root/$rel" ]]; then
       [[ $JSON == 1 ]] || printf '  \033[1;33mMISSING\033[0m  /etc/%s\n' "$rel"
     elif cmp -s "$DATA_REPO/etc/$rel" "$etc_root/$rel" 2>/dev/null; then
@@ -286,7 +288,7 @@ restore_stage_etc() {
     else
       [[ $JSON == 1 ]] || printf '  \033[1;31mDIFFERS\033[0m  /etc/%s\n' "$rel"
     fi
-  done < <(cd "$DATA_REPO/etc" && find . -type f -printf '%P\n')
+  done < <(cd "$DATA_REPO/etc" && find . -type f -printf '%P\0')
   [[ $JSON == 1 ]] || echo "  To inspect:  diff etc/<path> /etc/<path>"
   [[ $JSON == 1 ]] || echo "  Apply by hand only. Never bulk-copy pam.d or fstab."
 }

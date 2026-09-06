@@ -317,7 +317,7 @@ snapshot_stage() {
   # failure mode this whole tool exists to prevent, so it is reported both to
   # the terminal and into the drift report.
   local big
-  while IFS= read -r big; do
+  while IFS= read -r -d '' big; do
     [[ -z "$big" ]] && continue
     warn "too large for the backup (> $maxsize): ~/${big#"$HOME"/}"
     # Same rule as every other producer: a TAB or a newline in the name means
@@ -340,7 +340,9 @@ snapshot_stage() {
   [[ "$nullglob_was_on" = 1 ]] || shopt -u nullglob
 }
 
-# snapshot_oversized FINDSIZE: print live allowlisted files above the size cap.
+# snapshot_oversized FINDSIZE: print live allowlisted files above the size cap,
+# NUL-delimited: a newline in a filename would otherwise split one path into
+# two fragments before the TOOBIG producer saw it.
 # The rsync excludes are repeated here, or files dropped BY DESIGN (*.log,
 # *.bak.*) are reported as TOOBIG forever with no way to silence them.
 snapshot_oversized() {
@@ -352,7 +354,7 @@ snapshot_oversized() {
       if [[ -e "$p" ]]; then
         find "$p" -type f -size +"$findsize" \
           ! -name '*.log' ! -name '*.bak.*' ! -name '*.sample' ! -name 'mimeinfo.cache' \
-          ! -path '*/.git/*' -print 2>/dev/null || true
+          ! -path '*/.git/*' -print0 2>/dev/null || true
       fi
     done
   done

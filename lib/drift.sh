@@ -438,16 +438,21 @@ drift_scan() {
   # --- 3. hand-written systemd user units ------------------------------------
   # find -type f returns exactly the hand-written units: the other entries are
   # symlinks into /usr/lib/systemd/user, so this has no false positives.
+  # NUL-delimited, like every other find reader here: with -print and a
+  # line-oriented read a newline in a unit's filename split one path into two
+  # fragments before any producer saw it, and the suffix fragment became a
+  # real row naming a path in another part of $HOME. Whole, the name reaches
+  # _drift_report, which turns it into an ERROR row.
   local u
-  while IFS= read -r u; do
+  while IFS= read -r -d '' u; do
     rel="${u#$HOME/}"
     is_covered "$rel" || is_ignored "$rel" || _drift_report NEW "~/$rel"
-  done < <(find "$HOME/.config/systemd/user" -type f 2>/dev/null)
+  done < <(find "$HOME/.config/systemd/user" -type f -print0 2>/dev/null)
 
   # --- 4. user scripts in ~/.local/bin ---------------------------------------
   # mise shims are regenerable noise; anything larger is probably yours.
   local b
-  while IFS= read -r b; do
+  while IFS= read -r -d '' b; do
     rel="${b#$HOME/}"
     is_covered "$rel" && continue
     is_ignored "$rel" && continue
@@ -456,7 +461,7 @@ drift_scan() {
   # No -maxdepth: _drift_build_prune prunes .local/bin from the generic
   # walkers, so a script in a subdirectory would otherwise be invisible to
   # everything.
-  done < <(find "$HOME/.local/bin" -type f 2>/dev/null)
+  done < <(find "$HOME/.local/bin" -type f -print0 2>/dev/null)
 
   # --- 5. /etc ---------------------------------------------------------------
   # Re-run pacman's own modified-backup-file scan and diff it against what we
@@ -523,7 +528,18 @@ X11/xorg.conf.d fonts/conf.d"
       echo "# ERROR: cannot read $dir; drop-ins there are NOT checked"
       found=$((found+1)); continue
     fi
-    while IFS= read -r f; do dropin_files+=("$f"); done < <(find "$dir" -maxdepth 1 -type f 2>/dev/null | sort)
+    # NUL-delimited: a newline in a drop-in's filename split one path into
+    # two fragments, and the suffix fragment became a NEW row for a file that
+    # does not exist. A name this report cannot write is reported as such
+    # HERE, before the pacman call, because ownership comes back as prose
+    # ("error: No package owns <path>") that a newline splits just as badly:
+    # the file is a scanner gap either way, and an ERROR row is a fault.
+    while IFS= read -r -d '' f; do
+      if ! drift_path_representable "$f"; then
+        drift_error_unrepresentable "/etc/${f#"$ETC_DROPIN_ROOT"/}"; found=$((found+1)); continue
+      fi
+      dropin_files+=("$f")
+    done < <(find "$dir" -maxdepth 1 -type f -print0 2>/dev/null | sort -z)
   done
   if [ ${#dropin_files[@]} -gt 0 ]; then
     # One pacman call for all of them; unowned files come back on stderr as the

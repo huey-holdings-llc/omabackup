@@ -3086,5 +3086,66 @@ if group 90 "the way out of a refused run is one a user can actually take"; then
     "$(obj resolve-gone '~/.config/never-listed' remove | jq -r .ok)" "false"
 fi
 
+if group 91 "every find reader is NUL-delimited, so a newline cannot forge a row"; then
+  # The deep walkers were fixed first; these four readers were not. Each ran
+  # `find -print` and read it a line at a time, so a newline in a filename
+  # split one path into two fragments before any producer saw it. The prefix
+  # fragment names a path that is not a file, and the SUFFIX fragment becomes a
+  # real row for a path in an entirely different part of $HOME -- one the
+  # widget's Allow button then accepts, because the report does name it.
+  mk_fixture g91; seed_home
+  mkdir -p "$FH/.config/systemd/user"
+  printf '[Unit]\nDescription=x\n' > "$FH/.config/systemd/user/bad"$'\n'"unit.service"
+  printf '#!/bin/sh\n# %s\n' "$(rand_body 400)" > "$FH/.local/bin/bad"$'\n'"script"
+  chmod +x "$FH/.local/bin/bad"$'\n'"script"
+  d91=$(ob drift)
+  eq "the hand-written unit yields one ERROR row" \
+    "$(grep -c 'unrepresentable path under ~/\.config/systemd/user' <<<"$d91" || true)" "1"
+  eq "no row names the suffix fragment as a file in another directory" \
+    "$(grep -cx 'NEW        ~/unit.service' <<<"$d91" || true)" "0"
+  eq "no row claims the prefix fragment is a file" \
+    "$(grep -cx 'NEW        ~/.config/systemd/user/bad' <<<"$d91" || true)" "0"
+  eq "the ~/.local/bin script yields one ERROR row" \
+    "$(grep -c 'unrepresentable path under ~/\.local/bin' <<<"$d91" || true)" "1"
+  eq "and no row names either half of it" \
+    "$(grep -c '^NEW .*\.local/bin' <<<"$d91" || true)" "0"
+  eq "the scan still reaches its sentinel" "$(tail -1 <<<"$d91")" "# drift-scan-complete"
+  rm -f "$FH/.config/systemd/user/bad"$'\n'"unit.service" "$FH/.local/bin/bad"$'\n'"script"
+
+  # The oversized producer reads the same kind of listing. A file too big for
+  # the backup is the one thing this tool exists to shout about, so a name that
+  # splits must not become a TOOBIG row for a file that does not exist.
+  allow '.config/mytool'; commit_baseline
+  head -c 12000000 /dev/urandom > "$FH/.config/mytool/huge"$'\n'"name.dat"
+  check "the snapshot still runs" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the oversized name is one ERROR row" \
+    "$(grep -c 'unrepresentable path under ~/\.config/mytool' "$FR/manifests/drift.txt" || true)" "1"
+  eq "and no TOOBIG row names a fragment" \
+    "$(grep -c '^TOOBIG' "$FR/manifests/drift.txt" || true)" "0"
+  rm -f "$FH/.config/mytool/huge"$'\n'"name.dat"
+
+  # ...and the /etc drop-in walk. Its ownership answer comes back from pacman
+  # as prose ("error: No package owns <path>"), which a newline splits just as
+  # badly, so an unwritable name is reported as the scanner gap it is before
+  # pacman is asked about it at all.
+  mk_fixture g91e; seed_home
+  if ! command -v pacman >/dev/null 2>&1; then
+    echo "  (skipped: pacman not available on this machine)"
+  else
+    ETCROOT91="$T/etc"; mkdir -p "$ETCROOT91/modprobe.d"
+    printf 'options hid_apple fnmode=2\n' > "$ETCROOT91/modprobe.d/zz-fixture.conf"
+    printf 'options x y\n' > "$ETCROOT91/modprobe.d/bad"$'\n'"dropin.conf"
+    export OMABACKUP_SKIP_ETC=0 OMABACKUP_ETC_ROOT="$ETCROOT91"
+    d91e=$(ob drift)
+    export OMABACKUP_SKIP_ETC=1; unset OMABACKUP_ETC_ROOT
+    eq "the drop-in with a newline in its name is one ERROR row" \
+      "$(grep -c 'unrepresentable path under /etc/modprobe.d' <<<"$d91e" || true)" "1"
+    eq "no row names either fragment of it" \
+      "$(grep -c '^NEW .*dropin.conf' <<<"$d91e" || true)" "0"
+    has "the ordinary drop-in beside it is still reported" "$d91e" \
+      "NEW        /etc/modprobe.d/zz-fixture.conf"
+  fi
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
