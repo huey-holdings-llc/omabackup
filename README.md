@@ -147,8 +147,10 @@ to back anything up on its own.
   segments deep or more, because a depth-one target is refused so
   `~/.config/` can never be silenced by accident), a caret expands a
   folder to single files, `MODIFIED` rows carry the same Allow/Ignore pair,
-  `TOOBIG`, `EXCLUDED` and `ERROR` rows carry a line saying what to do
-  instead, `GONE` rows offer Remove or Mark-optional (the
+  `TOOBIG` and `EXCLUDED` rows carry a line naming the limit holding the file
+  and offer Ignore alone (both are already allowlisted, so Allow lifts
+  neither limit), `ERROR` rows carry a line and no buttons at all,
+  `GONE` rows offer Remove or Mark-optional (the
   second only while the entry is not already optional; every seed entry is,
   so on a fresh machine those rows offer Remove alone), and a notes toggle
   switches Ignore between a dated default reason and asking for one.

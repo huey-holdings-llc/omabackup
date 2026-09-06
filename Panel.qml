@@ -73,6 +73,12 @@ Panel {
   // it is already in problems[] as a fault. The vitals row must not repeat the
   // green "local only" line over it.
   readonly property bool remoteLocalOnly: !!(st && st.remote === "none")
+  // ...and the row that says so is driven by "missing" itself, never by the
+  // absence of "configured". With st null -- first paint, or a status.json
+  // this widget could not parse -- every one of these is false, and reading
+  // !hasRemote as "the origin is gone" painted that accusation in the urgent
+  // colour before the file had been read once. An unknown remote is unknown.
+  readonly property bool remoteMissing: !!(st && st.remote === "missing")
   readonly property bool timerKnown: !!(st && st.timers_checked)
   readonly property bool timerArmed: !!(st && st.timer_enabled && st.timer_active)
 
@@ -425,11 +431,11 @@ Panel {
             InfoRow {
               width: parent.width
               label: root.hasRemote ? "Pushed" : "Remote"
-              value: root.remoteLocalOnly ? "none (local only)"
-                   : !root.hasRemote ? "configured, but this repo has no origin"
+              value: root.remoteMissing ? "configured, but this repo has no origin"
+                   : root.remoteLocalOnly ? "none (local only)"
+                   : !root.hasRemote ? "unknown"
                    : root.unpushed > 0 ? root.unpushed + " commit(s) waiting" : "up to date"
-              valueColor: root.remoteLocalOnly ? "" : !root.hasRemote ? root.urgent
-                   : root.unpushed > 0 ? root.urgent : ""
+              valueColor: root.remoteMissing || (root.hasRemote && root.unpushed > 0) ? root.urgent : ""
               foreground: root.foreground; dimColor: root.dim; fontFamily: root.fontFamily
             }
             InfoRow {

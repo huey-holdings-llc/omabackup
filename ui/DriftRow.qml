@@ -2,13 +2,13 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// One drift line with its inline triage actions. Every class the engine's
-// allow/ignore gate accepts -- NEW, MODIFIED, TOOBIG, EXCLUDED -- offers
-// Allow/Ignore; GONE rows offer Remove and (unless the entry is already
-// optional) Mark optional; only ERROR is button-less, because there is
-// nothing to decide about a scan that did not finish. The classes that need
-// explaining carry one line above the buttons. Whether Ignore asks for a note
-// first is the panel's business (the shared note field), not this row's.
+// One drift line with its inline triage actions. NEW and MODIFIED rows offer
+// Allow and Ignore; TOOBIG and EXCLUDED offer Ignore alone; GONE rows offer
+// Remove and (unless the entry is already optional) Mark optional; only ERROR
+// is button-less, because there is nothing to decide about a scan that did
+// not finish. The classes that need explaining carry one line above the
+// buttons. Whether Ignore asks for a note first is the panel's business (the
+// shared note field), not this row's.
 Column {
   id: root
   property var entry: ({})
@@ -23,13 +23,20 @@ Column {
   signal goneRequested(string path, string verb)
 
   readonly property bool isGone: entry.type === "GONE"
-  // EXACTLY the classes lib/widget.sh's gate accepts for allow and ignore.
-  // docs/triage.md tells you to allow a stock file you have edited on
-  // purpose, and a collapsed ">2000 files" TOOBIG row is the single case the
-  // subtree-ignore shape exists for, so a row without those buttons was the
-  // only place saying they could not be taken.
-  readonly property bool isActionable: entry.type === "NEW" || entry.type === "MODIFIED"
-                                    || entry.type === "TOOBIG" || entry.type === "EXCLUDED"
+  // Ignore is offered for every class lib/widget.sh's gate accepts. docs/
+  // triage.md tells you to ignore a stock file you do not want kept, and a
+  // collapsed ">2000 files" TOOBIG row is the single case the subtree-ignore
+  // shape exists for, so a row without that button was the only place saying
+  // it could not be taken.
+  readonly property bool canIgnore: entry.type === "NEW" || entry.type === "MODIFIED"
+                                 || entry.type === "TOOBIG" || entry.type === "EXCLUDED"
+  // Allow is NOT. A TOOBIG row is a file the allowlist already covers, held
+  // back by maxFileSize; an EXCLUDED row is one the allowlist already covers,
+  // held back by .gitignore. The engine takes the click either way and writes
+  // an entry, so the row struck itself out and came back on the next scan
+  // with nothing changed -- a button that looks like the fix and is not. The
+  // explain line below says which limit is holding the file instead.
+  readonly property bool canAllow: entry.type === "NEW" || entry.type === "MODIFIED"
   // An entry that is already optional cannot be marked optional again: the
   // engine refuses it now, and the button that always did nothing goes away.
   readonly property bool alreadyOptional: entry.optional === true
@@ -39,8 +46,8 @@ Column {
   readonly property bool isDir: entry.dir === true
 
   readonly property string explainText:
-      entry.type === "TOOBIG"   ? "too many files to scan; allowlist the folder or ignore it"
-    : entry.type === "EXCLUDED" ? "matched by .gitignore; edit the allowlist entry"
+      entry.type === "TOOBIG"   ? "over maxFileSize, so it is allowlisted but not copied. Allow cannot help; raise maxFileSize in the config, or ignore it."
+    : entry.type === "EXCLUDED" ? "matched by .gitignore, so it is allowlisted but not committed. Allow cannot help; edit the repo's .gitignore, or ignore it."
     : entry.type === "ERROR"    ? "part of the scan failed; see omabackup status"
     : ""
 
@@ -98,7 +105,7 @@ Column {
       anchors.verticalCenter: parent.verticalCenter
       spacing: Style.spacing.xxs
       AccessibleActionButton {
-        visible: root.isActionable
+        visible: root.canAllow
         enabled: !root.busy
         iconText: "󰐕"
         tooltipText: root.isDir
@@ -109,7 +116,7 @@ Column {
         onClicked: root.allowRequested(root.entry.path)
       }
       AccessibleActionButton {
-        visible: root.isActionable
+        visible: root.canIgnore
         enabled: !root.busy
         iconText: "󰈉"
         tooltipText: root.isDir

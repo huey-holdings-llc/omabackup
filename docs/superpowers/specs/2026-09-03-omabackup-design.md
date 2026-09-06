@@ -191,19 +191,40 @@ because lint takes the same lock.
 - runs no polling timer;
 - runs every verb as an argv array; never builds a shell string.
 
-The status object:
+The status object (**field list updated 2026-09-06 to record what 0.7.0
+actually emits**; the rest of this section is the original design):
 
 ```
 state              "ok" | "attention" | "fault"
 setup              "not-configured" | "gitleaks-missing" | "remote-unverified" | "ready"
 repo, generated, last_run, last_run_age_days
 drift_scan_complete, drift_count, drift_truncated
-drift[]            {type: NEW|MODIFIED|GONE|TOOBIG|EXCLUDED|ERROR, path, note}
-unpushed, diverged, push_verifiable
+drift[]            {type: NEW|MODIFIED|GONE|TOOBIG|EXCLUDED|ERROR, path, note,
+                    optional, dir}
+unpushed, diverged, upstream_readable
+remote             "configured" | "missing" | "none"
+push_verifiable, push_reason
 uncommitted[]      repo files the timer will not commit
-timer_enabled, timer_active, timer_next, selftest_enabled, selftest_active
+timers_checked, timer_enabled, timer_active, timer_next,
+selftest_enabled, selftest_active
 problems[]         strings; any entry makes state "fault"
 ```
+
+What the four late fields are for, since none of them was in the original list:
+
+- `remote` is three-valued because git alone cannot tell a deliberate
+  local-only install from an origin somebody removed. `configured` is an
+  origin that exists, `none` is "empty to stay local" answered at setup, and
+  `missing` is a URL the config records with no origin behind it, which is a
+  fault: every commit since has gone nowhere.
+- `upstream_readable` is false when the ahead count could not be read at all,
+  so the widget can tell "nothing waiting" from "nobody knows".
+- `optional` on a drift item is true when the allowlist entry behind a GONE
+  row carries the `?` marker, so the popup can hide a "Mark optional" button
+  that would do nothing. It is false, never absent, on every other class.
+- `dir` on a drift item is the report's trailing slash, published rather than
+  thrown away: allowing a folder decides for everything put in it later, and
+  the popup says so only because it knows.
 
 Severity: any `problems[]` entry is `fault`; else drift or uncommitted is
 `attention`; else `ok`. `setup` other than `ready` shows the setup card in

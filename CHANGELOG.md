@@ -66,7 +66,7 @@ and simply never leave the machine.
 
 Before this release was cut, the branch went through a five-lens expert review
 (security, architecture, future proofing, usability and documentation) and
-three rounds of fixes on top of it. That work closed, among others: normalize
+four rounds of fixes on top of it. That work closed, among others: normalize
 rules that could execute a shell command out of the data repo; GitHub URL
 spellings the visibility probe did not recognise, which the popup could then
 have been asked to trust; filenames that split a drift report row so a triage
