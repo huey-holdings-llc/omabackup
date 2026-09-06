@@ -100,7 +100,9 @@ home/                verbatim mirror of allowlisted paths (mode 700)
 etc/                 reference copies
 manifests/           generated, timestamp-free, plus drift.txt and .last-run (ignored)
 .gitignore           copied from share/data.gitignore at setup, never edited by the engine
-.gitleaks.toml       copied from share/gitleaks.toml at setup; the engine also passes share/ rules explicitly
+.gitleaks.toml       NOT written (0.7.0 amendment: the scan always uses the plugin's own
+                     share/gitleaks.toml, so a copy in the repo was inert and setup no
+                     longer lays one down; repos from before 0.7.0 still carry one)
 .omabackup           marker: {"format": 1, "createdBy": "<version>"}
 .lock                flock target, ignored
 .staging/            scratch, ignored, recreated each run

@@ -187,8 +187,8 @@ to back anything up on its own.
   the signature of a run that copied your config in and never committed it.
 * **Self-test**: a weekly timer runs `self-test --real`, which is the
   black-box test suite end to end plus two groups that run `lint` and
-  `verify` against your actual data repo. A run that fails says a guard has
-  stopped firing; a run the timer had to stop says only that it ran out of
+  `verify` against your actual data repo. A run that fails tells you to
+  re-run it by hand; a run the timer had to stop says only that it ran out of
   time.
 
 ## Requirements
@@ -320,6 +320,14 @@ A repo set up before 0.7.0 also holds a `.gitleaks.toml` that an older setup
 copied in. Nothing reads it: the content scan always runs with the plugin's
 own `share/gitleaks.toml`, so a rule added to the repo copy never took effect
 in either direction. The copy is inert, and deleting it changes nothing.
+Whichever you choose, commit it: the file is tracked, no verb commits it for
+you, and either an edit or a deletion left in the working tree is an
+uncommitted edit `status` reports at every login. To be rid of it:
+
+```bash
+git -C <data repo> rm .gitleaks.toml
+git -C <data repo> commit -m "drop the inert rules copy"
+```
 
 `allowlist.txt` entries are directories (recursive) or files, relative to
 `$HOME`, and support shell globs; a leading `?` marks an entry optional, so
@@ -472,13 +480,17 @@ actually broken.
   `<its directory>/**` line to `drift-ignore.txt` if the whole directory is
   noise.
 * **"N of M allowlist entries no longer exist; refusing to run"**: the
-  mass-disappearance guard. It counts every entry this repo has ever backed
-  up that `$HOME` no longer has, optional ones included, so it fires on a
-  wrong `$HOME` or an unmounted partition before the next commit throws the
-  missing files away, and the entries it counted are listed on the line above
-  the refusal. Two ways out: if those paths really are gone for good,
-  `omabackup resolve-gone <path> remove` for each one, or edit
-  `allowlist.txt` by hand and commit it.
+  mass-disappearance guard, and two of them produce that sentence. The first
+  counts required entries (no leading `?`) that no longer resolve. The second
+  counts every entry this repo has ever backed up that `$HOME` no longer has,
+  optional ones included, which is the one that fires on a wrong `$HOME` or
+  an unmounted partition before the next commit throws the missing files
+  away. Either way the entries counted are listed above the refusal, one per
+  line, under `missing:` for the first and `vanished:` for the second. Two
+  ways out, and only the second refusal names them: if those paths really are
+  gone for good, `omabackup resolve-gone <path> remove` for each one, or edit
+  `allowlist.txt` by hand and commit it. An entry for something that is
+  simply not on this machine belongs in the list with a leading `?`.
 * **"data repo marker has no usable format field"**: `.omabackup` is the file
   that says the repo is OmaBackup's and what format it is in, and a marker
   that is not readable JSON is refused rather than overwritten, because

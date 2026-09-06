@@ -670,9 +670,17 @@ snapshot_notify_new_drift() {
   # Advance the signature even on a manual run, and even when no popup is due:
   # the point is that a given report is announced at most once.
   if [[ "$sig" != "$prev" ]]; then
+    # WARN AND SKIP, not die: unlike the vanish guard's scratch, this runs
+    # AFTER the commit, so a state directory that cannot be written must not
+    # turn a snapshot that has already done its work into a failed run. The
+    # cost of skipping is that the next run announces the same report again.
+    # Both writes are guarded, because under set -e the bare printf would end
+    # the process just as the bare mkdir did.
     # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
-    mkdir -m 700 -p "$STATE_DIR"
-    printf '%s\n' "$sig" > "$STATE_DIR/drift.sig"
+    if ! mkdir -m 700 -p "$STATE_DIR" || ! printf '%s\n' "$sig" > "$STATE_DIR/drift.sig"; then
+      warn "cannot record the drift signature under $STATE_DIR; this report may be announced again"
+      return 0
+    fi
   else
     return 0
   fi

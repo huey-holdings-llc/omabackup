@@ -4,13 +4,13 @@ Description=OmaBackup: verify the guards still fire
 [Service]
 Type=oneshot
 ExecStart=%h/.local/bin/omabackup self-test --real
-# $SERVICE_RESULT is passed through so the notification can tell "a guard
-# stopped firing" from "the suite ran out of time", which look identical from
+# $SERVICE_RESULT is passed through so the notification can tell "the suite
+# went red" from "the suite ran out of time", which look identical from
 # EXIT_STATUS alone (a timeout sets it to KILL).
 ExecStopPost=/bin/sh -c 'test "$$EXIT_STATUS" = "0" || %h/.local/bin/omabackup notify-failure selftest "$$SERVICE_RESULT"'
 Nice=15
 # The suite grows with every guard that gets a test, and it is already past
-# twelve minutes on this machine. At 20min a slower or loaded laptop would be
+# twelve minutes on a typical machine. At 20min a slower or loaded laptop would be
 # killed mid-run and fire the one critical notification whose whole value is
 # that it is never wrong. Weekly, at Nice=15, an hour costs nothing.
 TimeoutStartSec=1h

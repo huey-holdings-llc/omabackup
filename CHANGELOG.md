@@ -35,9 +35,10 @@ a decision is one click and is recorded with a date and a reason.
 Restore, which is a dry run until you pass `--apply` and never removes anything
 without copying it aside first. Verify, which restores the committed backup
 into a throwaway directory and compares every file, symlink and mode against
-the live one. Lint, for the hygiene of the four lists. And a weekly self-test
-that re-runs the whole black-box suite against your real data repo, so a guard
-that quietly stopped firing is something you hear about.
+the live one. Lint, for the hygiene of the four lists. And a weekly self-test:
+the black-box suite end to end against throwaway fixtures, plus two groups that
+run `lint` and `verify` against your actual data repo, so a guard that quietly
+stopped firing is something you hear about.
 
 ### Changed
 
