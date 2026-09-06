@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. The format follows
 Keep a Changelog 1.1.0 and the project uses Semantic Versioning.
 
-## [0.7.0] - Unreleased
+## [0.7.0] - 2026-09-06
 
 If you have been running 0.2.0, this is the release where the plugin stops
 being a status light for something else and becomes the thing that does the
