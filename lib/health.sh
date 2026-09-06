@@ -143,9 +143,24 @@ health_collect() {
   # a red line in every new terminal. A remote that EXISTS and cannot be
   # verified stays a problem, which is the half that is actually about a
   # backup not leaving the machine.
+  #
+  # THREE STATES, NOT TWO, because git alone cannot tell the two quiet ones
+  # apart. Asking only "does origin exist" made a REMOVED origin -- deleted by
+  # hand, or lost with a re-cloned .git -- read exactly like a deliberate
+  # local-only install: state ok, "Remote: none (local only)", health silent,
+  # while config.json still recorded the remote the operator set up and every
+  # commit since had gone nowhere. The config is what records the INTENT, so
+  # it decides which of the two quiet answers this is.
   H_UNPUSHED=0; H_DIVERGED=false; H_UPSTREAM_READABLE=false
-  H_REMOTE=none
-  [[ -z "$(remote_origin_url)" ]] || H_REMOTE=configured
+  local origin_url no_upstream=0; origin_url=$(remote_origin_url)
+  if [[ -n "$origin_url" ]]; then
+    H_REMOTE=configured
+  elif [[ -n "${CFG_REMOTE_URL:-}" ]]; then
+    H_REMOTE=missing
+    H_PROBLEMS+=("a remote was configured ($CFG_REMOTE_URL) but the repo has no origin; run omabackup setup")
+  else
+    H_REMOTE=none
+  fi
   if git -C "$DATA_REPO" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
     local ahead behind
     ahead=$(git -C "$DATA_REPO" rev-list --count '@{upstream}..HEAD' 2>/dev/null || true)
@@ -159,7 +174,11 @@ health_collect() {
     fi
     [[ "$H_UNPUSHED" -gt 0 ]] && H_PROBLEMS+=("$H_UNPUSHED commit(s) never pushed -- not yet off this machine")
   elif [[ "$H_REMOTE" == configured ]]; then
-    H_PROBLEMS+=("no upstream configured -- cannot tell if anything is pushed")
+    # The problem itself is decided here; its WORDING waits for the push
+    # verdict below, because "no upstream configured" on its own sends a user
+    # looking for a git problem when the actual reason nothing has been pushed
+    # is usually the gate: no gitleaks, or a remote nothing has verified.
+    no_upstream=1
   fi
 
   # --- the push gate's last recorded answer. Written by remote_probe and
@@ -198,6 +217,18 @@ health_collect() {
         H_PUSH_VERIFIABLE=$v_ok
         [[ -z "$v_reason" ]] || H_PUSH_REASON=$v_reason
       fi
+    fi
+  fi
+
+  # The wording deferred above. Nothing has ever been pushed to this remote,
+  # and the reason is either "git has no upstream yet" or, far more often, the
+  # push gate is shut -- no gitleaks, a remote nothing verified, a probe that
+  # proved nothing. Name the one the user can act on.
+  if [[ "$no_upstream" == 1 ]]; then
+    if [[ "$H_PUSH_VERIFIABLE" == true ]]; then
+      H_PROBLEMS+=("no upstream configured -- cannot tell if anything is pushed")
+    else
+      H_PROBLEMS+=("no upstream configured and pushes are off ($H_PUSH_REASON) -- nothing has left this machine")
     fi
   fi
 

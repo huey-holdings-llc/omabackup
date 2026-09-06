@@ -69,6 +69,10 @@ Panel {
   // "Stay local" is a first-class answer to the wizard's remote question, so
   // the popup says so instead of claiming a push state it cannot have.
   readonly property bool hasRemote: !!(st && st.remote === "configured")
+  // "missing" is a configured remote whose origin is gone: not local-only, and
+  // it is already in problems[] as a fault. The vitals row must not repeat the
+  // green "local only" line over it.
+  readonly property bool remoteLocalOnly: !!(st && st.remote === "none")
   readonly property bool timerKnown: !!(st && st.timers_checked)
   readonly property bool timerArmed: !!(st && st.timer_enabled && st.timer_active)
 
@@ -415,9 +419,11 @@ Panel {
             InfoRow {
               width: parent.width
               label: root.hasRemote ? "Pushed" : "Remote"
-              value: !root.hasRemote ? "none (local only)"
+              value: root.remoteLocalOnly ? "none (local only)"
+                   : !root.hasRemote ? "configured, but this repo has no origin"
                    : root.unpushed > 0 ? root.unpushed + " commit(s) waiting" : "up to date"
-              valueColor: root.hasRemote && root.unpushed > 0 ? root.urgent : ""
+              valueColor: root.remoteLocalOnly ? "" : !root.hasRemote ? root.urgent
+                   : root.unpushed > 0 ? root.urgent : ""
               foreground: root.foreground; dimColor: root.dim; fontFamily: root.fontFamily
             }
             InfoRow {

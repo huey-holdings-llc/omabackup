@@ -3002,9 +3002,15 @@ if group 88 "a repo with no remote is a supported state, not a permanent fault";
   date +%s > "$FR/manifests/.last-run"
   git -C "$FR" add -A >/dev/null 2>&1; git -C "$FR" commit -qm "clean slate" >/dev/null 2>&1
 
+  # LOCAL-ONLY MEANS THE CONFIG SAYS SO. mk_fixture writes remote.url, so
+  # clearing it is what actually makes this fixture the install that answered
+  # "empty to stay local"; removing origin alone is a different situation
+  # entirely, asserted right after.
   git -C "$FR" remote remove origin
+  jq '.remote={url:"", trusted:false}' "$OMABACKUP_CONFIG" > "$T/c88" \
+    && mv "$T/c88" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
   s88=$(obj status)
-  eq "with no origin at all the state is ok" "$(jq -r .state <<<"$s88")" "ok"
+  eq "with no origin and no configured remote the state is ok" "$(jq -r .state <<<"$s88")" "ok"
   eq "and status says so in one word" "$(jq -r .remote <<<"$s88")" "none"
   eq "no upstream problem is reported" \
     "$(jq -r '[.problems[] | select(test("upstream"))] | length' <<<"$s88")" "0"
@@ -3012,7 +3018,21 @@ if group 88 "a repo with no remote is a supported state, not a permanent fault";
     "$(ob health)" ""
   has "the human status names the local-only state" "$(ob status)" "remote: none (local only)"
 
-  # A remote that EXISTS and has never been pushed to is the other half: that
+  # A REMOVED ORIGIN IS NOT A LOCAL-ONLY INSTALL. Deleted by hand, or lost
+  # with a re-cloned .git: git looks identical to the case above, and every
+  # commit since has gone nowhere while the widget said "Remote: none (local
+  # only)" in green. config.json is what records the intent, so it decides.
+  jq --arg u "$BARE" '.remote={url:$u, trusted:true}' "$OMABACKUP_CONFIG" > "$T/c88" \
+    && mv "$T/c88" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  s88=$(obj status)
+  eq "a configured remote with no origin is reported as missing" "$(jq -r .remote <<<"$s88")" "missing"
+  eq "and that is a fault, not a healthy local-only install" "$(jq -r .state <<<"$s88")" "fault"
+  has "the problem names the remote that went away" \
+    "$(jq -r '.problems[]' <<<"$s88")" "but the repo has no origin"
+  eq "the login check is no longer silent about it" \
+    "$(ob health >/dev/null 2>&1; echo $?)" "1"
+
+  # A remote that EXISTS and has never been pushed to is the third state: that
   # one really is "your backup is not off this machine yet".
   git -C "$FR" remote add origin "$BARE"
   s88=$(obj status)
@@ -3020,6 +3040,15 @@ if group 88 "a repo with no remote is a supported state, not a permanent fault";
     "$(jq -r '[.problems[] | select(test("upstream"))] | length' <<<"$s88")" "1"
   eq "and that makes the state a fault" "$(jq -r .state <<<"$s88")" "fault"
   eq "status reports the remote as configured" "$(jq -r .remote <<<"$s88")" "configured"
+  has "with the push gate open it is a plain upstream problem" \
+    "$(jq -r '.problems[]' <<<"$s88")" "cannot tell if anything is pushed"
+  # And when the gate is SHUT, the problem names the reason a user can act on.
+  # "No upstream configured" sends them looking for a git problem; the gate is
+  # why nothing was ever pushed, and it is the half they can fix.
+  rm -f "$OMABACKUP_STATE_DIR/push-verdict.json"
+  s88=$(obj status)
+  has "with the gate shut the problem names the gate, not just git" \
+    "$(jq -r '.problems[]' <<<"$s88")" "pushes are off (unprobed)"
   eq "the not-configured object carries the same keys" \
     "$(OMABACKUP_CONFIG=/nonexistent obj status | jq -S 'keys')" "$(jq -S 'keys' <<<"$s88")"
 
