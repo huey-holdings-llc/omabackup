@@ -165,8 +165,9 @@ to back anything up on its own.
   installed writes a documented placeholder instead of erasing yesterday's
   copy under `rsync --delete`.
 * **Restore, dry run by default**: `omabackup restore --configs|--etc
-  |--packages|--plugins|--services|--all` reports what it would do, naming
-  the first 20 paths it would write; only `--apply` writes, and nothing is
+  |--packages|--plugins|--services|--all` reports what it would do, and
+  `--configs` names the first 20 paths it would write (the other stages list
+  what they would install or enable); only `--apply` writes, and nothing is
   removed without first being copied aside to `<path>.bak.<epoch>`, which is
   excluded from future snapshots. A run that made such copies says how many
   and where. `--etc` only ever diffs, never writes.

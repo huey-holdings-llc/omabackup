@@ -566,8 +566,6 @@ setup_check() {
   [[ $ok == true ]]
 }
 
-# setup_remove [--yes]: undo the local install (timers, the ~/.local/bin
-# symlink, config). The data repo and its remote are never touched.
 # setup_remove [--yes]: undo steps 6, 7 and 8 of the wizard. Deliberately
 # tolerant of a plugin directory that is already gone: the documented order
 # used to remove the plugin FIRST, which leaves ~/.local/bin/omabackup

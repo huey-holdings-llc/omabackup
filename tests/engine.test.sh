@@ -3141,6 +3141,26 @@ if group 88 "a repo with no remote is a supported state, not a permanent fault";
     "$(git -C "$FR" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo none)" "origin/main"
   eq "so the widget does not open on 'no upstream configured'" \
     "$(obj status | jq -r '[.problems[] | select(test("upstream"))] | length')" "0"
+
+  # AND THE OTHER SIDE OF THE SAME RULING: letting the gate decide means the
+  # gate can say no, and a refused push must be a warning inside a successful
+  # setup, never a failed wizard. An untrusted non-GitHub remote is exactly
+  # that case, and it is what a user who declines the trust question gets.
+  mk_fixture g88c
+  seed_home
+  jq '.remote={url:"", trusted:false}' "$OMABACKUP_CONFIG" > "$T/c88c" \
+    && mv "$T/c88c" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  out88=$(OMABACKUP_SKIP_TIMERS=1 env HOME="$FH" "$CLI" setup --data-repo "$FR" --remote "$BARE" --yes --json 2>"$T/setup88.err")
+  rc88=$?
+  eq "setup with an untrusted remote still exits 0" "$rc88" "0"
+  eq "and prints exactly one JSON object saying ok" "$(jq -c '[.ok]' <<<"$out88" 2>/dev/null)" "[true]"
+  eq "exactly one object, not two" "$(jq -s 'length' <<<"$out88")" "1"
+  has "the refused push is a warning on stderr, naming the reason" \
+    "$(cat "$T/setup88.err")" "push not verifiable"
+  eq "nothing was pushed, so the bare remote is still empty" \
+    "$(git -C "$BARE" rev-list --count --all 2>/dev/null || echo 0)" "0"
+  [[ "$(git -C "$FR" rev-list --count HEAD)" -gt 1 ]] \
+    && ok "the snapshot still committed locally, so nothing was lost" || bad "the first snapshot committed nothing"
 fi
 
 if group 89 "a newline in a DIRECTORY name does not take the whole scan down"; then
