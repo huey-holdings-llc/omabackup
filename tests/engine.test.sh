@@ -2839,7 +2839,9 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
     eq "the unit never gets written with an injected directive" \
       "$(grep -c 'ExecStart=/bin/sh' "$FH/.config/systemd/user/omabackup-snapshot.timer" || true)" "0"
   else
-    echo "  (could not build a systemd-analyze-free PATH: skipping)"
+    # A skip says what it skipped and how much: a silent one reads as five
+    # assertions that passed, and the suite total moves with no explanation.
+    echo "  (could not build a systemd-analyze-free PATH: 5 assertions skipped)"
   fi
 fi
 

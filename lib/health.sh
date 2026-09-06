@@ -184,7 +184,13 @@ health_collect() {
     if [[ -n "$cur_url" && "$v_url" == "$cur_url" ]]; then
       v_at=$(jq -r '.at // 0' "$verdict" 2>/dev/null || echo 0)
       case "$v_at" in ''|*[!0-9]*) v_at=0 ;; esac
-      if [[ "$v_at" -le 0 || $(( now - v_at )) -gt $(( CFG_STALE_DAYS * 86400 )) ]]; then
+      # WHOLE DAYS, the same arithmetic the snapshot-age check above uses.
+      # This one compared seconds against staleDays * 86400, so a verdict and
+      # a snapshot of exactly the same age could be called stale by one check
+      # and fresh by the other, on the same status line.
+      local v_age_days=-1
+      [[ "$v_at" -gt 0 ]] && v_age_days=$(( (now - v_at) / 86400 ))
+      if [[ "$v_at" -le 0 || "$v_age_days" -gt "$CFG_STALE_DAYS" ]]; then
         H_PUSH_REASON="stale"
       else
         v_ok=$(jq -r 'if .verifiable == true then "true" else "false" end' "$verdict" 2>/dev/null || echo false)
