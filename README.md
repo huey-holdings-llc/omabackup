@@ -341,8 +341,9 @@ modes.txt            file and directory permissions, replayed on restore
 home/                the mirrored config itself (mode 700)
 etc/                 the reference copies named in etc-allowlist.txt
 manifests/           generated facts about the machine, plus drift.txt
-.gitignore           belt-and-braces excludes, copied from share/ at setup and topped
-                     up on upgrade with the patterns a newer version ships
+.gitignore           belt-and-braces excludes, copied from share/ at setup; the next
+                     snapshot after an upgrade appends the patterns the newer
+                     version ships and commits them
 .omabackup           marker: {"format": 1, "createdBy": "<version>"}
                      a marker whose format is HIGHER than this version knows
                      is refused, never rewritten, so the newer machine in a
@@ -565,10 +566,15 @@ actually broken.
   `systemd --user` unit inherits it too.
 * **"added N ignore pattern(s) this version ships"**: an upgrade found
   patterns in `share/data.gitignore` that your data repo's `.gitignore` did
-  not have, and appended them under a dated comment. It is a warning and not
-  a fault: nothing is removed and nothing is reordered, the run carried on,
-  and the edit is reported as an uncommitted change until you commit it (the
-  popup's Commit button offers `.gitignore`, or `omabackup push --confirm`).
+  not have, and the snapshot appended them under a dated comment and
+  committed that edit on its own, before its own commit. Nothing is removed
+  and nothing is reordered. The commit is skipped in two cases the run names:
+  you had an uncommitted edit to `.gitignore` already, or something was
+  staged in the data repo. Then the patterns are still appended and the file
+  is reported as an uncommitted change until you commit it (the popup's
+  Commit button offers `.gitignore`, or `omabackup push --confirm`). Only the
+  snapshot and `setup --import` write this file; `status`, `drift` and `lint`
+  never do.
   Two things are worth a look at the result, both of them a consequence of
   appending. A shipped line landing below a negation you wrote yourself
   shadows it, because git's last matching rule wins, so keep your own `!`

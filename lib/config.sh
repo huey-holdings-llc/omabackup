@@ -331,7 +331,6 @@ data_repo_require() {
     || die "data repo marker has no usable format field: $DATA_REPO/.omabackup. The marker is committed, so restore it with: git -C $DATA_REPO checkout -- .omabackup"
   [[ "$fmt" -le 1 ]] || die "data repo format $fmt is newer than this version understands; upgrade omabackup"
   data_repo_assert_mode
-  data_repo_gitignore_sync
 }
 
 # data_repo_gitignore_sync: bring an EXISTING repo's .gitignore up to the set
@@ -360,11 +359,17 @@ data_repo_require() {
 # keep your own negations at the end.
 #
 # Comments and blank lines are not compared: they are formatting, not rules.
-# One `printf` writes the whole block, so two verbs racing here append two
-# whole blocks rather than interleaving halves of them, and a repo that has
-# every line writes nothing at all -- which is every repo from the second run
-# on, and every repo setup created.
+# One `printf` writes the whole block, and a repo that has every line writes
+# nothing at all -- which is every repo from the second run on, and every repo
+# setup created.
+#
+# Called from data_repo_gitignore_sync_commit only, never from the gate every
+# verb passes through: a read-only verb (status, drift, lint, the widget's
+# refresh) used to write this file outside the lock, racing whatever held
+# it, and then left the edit for a human to commit. GITIGNORE_SYNC_ADDED is
+# how many lines this call appended, 0 when it appended nothing or could not.
 data_repo_gitignore_sync() {
+  GITIGNORE_SYNC_ADDED=0
   local shipped="$PLUGIN_DIR/share/data.gitignore" have="$DATA_REPO/.gitignore"
   [[ -r "$shipped" ]] || return 0
   local exists=0
@@ -397,5 +402,38 @@ data_repo_gitignore_sync() {
   )
   printf '%s\n' "$block" >> "$have" \
     || { warn "cannot write $have; ${#missing[@]} shipped ignore pattern(s) are missing from it"; return 0; }
-  warn "added ${#missing[@]} ignore pattern(s) this version ships to $have; commit it with the popup's Commit button, or omabackup push --confirm"
+  GITIGNORE_SYNC_ADDED=${#missing[@]}
+  log "added ${#missing[@]} ignore pattern(s) this version ships to $have"
+}
+
+# data_repo_gitignore_sync_commit: the sync, plus the commit it owes. Only a
+# path that holds the repo lock and is about to commit anyway calls this (the
+# snapshot, and setup adopting a repo). The commit stages .gitignore by name
+# and nothing else, and it happens only when the file was clean before the
+# sync and the index is empty: a user's own uncommitted edit to .gitignore, or
+# anything they had staged, must not ride into a commit this tool signs.
+# In those cases the patterns are still appended (they are all credential
+# classes and this tool's own scratch, and every run without them is a run
+# that could commit a credential file) and the edit is left for the user,
+# which is what the popup's Commit button and push --confirm are for.
+data_repo_gitignore_sync_commit() {
+  local dirty_before
+  dirty_before=$(git -C "$DATA_REPO" status --porcelain -- .gitignore 2>/dev/null) || dirty_before='?'
+  data_repo_gitignore_sync
+  (( GITIGNORE_SYNC_ADDED > 0 )) || return 0
+  if [[ -n "$dirty_before" ]]; then
+    warn "your own edit to .gitignore was already uncommitted, so the $GITIGNORE_SYNC_ADDED appended pattern(s) were not committed either; commit both with the popup's Commit button, or omabackup push --confirm"
+    return 0
+  fi
+  if ! git -C "$DATA_REPO" diff --cached --quiet; then
+    warn "something is already staged in the data repo, so the $GITIGNORE_SYNC_ADDED appended .gitignore pattern(s) were not committed; commit them with the popup's Commit button, or omabackup push --confirm"
+    return 0
+  fi
+  git_ident_args
+  if git -C "$DATA_REPO" add -- .gitignore \
+     && git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -q -m "omabackup: .gitignore gains $GITIGNORE_SYNC_ADDED ignore pattern(s) this version ships" -- .gitignore; then
+    log "committed the .gitignore update"
+  else
+    warn "could not commit the .gitignore update; it stays an uncommitted edit (the popup's Commit button, or omabackup push --confirm)"
+  fi
 }

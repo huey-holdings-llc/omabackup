@@ -5,6 +5,19 @@ Keep a Changelog 1.1.0 and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+The `.gitignore` top-up on an adopted or upgraded data repo now happens in
+the snapshot, under the repo lock, and commits what it appended in a commit
+of its own, so the first `status` after an upgrade reports a clean repo
+instead of an edit for you to commit. It stands down, appending but not
+committing, when you already had an uncommitted edit to `.gitignore` or
+something staged; the run says which, and the popup's Commit button or
+`push --confirm` is the way out, as before. `setup --import` does the same
+when it adopts a repo. The read-only verbs (`status`, `drift`, `lint`, the
+widget's refresh) no longer write to the data repo at all; they used to run
+this sync outside the lock.
+
 ### Fixed
 
 `notify: false` in the config now silences desktop notifications. The knob

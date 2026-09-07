@@ -302,6 +302,10 @@ setup_import() {
   git -C "$DATA_REPO" add -- "${adopted[@]}" >/dev/null || die "could not stage the adoption marker"
   git_ident_args
   git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -qm "omabackup: adopt existing repo" >/dev/null 2>&1 || true
+  # A repo from an older version lacks the ignore patterns added since. The
+  # gate used to append them on the first scan and leave the edit; the sync
+  # now owns its commit, and adoption is the other path that commits.
+  data_repo_gitignore_sync_commit
   setup_phase "imported"
 }
 
