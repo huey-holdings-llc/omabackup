@@ -315,14 +315,18 @@ maxMissingPct    25; this share of allowlist entries or more vanishing at
 maxScanFiles     2000; a folder with more files than this is one collapsed
                  row in the drift report
 notify           true; false silences the desktop notifications
-shellNag         false; true adds the login check to ~/.bashrc
+shellNag         false; true makes setup add the login check to ~/.bashrc
 timer.calendar   daily; the snapshot timer's OnCalendar
 timer.jitter     30m; its RandomizedDelaySec
 setupPhase       setup's own resume marker, not something to edit
 ```
 
-Edits take effect on the next run, except `timer.*`: those are written into
-the unit files, so rerun `omabackup setup --yes` after changing them.
+Edits take effect on the next run, with two exceptions that only setup reads.
+`timer.*` is written into the unit files, so rerun `omabackup setup --yes`
+after changing it. `shellNag` set to true adds the login check the next time
+setup runs; set back to false it removes nothing, so take the two lines under
+the OmaBackup comment out of `~/.bashrc` yourself (`setup --remove` does,
+but it uninstalls everything else too).
 
 The data repo itself, whose root and `.git` are kept at mode 700 (setup sets
 both, and every verb re-asserts them, since `.git` holds the whole backup in
