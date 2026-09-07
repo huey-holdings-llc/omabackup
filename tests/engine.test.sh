@@ -3728,5 +3728,33 @@ if group 94 "notify: false in the config actually silences notifications"; then
   [[ -n "$(nf94)" ]] && ok "an absent notify key still sends" || bad "an absent notify key sent nothing"
 fi
 
+if group 95 "verify without a last-run stamp reasons from the last snapshot, not from HEAD"; then
+  # manifests/.last-run is gitignored, so a fresh clone has none, and verify
+  # fell back to HEAD's commit time. Right after `setup --import` HEAD is the
+  # adoption marker commit, hours or days after the last snapshot, so every
+  # live file edited in between was reported as a fidelity problem (four of
+  # them on the first dry run of Task 22). The stand-in is now the last commit
+  # that touched the snapshot's own output paths.
+  mk_fixture g95; seed_home; commit_baseline
+  snap_t=$(git -C "$FR" log -1 --format=%ct)
+  # A live edit after the snapshot, then a later commit that is not a
+  # snapshot: the shape adoption, a list commit and a .gitignore sync all make.
+  printf 'changed\n' > "$FH/.bashrc"; touch -d "@$((snap_t + 60))" "$FH/.bashrc"
+  env GIT_COMMITTER_DATE="@$((snap_t + 7200))" GIT_AUTHOR_DATE="@$((snap_t + 7200))" \
+    git -C "$FR" commit -q --allow-empty -m "omabackup: adopt existing repo"
+  rm -f "$FR/manifests/.last-run"
+  v95=$(obj verify)
+  eq "the edit after the snapshot is excused, not failed" "$(jq -c '[.ok,.skipped_changed]' <<<"$v95")" '[true,1]'
+  has "and the run says the stamp is missing" "$(ob verify || true)" "last-run is missing"
+  # A mismatch OLDER than the snapshot is still a mismatch: the stand-in must
+  # not excuse everything.
+  touch -d "@$((snap_t - 60))" "$FH/.bashrc"
+  fails "a mismatch older than the snapshot still fails verify" env HOME="$FH" "$CLI" verify
+  # With the stamp present nothing here changes: the stamp wins.
+  printf '%s\n' "$((snap_t + 30))" > "$FR/manifests/.last-run"
+  touch -d "@$((snap_t + 90))" "$FH/.bashrc"
+  eq "with a stamp the stamp decides" "$(obj verify | jq -r .ok)" "true"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
