@@ -27,8 +27,6 @@ snapshot, the adoption marker, a list commit, the `.gitignore` sync's own,
 made a stale backup read as fresh. The stand-in is now the last commit that
 touched the snapshot's own output paths.
 
-### Fixed
-
 `notify: false` in the config now silences desktop notifications. The knob
 has existed since 0.7.0 and the README now lists it, with the other config
 keys and their defaults. The config reader used jq's `//` to supply a
