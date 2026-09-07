@@ -3654,6 +3654,19 @@ if group 92 "omabackup's own unit files are not drift, and their neighbours stil
   # shape this tool exists to prevent.
   has "a hand-written unit beside them is still reported" "$d92" "systemd/user/my-own.service"
   eq "and lint is happy with the seeded entry" "$(obj lint --no-walk | jq -r .ok)" "true"
+  # A repo adopted from an older version has no seed line for them, and the
+  # first popup after adoption opened on five rows about the tool itself. The
+  # scan exempts its own unit names on its own; the seed line is a courtesy.
+  grep -vF 'systemd/user/omabackup-' "$FR/drift-ignore.txt" > "$T/di92" && mv "$T/di92" "$FR/drift-ignore.txt"
+  git -C "$FR" commit -qam "an ignore list from before the units existed"
+  d92b=$(ob drift)
+  eq "without the seed line the tool's units are still not drift" \
+    "$(grep -c 'systemd/user/omabackup-' <<<"$d92b" || true)" "0"
+  has "and the hand-written unit beside them still is" "$d92b" "systemd/user/my-own.service"
+  # The tool's own config IS worth a decision, so it is drift on an adopted
+  # repo and an optional seed entry on a fresh one.
+  eq "the seed allowlist names the tool's own config" \
+    "$(grep -cxF '?.config/omabackup/config.json' "$HERE/../share/allowlist.example")" "1"
 fi
 
 if group 93 "an existing repo's .gitignore gains the patterns this version ships, and the sync owns its commit"; then

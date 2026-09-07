@@ -21,6 +21,15 @@ writes the marker and runs the sync.
 
 ### Fixed
 
+The drift scan no longer reports the tool's own five systemd units, on any
+data repo. The seed ignore list had a line for them, but a repo adopted from
+an older version has no such line, so the first popup after adoption opened
+on five rows about the tool itself. The scan exempts those names on its own
+now; a hand-written unit beside them is still reported. The tool's own
+`config.json` is a different matter, an intent record worth a decision: it
+is an optional entry in the seed allowlist for a fresh setup, and on an
+adopted repo it shows once as drift for you to allow or ignore.
+
 With no `manifests/.last-run` stamp (a fresh clone never has one), `status`
 judged the backup's age by HEAD's commit time, so any commit that was not a
 snapshot, the adoption marker, a list commit, the `.gitignore` sync's own,

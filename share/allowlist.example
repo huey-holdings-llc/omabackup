@@ -29,6 +29,10 @@
 ?.config/omarchy/themes
 ?.config/omarchy/extensions
 ?.config/omarchy/branding
+# omabackup's own settings: an intent record (which repo, which remote, the
+# floors you chose), and nothing in it is a secret. setup rewrites it on a
+# restored machine, but the values you tuned are worth keeping.
+?.config/omabackup/config.json
 
 # --- Terminals ---
 ?.config/alacritty
