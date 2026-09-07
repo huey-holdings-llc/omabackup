@@ -1,0 +1,26 @@
+name: ci
+permissions:
+  contents: read
+on:
+  push:
+    branches: [main, "release/**", "feat/**", "fix/**"]
+  pull_request:
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install tools (what an Omarchy install already has, plus gitleaks)
+        run: pacman -Syu --noconfirm --needed git jq rsync shellcheck diffutils util-linux python gitleaks psmisc
+      - uses: actions/checkout@v4
+      - name: Static checks
+        run: bash tests/lint.sh
+      # The suite asserts on file modes and on directories it has made
+      # unreadable, and root reads anything, so it runs as an ordinary user
+      # the way it does on an Omarchy box. The step that installs tools above
+      # is the only one that needs root.
+      - name: Engine suite, as a user
+        run: |
+          useradd -m ci
+          chown -R ci:ci "$PWD"
+          su ci -c "git config --global --add safe.directory '$PWD' && cd '$PWD' && HOME=/home/ci OMABACKUP_TEST_TMP=/home/ci/omabackup-tests bash tests/engine.test.sh"

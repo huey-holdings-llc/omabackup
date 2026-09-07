@@ -1,0 +1,93 @@
+# THIS is the rules file the engine scans with, always. lib/secrets.sh pins the
+# path to the plugin's own copy of this file, so a .gitleaks.toml sitting in a
+# data repo is never read: a repo set up before 0.7.0 holds one because an
+# older setup copied it in, and that copy is inert. Edit rules here, in the
+# plugin, and open a pull request if the change is worth shipping.
+#
+# Project-local rules. The default gitleaks ruleset was tested against the
+# credential formats an Omarchy desktop actually holds; these are the ones it
+# missed. Every comment below records why a rule is shaped the way it is, so
+# nobody widens or narrows one back into a hole it already fell through.
+# minVersion: gitleaks asks for it by name ("no minVersion specified in
+# config... consider adding minVersion to ensure compatibility") and refuses a
+# config that needs a newer binary than the one running. 8.19.0 is the floor
+# this file actually needs: it is the release lib/secrets.sh probes for when it
+# chooses `gitleaks dir` over the older `detect --no-git`.
+minVersion = "8.19.0"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key (no default gitleaks rule exists)"
+# Tightened: `sk-ant-[a-zA-Z0-9_-]{20,}` matched documentation placeholders like
+# sk-ant-api03-REPLACE_ME_WITH_YOUR_REAL_KEY_HERE. Those appear in exactly the
+# files Claude Code writes prose into (.claude/*/memory/*.md, .claude/plans/*.md),
+# which are allowlisted -- so a placeholder stopped every backup until a human
+# edited a memory file. Real keys are far longer and high-entropy.
+# (?:...) is NON-capturing on purpose. With `(api|admin)` as capture group 1,
+# gitleaks measured entropy on the literal "api" (~1.58 < 3.5) and filtered out
+# every real key -- the rule silently never fired. secretGroup pins entropy to
+# the key body instead.
+# 2026-08-23: prefix class widened. The old `(?:api|admin)` + `{80,}` MISSED the
+# token formats most likely to appear on a developer desktop: Claude Code's OAuth access /
+# refresh tokens (sk-ant-oat01-, sk-ant-ort01-) and session keys (sk-ant-sid01-),
+# which live in .claude/.credentials.json (excluded) but can be echoed into the
+# allowlisted .claude/plans/*.md and memory notes. The floor is 40 so a truncated
+# paste is still caught; the entropy filter + the placeholder allowlist below keep
+# documentation strings tolerated (self-test 41 proves both directions).
+regex = '''sk-ant-(?:api|admin|oat|ort|sid)[0-9]{2}-([a-zA-Z0-9_-]{40,})'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["sk-ant-"]
+
+  # Scoped to THIS rule only. As a global allowlist these regexes matched the
+  # whole secret of every other rule, so "xxxx" or "example" inside a real
+  # WiFi PSK or WireGuard key silenced it completely.
+  # [[rules.allowlists]], plural: the singular [rules.allowlist] is deprecated
+  # (the binary carries the warning "[rules.allowlist] is deprecated, it cannot
+  # be used alongside [[rules.allowlist]]"), and a gitleaks 9 that drops it
+  # would make every snapshot exit non-zero and die, every day. 8.19+ accepts
+  # this form.
+  [[rules.allowlists]]
+  description = "documentation placeholders for Anthropic keys"
+  regexes = [
+    '''(?i)(example|placeholder|replace[_-]?me|your[_-]?(api[_-]?)?key|xxxx+)''',
+  ]
+
+[[rules]]
+id = "openai-project-key"
+description = "OpenAI project/service-account/admin key (default rule only knows the legacy T3BlbkFJ format)"
+# codex is installed via mise; its own auth.json is ignored, but a key pasted into a
+# note is not. Empirically missed by the default ruleset (gitleaks 8.30.1).
+regex = '''\b(sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{40,})\b'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["sk-proj-", "sk-svcacct-", "sk-admin-"]
+
+[[rules]]
+id = "url-embedded-credentials"
+description = "scheme://user:password@host"
+regex = '''[a-zA-Z][a-zA-Z0-9+.-]*://[^\s:/?#\[\]@]+:[^\s:/?#\[\]@]{6,}@[^\s/?#]+'''
+keywords = ["://"]
+
+[[rules]]
+id = "wireguard-key"
+description = "WireGuard/NaCl 44-char base64 key near a key-ish word"
+# \b anchors: unanchored `psk` matched any identifier ENDING in psk (xpsk = ...).
+regex = '''(?i)\b(private[_-]?key|presharedkey|psk)\b['"]?\s*[:=]\s*['"]?([A-Za-z0-9+/]{43}=)'''
+keywords = ["privatekey", "private_key", "private-key", "presharedkey", "psk"]
+
+# NOTE: a syncthing-device-id rule was removed. A device ID is a PUBLIC
+# identifier (shown in the UI, exchanged with peers), so blocking on it stopped
+# backups over a non-secret; keywords = ["-"] also defeated gitleaks' prefilter
+# and ran the regex against every scanned file.
+
+[[rules]]
+id = "nm-wifi-psk"
+description = "NetworkManager pre-shared key"
+# (?m) is REQUIRED: Go's regexp treats ^ as start-of-TEXT, and gitleaks scans a
+# whole file as one fragment -- without it this rule matched nothing, ever.
+regex = '''(?im)^\s*psk\s*=\s*\S{8,}'''
+keywords = ["psk"]

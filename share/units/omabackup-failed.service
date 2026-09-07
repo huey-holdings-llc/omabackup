@@ -1,0 +1,6 @@
+[Unit]
+Description=OmaBackup: notify that the snapshot failed
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/omabackup notify-failure snapshot

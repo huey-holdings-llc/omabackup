@@ -99,8 +99,18 @@ modes.txt            NUL-delimited mode+path for files and dirs
 home/                verbatim mirror of allowlisted paths (mode 700)
 etc/                 reference copies
 manifests/           generated, timestamp-free, plus drift.txt and .last-run (ignored)
-.gitignore           copied from share/data.gitignore at setup, never edited by the engine
-.gitleaks.toml       copied from share/gitleaks.toml at setup; the engine also passes share/ rules explicitly
+.gitignore           copied from share/data.gitignore at setup (0.7.0 amendment: and topped
+                     up on an existing repo, which the "never edited" here got wrong. Every
+                     verb's data_repo_require appends the shipped patterns the file lacks,
+                     under a dated comment, and warns that the edit needs committing.
+                     Append only: nothing is removed and nothing is reordered, so a line the
+                     user added stays where it is. The two consequences of appending are
+                     real and documented in the README: a shipped line re-added after a
+                     user's own negation shadows that negation, and re-adding a shipped
+                     negation the user deleted on purpose puts it back)
+.gitleaks.toml       NOT written (0.7.0 amendment: the scan always uses the plugin's own
+                     share/gitleaks.toml, so a copy in the repo was inert and setup no
+                     longer lays one down; repos from before 0.7.0 still carry one)
 .omabackup           marker: {"format": 1, "createdBy": "<version>"}
 .lock                flock target, ignored
 .staging/            scratch, ignored, recreated each run
@@ -191,19 +201,40 @@ because lint takes the same lock.
 - runs no polling timer;
 - runs every verb as an argv array; never builds a shell string.
 
-The status object:
+The status object (**field list updated 2026-09-06 to record what 0.7.0
+actually emits**; the rest of this section is the original design):
 
 ```
 state              "ok" | "attention" | "fault"
 setup              "not-configured" | "gitleaks-missing" | "remote-unverified" | "ready"
 repo, generated, last_run, last_run_age_days
 drift_scan_complete, drift_count, drift_truncated
-drift[]            {type: NEW|MODIFIED|GONE|TOOBIG|EXCLUDED|ERROR, path, note}
-unpushed, diverged, push_verifiable
+drift[]            {type: NEW|MODIFIED|GONE|TOOBIG|EXCLUDED|ERROR, path, note,
+                    optional, dir}
+unpushed, diverged, upstream_readable
+remote             "configured" | "missing" | "none"
+push_verifiable, push_reason
 uncommitted[]      repo files the timer will not commit
-timer_enabled, timer_active, timer_next, selftest_enabled, selftest_active
+timers_checked, timer_enabled, timer_active, timer_next,
+selftest_enabled, selftest_active
 problems[]         strings; any entry makes state "fault"
 ```
+
+What the four late fields are for, since none of them was in the original list:
+
+- `remote` is three-valued because git alone cannot tell a deliberate
+  local-only install from an origin somebody removed. `configured` is an
+  origin that exists, `none` is "empty to stay local" answered at setup, and
+  `missing` is a URL the config records with no origin behind it, which is a
+  fault: every commit since has gone nowhere.
+- `upstream_readable` is false when the ahead count could not be read at all,
+  so the widget can tell "nothing waiting" from "nobody knows".
+- `optional` on a drift item is true when the allowlist entry behind a GONE
+  row carries the `?` marker, so the popup can hide a "Mark optional" button
+  that would do nothing. It is false, never absent, on every other class.
+- `dir` on a drift item is the report's trailing slash, published rather than
+  thrown away: allowing a folder decides for everything put in it later, and
+  the popup says so only because it knows.
 
 Severity: any `problems[]` entry is `fault`; else drift or uncommitted is
 `attention`; else `ok`. `setup` other than `ready` shows the setup card in
@@ -224,15 +255,23 @@ Triggered from the setup card or by running `omabackup setup`. A gum wizard
 in a floating terminal, resumable (it records its phase in config), every
 step idempotent:
 
-1. **Tools.** Check git, rsync, jq, gum, systemd user session; check
+1. **Tools.** Check git, rsync, jq and flock, and stop when one is missing
+   (0.7.0 amendment: flock is required and gum is not, which this list had the
+   wrong way round; the wizard falls back to defaults without gum rather than
+   refusing to run, and `setup check` reports gum and the systemd user session
+   as part of its tools object without either being a hard requirement). Check
    gitleaks and record its absence as "commits only, no push" rather than
    stopping.
 2. **Data repo.** New (default `~/.local/share/omabackup/data`, `git init`,
    mode 700), adopt an existing engine repo (`--import DIR`: verifies the
    five list files and the three trees, writes the marker), or point at an
    existing empty repo.
-3. **Seeds.** Copy the four `*.example` lists (Omarchy-stock entries only),
-   `data.gitignore`, `gitleaks.toml`. Skipped when adopting.
+3. **Seeds.** Copy the four `*.example` lists (Omarchy-stock entries only)
+   and `data.gitignore` (0.7.0 amendment: no `gitleaks.toml`, for the reason
+   section 2 gives, and `.gitignore` is laid down when adopting too if the
+   adopted repo has none, since it is the belt-and-braces half of the secret
+   gates and not a preference. The four lists are still skipped when
+   adopting).
 4. **First scan.** Run `drift`, show counts by category, say "triage it from
    the bar". Never auto-allow anything.
 5. **Remote.** Paste a URL, or create one with `gh repo create --private`

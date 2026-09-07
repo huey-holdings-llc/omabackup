@@ -6,21 +6,22 @@ import qs.Commons
 import qs.Ui
 import "ui"
 
-// Backup Status bar widget: a glanceable badge for the hp-laptop-config backup
-// engine, and a popup that renders `bin/widget-helper.sh status` verbatim.
+// OmaBackup bar widget: a glanceable badge for the config-backup engine, and
+// a popup that renders Service.qml's status.json.
 //
-// ALL judgment lives in the helper -- it is versioned, linted and self-tested
-// with the engine (self-test groups 50/51). This file renders that JSON and
-// shells back into helper subcommands; it never decides anything about
-// backups itself, and it never builds shell strings (argv only).
+// ALL judgment lives in bin/omabackup and lib/*.sh -- versioned, linted and
+// self-tested with the engine. This file is a view over the Service
+// singleton: it renders svc.st and calls svc functions, which run CLI verbs
+// as argv (never a shell string) and never decide anything about backups
+// themselves.
 //
 // Triage is meant to feel like clearing a todo list: drifting files are
 // grouped by folder so one click can take a whole directory, handled rows
 // disappear immediately, and notes are optional (a toggle, off by default).
 Panel {
   id: root
-  moduleName: "io.github.coreytyhurst.backup-status"
-  ipcTarget: "io.github.coreytyhurst.backup-status"
+  moduleName: "io.github.huey-holdings-llc.omabackup"
+  ipcTarget: "io.github.huey-holdings-llc.omabackup"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -29,15 +30,22 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property bool vertical: bar ? bar.vertical : false
 
-  readonly property string home: Quickshell.env("HOME") || ""
-  readonly property string repoDir: String(setting("repoDir", "~/projects/hp-laptop-config")).replace(/^~/, home)
-  readonly property string helper: repoDir + "/bin/widget-helper.sh"
+  // The Service.qml singleton, handed over by the shell host the same way
+  // omarecorder's Panel.qml pulls its own service (there is no QML module
+  // import for it -- Service.qml is loaded and registered by the shell,
+  // keyed by plugin id, and shared across every panel/widget instance).
+  readonly property var svc: bar && bar.shell && bar.shell.serviceFor ? bar.shell.serviceFor(moduleName) : null
+  readonly property bool svcReady: svc !== null
 
-  // Last parsed status JSON; null until the first poll answers.
-  property var st: null
-  property string helperError: ""
+  // Last parsed status JSON; null until the service's first read answers.
+  readonly property var st: svcReady ? svc.st : null
+  readonly property string helperError: svcReady ? svc.cliError : "OmaBackup service unavailable"
   property string actionError: ""
-  property bool busy: false
+  // A neutral counterpart to actionError: an action that succeeded and had
+  // nothing to do still owes the user a sentence, and the red one would lie.
+  property string actionNote: ""
+  readonly property bool busy: svcReady ? svc.busy : false
+  readonly property string setupState: svcReady ? svc.setup : "not-configured"
   property bool confirmOpen: false
   // Off by default: Ignore acts immediately with a dated default reason.
   // On: the shared note field opens first so a reason can be recorded.
@@ -58,17 +66,37 @@ Panel {
   readonly property var problems: st && st.problems ? st.problems : []
   readonly property var uncommitted: st && st.uncommitted ? st.uncommitted : []
   readonly property int unpushed: st && st.unpushed ? st.unpushed : 0
+  // "Stay local" is a first-class answer to the wizard's remote question, so
+  // the popup says so instead of claiming a push state it cannot have.
+  readonly property bool hasRemote: !!(st && st.remote === "configured")
+  // "missing" is a configured remote whose origin is gone: not local-only, and
+  // it is already in problems[] as a fault. The vitals row must not repeat the
+  // green "local only" line over it.
+  readonly property bool remoteLocalOnly: !!(st && st.remote === "none")
+  // ...and the row that says so is driven by "missing" itself, never by the
+  // absence of "configured". With st null -- first paint, or a status.json
+  // this widget could not parse -- every one of these is false, and reading
+  // !hasRemote as "the origin is gone" painted that accusation in the urgent
+  // colour before the file had been read once. An unknown remote is unknown.
+  readonly property bool remoteMissing: !!(st && st.remote === "missing")
   readonly property bool timerKnown: !!(st && st.timers_checked)
   readonly property bool timerArmed: !!(st && st.timer_enabled && st.timer_active)
 
-  // Folder bucket for a drift path: per-app under the XDG-ish roots, the
-  // top-level folder otherwise, null for a file that has no useful bucket.
+  // Folder bucket for a drift path: per-app under the XDG-ish roots, null for
+  // anything else. A key must be at least two segments deep, because the
+  // engine refuses a depth-1 folder target by design (one click must never be
+  // able to silence a whole report, lib/widget.sh drift_has_under). Grouping
+  // ~/bin/foo and ~/bin/bar under "~/bin/" therefore built a row whose two
+  // buttons could only ever fail, with advice ("refresh and retry") that could
+  // never work. Those files are listed individually instead, where their own
+  // buttons do work.
   function groupKey(path) {
     var p = String(path).replace(/^~\//, "").replace(/\/$/, "")
     var segs = p.split("/")
     var take = 1
     if (segs[0] === ".config" || segs[0] === ".cache") take = 2
     else if (segs[0] === ".local" && segs.length > 1 && (segs[1] === "share" || segs[1] === "state" || segs[1] === "bin")) take = 3
+    if (take < 2) return null
     if (segs.length <= take) return null
     return "~/" + segs.slice(0, take).join("/") + "/"
   }
@@ -113,7 +141,13 @@ Panel {
     return Math.floor(s / 86400) + "d ago"
   }
 
+  // Not-ready setup states get their own short phrase before any of the
+  // health branches below run: with no config, health_not_configured_json
+  // reports state "attention" with everything else empty, which would
+  // otherwise read as "Repo edits pending commit" -- true of the JSON, not
+  // of reality.
   readonly property string stateText: helperError ? helperError
+    : root.setupState !== "ready" ? (root.setupState === "not-configured" ? "Setup needed" : "Push is off")
     : !st ? "Checking…"
     : sysState === "fault" ? (problems.length ? problems[0] : "Needs attention")
     : sysState === "attention" ? (
@@ -130,22 +164,43 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  function refresh() { if (!statusProc.running) statusProc.running = true }
+  function refresh() { if (root.svc) root.svc.refresh() }
 
-  // ---- actions: every button is one helper subcommand, argv only ----
-  function act(args, onDone) {
-    if (busy) return
-    busy = true
-    var p = actionComponent.createObject(root, { command: [helper].concat(args), callback: onDone || null })
-    p.running = true
+  // The engine's refusal shape for every write verb is {ok:false,
+  // problems:[...]} (lib/widget.sh's widget_reply_fail and the lint-gate
+  // rollback); only die/usage_die emit {ok:false, error}. problems[0] wins
+  // when present so "already allowlisted", "lint rejected the edit (rolled
+  // back)" etc. surface instead of the generic fallback.
+  function actionErrorText(rep, fallback) {
+    return (rep && rep.problems && rep.problems.length) ? rep.problems[0]
+      : (rep && rep.error) ? rep.error
+      : fallback
   }
+
+  // ONE PLACE decides what a reply looks like on screen, so no verb can grow
+  // its own convention. problems[]/error are the refusal shapes and are the
+  // only thing painted in the urgent colour; `note` is a verb saying it did
+  // nothing and had nothing to do, which is not a fault and must not read
+  // like one. Both are cleared on EVERY action: a note left over from the
+  // last button hung around under the next one's result.
+  function reportAction(rep, fallback) {
+    var good = !!(rep && rep.ok === true)
+    root.actionError = good ? "" : root.actionErrorText(rep, fallback)
+    root.actionNote = (good && rep && rep.note) ? String(rep.note) : ""
+    return good
+  }
+
+  // ---- actions: every call runs one CLI verb through the service, argv only.
   function markHandled(path) {
     if (path.charAt(path.length - 1) === "/") handledPrefixes.push(path)
     else handledPaths[path] = true
     handledRev++
   }
   function allowPath(path) {
-    act(["allow", path], function(rep) { if (rep && rep.ok) root.markHandled(path) })
+    if (!root.svc) return
+    root.svc.allow(path, function(rep) {
+      if (root.reportAction(rep, "allow failed")) root.markHandled(path)
+    })
   }
   // The ignore entry point every button uses. With notes on, park the path
   // and let the shared note field collect a reason first.
@@ -155,74 +210,64 @@ Panel {
   }
   function commitIgnore(path, reason) {
     pendingNote = null
-    var args = reason && reason.length ? ["ignore", path, reason] : ["ignore", path]
-    act(args, function(rep) { if (rep && rep.ok) root.markHandled(path) })
+    if (!root.svc) return
+    root.svc.ignore(path, reason, function(rep) {
+      if (root.reportAction(rep, "ignore failed")) root.markHandled(path)
+    })
   }
   function resolveGone(path, verb) {
-    act(["resolve-gone", path, verb], function(rep) { if (rep && rep.ok) root.markHandled(path) })
+    if (!root.svc) return
+    root.svc.resolveGone(path, verb, function(rep) {
+      if (root.reportAction(rep, "resolve failed")) root.markHandled(path)
+    })
   }
   function runSnapshot() {
-    act(["snapshot"])
+    root.actionError = ""; root.actionNote = ""
+    if (root.svc) root.svc.snapshotNow()
     // The next report is ground truth for what the decisions actually silenced.
     handledPaths = {}; handledPrefixes = []; handledRev++
     snapshotSettle.restart()
   }
   function pushOrConfirm() {
     if (root.uncommitted.length > 0) { confirmOpen = !confirmOpen; return }
-    if (root.unpushed > 0) act(["push"])
+    if (!root.svc || !root.hasRemote) return
+    // The engine answers "nothing to push" from git alone, without probing,
+    // and says so in `note`; reportAction renders that dim rather than red.
+    root.svc.pushOrConfirm(false, function(rep) { root.reportAction(rep, "push failed") })
   }
   function confirmPush() {
     confirmOpen = false
-    act(["push", "--confirm"])
+    if (!root.svc) return
+    root.svc.pushOrConfirm(true, function(rep) { root.reportAction(rep, "push failed") })
   }
-  function openTriage() { root.close(); act(["triage-terminal"]) }
+  function openTriage() { root.close(); if (root.svc) root.svc.openTerminal() }
+  function setupAction() {
+    if (!root.svc) return
+    if (root.setupState === "not-configured") root.svc.runSetup()
+    else if (root.setupState === "gitleaks-missing") Quickshell.execDetached(["wl-copy", "sudo pacman -S gitleaks"])
+    // Not `setup --trust-remote --yes`: that was one click to mark a remote
+    // trusted with the wizard's only interactive safety valve bypassed by
+    // design, and the URL shapes the slug parser missed meant a real GitHub
+    // repo could reach this card with no visibility probe ever run. The card
+    // opens the wizard in a terminal instead, where the trust question is
+    // asked with its consequence attached (and refused outright for GitHub).
+    else if (root.setupState === "remote-unverified") root.svc.runSetup()
+  }
 
   onOpenedChanged: if (opened) {
     confirmOpen = false
     pendingNote = null
+    actionNote = ""
     refresh()
     if (panelFlick) panelFlick.contentY = 0
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
   Component.onCompleted: refresh()
 
-  Process {
-    id: statusProc
-    command: [root.helper, "status"]
-    stdout: StdioCollector { id: statusOut; waitForEnd: true }
-    stderr: StdioCollector { waitForEnd: true }
-    onExited: function(code) {
-      try {
-        root.st = JSON.parse(statusOut.text)
-        root.helperError = ""
-      } catch (e) {
-        root.st = null
-        root.helperError = "Backup helper unreachable (" + root.helper + ")"
-      }
-    }
-  }
-
-  property Component actionComponent: Component {
-    Process {
-      id: p
-      property var callback: null
-      stdout: StdioCollector { id: aOut; waitForEnd: true }
-      stderr: StdioCollector { waitForEnd: true }
-      onExited: function(code) {
-        var rep = null
-        try { rep = JSON.parse(aOut.text) } catch (e) {}
-        root.actionError = (rep && rep.ok === true) ? ""
-          : (rep && rep.problems && rep.problems.length ? rep.problems[0] : "helper action failed (exit " + code + ")")
-        if (callback) callback(rep)
-        root.busy = false
-        root.refresh()
-        p.destroy()
-      }
-    }
-  }
-
   // The badge stays honest while the panel is closed: same 10-minute cadence
-  // the config-sync ecosystem uses, cheap read-only git + file reads.
+  // the config-sync ecosystem uses, cheap read-only git + file reads. The
+  // service's FileView already reacts to status.json changing on disk; this
+  // is what actually re-triggers a `status` write between snapshots.
   Timer {
     interval: 600000; repeat: true; running: true
     onTriggered: root.refresh()
@@ -243,11 +288,11 @@ Panel {
     anchors.fill: parent
     bar: root.bar
     Accessible.role: Accessible.Button
-    Accessible.name: "Config backup: " + root.stateText
+    Accessible.name: "OmaBackup: " + root.stateText
     text: root.barGlyph + root.barLabel
     active: root.sysState === "fault"
     fontSize: root.barLabel ? Style.font.bodySmall : Style.bar.iconFont
-    tooltipText: "Config backup: " + root.stateText
+    tooltipText: "OmaBackup: " + root.stateText
     onPressed: function(buttonCode) {
       if (buttonCode === Qt.RightButton) root.refresh()
       else root.toggle()
@@ -298,7 +343,7 @@ Panel {
             id: hero
             readonly property string heroState: root.sysState
             width: parent.width
-            title: "Config Backup"
+            title: "OmaBackup"
             meta: root.stateText
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -318,6 +363,17 @@ Panel {
             text: root.actionError
             textFormat: Text.PlainText
             color: root.urgent
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            wrapMode: Text.Wrap
+          }
+
+          Text {
+            visible: root.actionNote.length > 0
+            width: parent.width
+            text: root.actionNote
+            textFormat: Text.PlainText
+            color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
             wrapMode: Text.Wrap
@@ -369,13 +425,17 @@ Panel {
                 tooltipText: root.timerArmed ? "Pause the daily snapshot timer" : "Resume the daily snapshot timer"
                 foreground: root.timerArmed ? root.foreground : root.urgent
                 fontFamily: root.fontFamily
-                onClicked: root.act(["timer", root.timerArmed ? "pause" : "resume"])
+                onClicked: if (root.svc) root.svc.timer(root.timerArmed ? "pause" : "resume")
               }
             }
             InfoRow {
-              width: parent.width; label: "Pushed"
-              value: root.unpushed > 0 ? root.unpushed + " commit(s) waiting" : "up to date"
-              valueColor: root.unpushed > 0 ? root.urgent : ""
+              width: parent.width
+              label: root.hasRemote ? "Pushed" : "Remote"
+              value: root.remoteMissing ? "configured, but this repo has no origin"
+                   : root.remoteLocalOnly ? "none (local only)"
+                   : !root.hasRemote ? "unknown"
+                   : root.unpushed > 0 ? root.unpushed + " commit(s) waiting" : "up to date"
+              valueColor: root.remoteMissing || (root.hasRemote && root.unpushed > 0) ? root.urgent : ""
               foreground: root.foreground; dimColor: root.dim; fontFamily: root.fontFamily
             }
             InfoRow {
@@ -429,6 +489,22 @@ Panel {
           }
 
           PanelSeparator { width: parent.width; foreground: root.foreground }
+
+          // Not-ready setup states get one card with a single fix-it action;
+          // "ready" and "fault" hide it ("fault" is already covered by the
+          // problems list above). Also gated on svc.st !== null: setupState
+          // defaults to "not-configured" for the one frame before the
+          // service's first status.json read lands, which would otherwise
+          // flash the card open on an already-configured machine too.
+          SetupCard {
+            visible: root.svc && root.svc.st !== null && root.setupState !== "ready" && root.setupState !== "fault"
+            width: parent.width
+            mode: root.setupState
+            foreground: root.foreground
+            urgent: root.urgent
+            fontFamily: root.fontFamily
+            onAction: root.setupAction()
+          }
 
           // Zone 2: triage. Header carries the notes toggle; folder groups
           // first (biggest wins), then loose files; handled rows are gone.
@@ -491,7 +567,7 @@ Panel {
           }
 
           Text {
-            visible: root.remainingDrift === 0 && root.st !== null
+            visible: root.remainingDrift === 0 && root.st !== null && root.setupState === "ready"
             width: parent.width
             text: root.driftCount > 0 ? "All triaged. Run Snapshot to apply and re-scan." : "Nothing unbacked. Every allowlisted path is captured."
             color: root.dim
@@ -564,7 +640,10 @@ Panel {
             }
             Button {
               width: (parent.width - parent.spacing * 2) * 0.33
-              visible: root.uncommitted.length > 0 || root.unpushed > 0
+              // Visible whenever a remote exists, waiting commits or not: a
+              // button that appears only once something is wrong cannot be
+              // found when you want to check that nothing is.
+              visible: root.uncommitted.length > 0 || root.hasRemote
               text: root.uncommitted.length > 0 ? "Commit…  (p)" : "Push  (p)"
               iconText: "󰛃"
               foreground: root.unpushed > 0 ? root.urgent : root.foreground

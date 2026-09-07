@@ -1,0 +1,12 @@
+[Unit]
+Description=OmaBackup: snapshot Omarchy config to the data repo
+Documentation=https://github.com/huey-holdings-llc/omabackup
+# OnFailure is a [Unit] directive. In [Service] systemd ignores it silently.
+OnFailure=omabackup-failed.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/omabackup snapshot
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=10min

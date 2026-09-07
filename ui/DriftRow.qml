@@ -2,11 +2,14 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// One drift line with its inline triage actions. NEW rows offer Allow/Ignore,
-// GONE rows offer Remove/Optional; everything else is information for the
-// Full-triage escape hatch. Whether Ignore asks for a note first is the
-// panel's business (the shared note field), not this row's.
-Item {
+// One drift line with its inline triage actions. NEW and MODIFIED rows offer
+// Allow and Ignore; TOOBIG and EXCLUDED offer Ignore alone; GONE rows offer
+// Remove and (unless the entry is already optional) Mark optional; only ERROR
+// is button-less, because there is nothing to decide about a scan that did
+// not finish. The classes that need explaining carry one line above the
+// buttons. Whether Ignore asks for a note first is the panel's business (the
+// shared note field), not this row's.
+Column {
   id: root
   property var entry: ({})
   property bool busy: false
@@ -19,78 +22,128 @@ Item {
   signal ignoreRequested(string path)
   signal goneRequested(string path, string verb)
 
-  readonly property bool isNew: entry.type === "NEW"
   readonly property bool isGone: entry.type === "GONE"
+  // Ignore is offered for every class lib/widget.sh's gate accepts. docs/
+  // triage.md tells you to ignore a stock file you do not want kept, and a
+  // collapsed ">2000 files" TOOBIG row is the single case the subtree-ignore
+  // shape exists for, so a row without that button was the only place saying
+  // it could not be taken.
+  readonly property bool canIgnore: entry.type === "NEW" || entry.type === "MODIFIED"
+                                 || entry.type === "TOOBIG" || entry.type === "EXCLUDED"
+  // Allow is NOT. A TOOBIG row is a file the allowlist already covers, held
+  // back by maxFileSize; an EXCLUDED row is one the allowlist already covers,
+  // held back by .gitignore. The engine takes the click either way and writes
+  // an entry, so the row struck itself out and came back on the next scan
+  // with nothing changed -- a button that looks like the fix and is not. The
+  // explain line below says which limit is holding the file instead.
+  readonly property bool canAllow: entry.type === "NEW" || entry.type === "MODIFIED"
+  // An entry that is already optional cannot be marked optional again: the
+  // engine refuses it now, and the button that always did nothing goes away.
+  readonly property bool alreadyOptional: entry.optional === true
+  // The report's trailing slash, which the JSON path no longer carries. Allow
+  // on a folder decides for everything put in it later, and "back this up"
+  // does not say that.
+  readonly property bool isDir: entry.dir === true
 
-  implicitHeight: Math.max(tag.implicitHeight, actions.implicitHeight)
+  readonly property string explainText:
+      entry.type === "TOOBIG"   ? "over maxFileSize, so it is allowlisted but not copied. Allow cannot help; raise maxFileSize in the config, or ignore it."
+    : entry.type === "EXCLUDED" ? "matched by .gitignore, so it is allowlisted but not committed. Allow cannot help; add a negation line (for example !name) to the repo's .gitignore, or ignore it."
+    : entry.type === "ERROR"    ? "part of the scan failed; see omabackup status"
+    : ""
 
+  spacing: 0
+
+  // Above the line it explains, and therefore above the buttons: a reader
+  // meets the reason before the two irreversible-looking things they can do
+  // about it.
   Text {
-    id: tag
-    anchors.left: parent.left
-    anchors.leftMargin: root.leftInset
-    anchors.verticalCenter: parent.verticalCenter
-    text: root.entry.type || ""
-    color: root.entry.type === "NEW" ? Color.accent
-         : root.entry.type === "GONE" ? root.urgent : root.dimColor
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.caption
-    font.bold: true
-  }
-
-  Text {
-    anchors.left: tag.right
-    anchors.leftMargin: Style.spacing.sm
-    anchors.right: actions.left
-    anchors.rightMargin: Style.spacing.sm
-    anchors.verticalCenter: parent.verticalCenter
-    text: (root.entry.path || "") + (root.entry.note ? "  (" + root.entry.note + ")" : "")
+    visible: root.explainText.length > 0
+    width: parent.width
+    leftPadding: root.leftInset
+    text: root.explainText
     textFormat: Text.PlainText
-    color: root.foreground
+    color: root.dimColor
     font.family: root.fontFamily
     font.pixelSize: Style.font.caption
-    elide: Text.ElideMiddle
+    wrapMode: Text.Wrap
   }
 
-  Row {
-    id: actions
-    anchors.right: parent.right
-    anchors.verticalCenter: parent.verticalCenter
-    spacing: Style.spacing.xxs
-    AccessibleActionButton {
-      visible: root.isNew
-      enabled: !root.busy
-      iconText: "󰐕"
-      tooltipText: "Add to allowlist (back this up)"
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onClicked: root.allowRequested(root.entry.path)
+  Item {
+    width: parent.width
+    implicitHeight: Math.max(tag.implicitHeight, actions.implicitHeight)
+
+    Text {
+      id: tag
+      anchors.left: parent.left
+      anchors.leftMargin: root.leftInset
+      anchors.verticalCenter: parent.verticalCenter
+      text: root.entry.type || ""
+      color: root.entry.type === "NEW" ? Color.accent
+           : root.entry.type === "GONE" ? root.urgent : root.dimColor
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      font.bold: true
     }
-    AccessibleActionButton {
-      visible: root.isNew
-      enabled: !root.busy
-      iconText: "󰈉"
-      tooltipText: "Ignore (records a dated decision not to back this up)"
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onClicked: root.ignoreRequested(root.entry.path)
+
+    Text {
+      anchors.left: tag.right
+      anchors.leftMargin: Style.spacing.sm
+      anchors.right: actions.left
+      anchors.rightMargin: Style.spacing.sm
+      anchors.verticalCenter: parent.verticalCenter
+      text: (root.entry.path || "") + (root.entry.note ? "  (" + root.entry.note + ")" : "")
+      textFormat: Text.PlainText
+      color: root.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.caption
+      elide: Text.ElideMiddle
     }
-    AccessibleActionButton {
-      visible: root.isGone
-      enabled: !root.busy
-      iconText: "󰆴"
-      tooltipText: "Remove its allowlist entry (path is gone for good)"
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onClicked: root.goneRequested(root.entry.path, "remove")
-    }
-    AccessibleActionButton {
-      visible: root.isGone
-      enabled: !root.busy
-      iconText: "󰘥"
-      tooltipText: "Mark optional (may come back; a missing path stops warning)"
-      foreground: root.foreground
-      fontFamily: root.fontFamily
-      onClicked: root.goneRequested(root.entry.path, "optional")
+
+    Row {
+      id: actions
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      spacing: Style.spacing.xxs
+      AccessibleActionButton {
+        visible: root.canAllow
+        enabled: !root.busy
+        iconText: "󰐕"
+        tooltipText: root.isDir
+          ? "Back up this folder and everything under it, now and later"
+          : "Add to allowlist (back this up)"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onClicked: root.allowRequested(root.entry.path)
+      }
+      AccessibleActionButton {
+        visible: root.canIgnore
+        enabled: !root.busy
+        iconText: "󰈉"
+        tooltipText: root.isDir
+          ? "Never back up anything under this folder (records a dated decision)"
+          : "Ignore (records a dated decision not to back this up)"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onClicked: root.ignoreRequested(root.entry.path)
+      }
+      AccessibleActionButton {
+        visible: root.isGone
+        enabled: !root.busy
+        iconText: "󰆴"
+        tooltipText: "Remove its allowlist entry (path is gone for good)"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onClicked: root.goneRequested(root.entry.path, "remove")
+      }
+      AccessibleActionButton {
+        visible: root.isGone && !root.alreadyOptional
+        enabled: !root.busy
+        iconText: "󰘥"
+        tooltipText: "Mark optional (may come back; a missing path stops warning)"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        onClicked: root.goneRequested(root.entry.path, "optional")
+      }
     }
   }
 }
