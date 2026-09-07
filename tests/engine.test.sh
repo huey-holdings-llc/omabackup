@@ -883,12 +883,14 @@ if group 37 "a stale .git/index.lock self-heals"; then
   [[ ! -f "$FR/.git/index.lock" ]] && ok "stale lock removed" || bad "stale lock still present"
 fi
 if group 38 "a future/garbage last-run stamp does not blind the staleness check"; then
-  mk_fixture g38; seed_home; commit_baseline
-  # Backdate the last COMMIT well past staleDays, so a garbage stamp's
-  # fallback (last commit time) still catches real staleness instead of
-  # silently reading as healthy.
+  mk_fixture g38; seed_home
+  # Backdate the last SNAPSHOT well past staleDays, so a garbage stamp's
+  # fallback (the last snapshot commit's time) still catches real staleness
+  # instead of silently reading as healthy. It used to backdate an empty
+  # commit, which the fallback now rightly ignores: only a commit that touched
+  # the snapshot's own paths counts as a snapshot.
   old_ts=$(( $(date +%s) - 10*86400 ))
-  GIT_COMMITTER_DATE="@$old_ts" git -C "$FR" commit -q --allow-empty -m "old" --date="@$old_ts"
+  check "a snapshot dated ten days ago" env HOME="$FH" GIT_COMMITTER_DATE="@$old_ts" GIT_AUTHOR_DATE="@$old_ts" "$CLI" snapshot --no-push
   printf 'not-a-number\n' > "$FR/manifests/.last-run"
   has "garbage stamp falls back to commit time and still reports staleness" "$(ob health)" "days ago"
   echo $(( $(date +%s) + 2592000 )) > "$FR/manifests/.last-run"
