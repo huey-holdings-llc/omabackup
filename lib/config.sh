@@ -238,7 +238,12 @@ config_load() {
   export DATA_REPO STAGE
 }
 
-cfg() { jq -r --arg k "$1" 'getpath($k | split(".")) // empty' <<<"${CFG_JSON:-{\}}"; }
+# cfg KEY: one config value by dotted path, or nothing when the key is absent.
+# `select(. != null)`, not `// empty`: jq's alternative operator treats false
+# the same as null, so `notify: false` used to read back as the empty string
+# and every caller's "default to true" then applied. The README documented
+# the knob for two releases and nothing honoured it.
+cfg() { jq -r --arg k "$1" 'getpath($k | split(".")) | select(. != null)' <<<"${CFG_JSON:-{\}}"; }
 
 # config_write JSON: atomic, 0600, parent 0700.
 config_write() {

@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. The format follows
 Keep a Changelog 1.1.0 and the project uses Semantic Versioning.
 
+## [Unreleased]
+
+### Fixed
+
+`notify: false` in the config now silences desktop notifications. The knob
+has existed since 0.7.0 and the README now lists it, with the other config
+keys and their defaults. The config reader used jq's `//` to supply a
+default, and that operator treats `false` the same as a missing key, so a
+configured `false` read back as nothing and the built-in default of `true`
+took over. `remote.trusted` and `shellNag` went through the same reader and
+were unaffected only because everything that reads them asks "is it true".
+
 ## [0.7.0] - 2026-09-06
 
 If you have been running 0.2.0, this is the release where the plugin stops
