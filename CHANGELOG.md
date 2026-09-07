@@ -15,6 +15,14 @@ configured `false` read back as nothing and the built-in default of `true`
 took over. `remote.trusted` and `shellNag` went through the same reader and
 were unaffected only because everything that reads them asks "is it true".
 
+`verify` on a data repo with no `manifests/.last-run` stamp (a fresh clone,
+which never has one, or a repo adopted from another machine) now treats the
+last snapshot commit as "the last run", not HEAD. HEAD right after `setup
+--import` is the adoption marker commit, so every live file edited between
+the last snapshot and the import read as a fidelity problem. The run also
+says when it is reasoning from a stand-in, and that a snapshot writes the
+real stamp.
+
 ## [0.7.0] - 2026-09-06
 
 If you have been running 0.2.0, this is the release where the plugin stops

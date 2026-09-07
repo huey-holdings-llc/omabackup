@@ -156,7 +156,20 @@ cmd_verify() {
       VERIFY_SINCE=$(stat -c %Y "$DATA_REPO/manifests/.last-run" 2>/dev/null) || VERIFY_SINCE=0
     fi
   else
-    VERIFY_SINCE=$(git -C "$DATA_REPO" log -1 --format=%ct 2>/dev/null) || VERIFY_SINCE=0
+    # No stamp at all: a fresh clone (the file is gitignored), or a repo that
+    # has never snapshotted on this machine. The stand-in is the time of the
+    # last commit that touched the snapshot's own output paths, which is the
+    # last snapshot. It used to
+    # be HEAD's time, and HEAD right after `setup --import` is the adoption
+    # marker commit, hours or days after the snapshot, so every live file
+    # edited in between read as a fidelity problem. A commit time is the END
+    # of a run, not its start, so a file edited during that run can still be
+    # reported; the warning says so, and a snapshot writes the real stamp.
+    VERIFY_SINCE=$(git -C "$DATA_REPO" log -1 --format=%ct -- home etc manifests modes.txt 2>/dev/null) || VERIFY_SINCE=""
+    if [[ -z "$VERIFY_SINCE" ]]; then
+      VERIFY_SINCE=$(git -C "$DATA_REPO" log -1 --format=%ct 2>/dev/null) || VERIFY_SINCE=0
+    fi
+    warn "manifests/.last-run is missing (a fresh clone has none); files newer than the last snapshot commit are treated as changed since it. A file edited during that run may still be reported; run omabackup snapshot for an exact answer"
   fi
 
   # Symlinks are enumerated alongside files. `-type f` skipped them entirely,
