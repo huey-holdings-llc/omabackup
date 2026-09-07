@@ -3702,9 +3702,6 @@ if group 93 "an existing repo's .gitignore gains the patterns this version ships
     "$(git -C "$FR" status --porcelain -- .gitignore)" ""
 fi
 
-echo; echo "passed=$pass failed=$fail"
-[[ $fail == 0 ]]
-
 if group 94 "notify: false in the config actually silences notifications"; then
   # cfg() read every value through jq's `// empty`, and the alternative
   # operator treats false exactly like null, so a configured false came back
@@ -3730,3 +3727,6 @@ if group 94 "notify: false in the config actually silences notifications"; then
   jq 'del(.notify)' "$OMABACKUP_CONFIG" > "$T/c94.json" && mv "$T/c94.json" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
   [[ -n "$(nf94)" ]] && ok "an absent notify key still sends" || bad "an absent notify key sent nothing"
 fi
+
+echo; echo "passed=$pass failed=$fail"
+[[ $fail == 0 ]]
