@@ -105,11 +105,11 @@ secrets_filename_gate() {
   local hits names rc
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
   mkdir -m 700 -p "$STATE_DIR" 2>/dev/null || true
-  names=$(mktemp "$STATE_DIR/.gate.XXXXXX") || die "filename gate: cannot create its scratch file under $STATE_DIR; nothing committed"
+  names=$(mktemp "$STATE_DIR/.gate.XXXXXX") || die "filename gate: cannot create its scratch file under $STATE_DIR; no snapshot was committed"
   rc=0; find "$1" -type f -printf '%f\0' > "$names" || rc=$?
   if [[ $rc -ne 0 ]]; then
     rm -f "$names"
-    die "filename gate could not walk the staging tree (find exited $rc); a gate that cannot look does not pass. Nothing committed"
+    die "filename gate could not walk the staging tree (find exited $rc); a gate that cannot look does not pass. No snapshot was committed"
   fi
   hits=$(grep -zE "$SECRET_NAME_RE" "$names" \
     | grep -zvE "$SECRET_KEY_PUB_RE" \
@@ -145,7 +145,7 @@ secrets_scan_staging() {
   # read, so a real leak never reached reset/die at all.
   local rc=0
   if [[ "${JSON:-0}" == 1 ]]; then "${gl[@]}" >&2 || rc=$?; else "${gl[@]}" || rc=$?; fi
-  [[ $rc -eq 0 ]] || die "gitleaks exited $rc scanning the staging tree; investigate the output above; nothing committed"
+  [[ $rc -eq 0 ]] || die "gitleaks exited $rc scanning the staging tree; investigate the output above; no snapshot was committed"
 }
 
 # secrets_scan_staged: the authoritative gate, over exactly what `git add`
@@ -178,5 +178,5 @@ secrets_scan_staged() {
   else
     ( cd "$DATA_REPO" && "${gl[@]}" ) || rc=$?
   fi
-  [[ $rc -eq 0 ]] || { git -C "$DATA_REPO" reset -q; die "gitleaks exited $rc on the staged commit; staging undone, nothing committed"; }
+  [[ $rc -eq 0 ]] || { git -C "$DATA_REPO" reset -q; die "gitleaks exited $rc on the staged commit; staging undone, no snapshot was committed"; }
 }
