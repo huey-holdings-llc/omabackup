@@ -273,6 +273,15 @@ setup_import() {
   done
   # Absolute, for the same reason setup_data_repo resolves its own directory.
   dir=$(cd "$dir" && pwd -P) || die "could not resolve the data repo path: $1"
+  # Under the repo lock from here, and BEFORE the config names this repo: an
+  # import aimed at the repo the timer is already snapshotting would otherwise
+  # write the marker, stage and commit while that run is mid-pipeline, and a
+  # refusal after config_write left the config pointing at a repo setup had
+  # just said it could not adopt. Setup is interactive, so a held lock is a
+  # refusal with the reason, not a wait that looks like a hang. take_lock
+  # keys on DATA_REPO, so it is set first; on refusal the process ends here.
+  DATA_REPO=$dir
+  take_lock || die "the repo lock is held (a snapshot may be running); try again shortly"
   # An imported repo was cloned by someone else, under whatever umask they
   # had, and this path chmod'd nothing at all, so all of .git stayed readable.
   # setup_marker below tightens it, once the marker says the repo is ours.
@@ -286,12 +295,6 @@ setup_import() {
   DATA_REPO=$dir
   # shellcheck disable=SC2034  # STAGE: read by later libs (lib/config.sh), not this file
   STAGE="$dir/.staging"
-  # Under the repo lock from here: an import aimed at the repo the timer is
-  # already snapshotting would otherwise write the marker, stage and commit
-  # while that run is mid-pipeline, and the sync's clean-index check below
-  # could be true one moment and false the next. Setup is interactive, so a
-  # held lock is a refusal with the reason, not a wait that looks like a hang.
-  take_lock || die "the repo lock is held (a snapshot may be running); try again shortly"
   # `adopted` collects exactly what THIS run wrote, so the commit below can
   # stage it by name, the same half of the mutation rule setup_seed keeps.
   local -a adopted=()

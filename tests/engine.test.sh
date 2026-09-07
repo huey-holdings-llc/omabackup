@@ -1700,6 +1700,21 @@ if group 61 "setup --import adopts an existing engine repo; unattended trust sta
     "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "false"
   [[ -e "$FR/.gitleaks.toml" ]] && bad "import wrote a .gitleaks.toml the engine never reads" \
     || ok "import lays down no .gitleaks.toml either"
+  # A held lock refuses the import BEFORE the config names the repo: the
+  # refusal used to come after config_write, so a busy repo silently replaced
+  # a working configuration with one setup had just said it could not adopt
+  # (Codex, PR 3).
+  jq '.dataRepo="/somewhere/else"' "$OMABACKUP_CONFIG" > "$T/c61b" && mv "$T/c61b" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  rm -f "$FR/.omabackup"
+  flock "$FR/.lock" sleep 30 &
+  hold61=$!
+  sleep 0.5
+  l61=$(env HOME="$FH" OMABACKUP_LOCK_WAIT=1 "$CLI" setup --import "$FR" --no-timers --yes 2>&1); rc61=$?
+  kill "$hold61" 2>/dev/null; wait "$hold61" 2>/dev/null || true
+  eq "import refuses while the repo lock is held" "$rc61" "1"
+  has "and says so" "$l61" "lock is held"
+  eq "and the config still names the repo it had before" "$(jq -r .dataRepo "$OMABACKUP_CONFIG")" "/somewhere/else"
+  eq "and no marker was written" "$([[ -f "$FR/.omabackup" ]] && echo yes || echo no)" "no"
 
   git init -q "$T/notarepo"
   fails "import refuses a directory without the lists" env HOME="$FH" "$CLI" setup --import "$T/notarepo" --no-timers --yes
