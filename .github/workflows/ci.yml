@@ -15,10 +15,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Static checks
         run: bash tests/lint.sh
-      - name: Engine suite
-        env:
-          OMABACKUP_TEST_TMP: /root/omabackup-tests
-          HOME: /root
+      # The suite asserts on file modes and on directories it has made
+      # unreadable, and root reads anything, so it runs as an ordinary user
+      # the way it does on an Omarchy box. The step that installs tools above
+      # is the only one that needs root.
+      - name: Engine suite, as a user
         run: |
-          git config --global --add safe.directory "$PWD"
-          bash tests/engine.test.sh
+          useradd -m ci
+          chown -R ci:ci "$PWD"
+          su ci -c "git config --global --add safe.directory '$PWD' && cd '$PWD' && HOME=/home/ci OMABACKUP_TEST_TMP=/home/ci/omabackup-tests bash tests/engine.test.sh"

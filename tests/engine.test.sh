@@ -52,7 +52,9 @@ mk_fixture() {
   T="$ROOT/$1"; FH="$T/home"; FR="$T/data"; BARE="$T/remote.git"; STOCK="$T/stock"
   mkdir -p "$FH" "$FR" "$T/state" "$T/cfg"
   cp -a "$STOCK_SRC" "$STOCK"
-  git init -q --bare "$BARE"
+  # -b main: a fresh git has no init.defaultBranch, so a clone of this bare
+  # would otherwise land on master and never see the main the engine pushes.
+  git init -q --bare -b main "$BARE"
   git -C "$FR" init -q -b main
   git -C "$FR" config user.email t@t; git -C "$FR" config user.name t
   git -C "$FR" remote add origin "$BARE"
@@ -2132,7 +2134,7 @@ if group 69 "a remote advanced elsewhere reads as diverged, not as a retryable p
   git -C "$FR" push -q -u origin main
 
   # A second clone stands in for the other machine.
-  git clone -q "$BARE" "$T/other"
+  git clone -q -b main "$BARE" "$T/other"
   git -C "$T/other" config user.email t@t; git -C "$T/other" config user.name t
   git -C "$T/other" commit -q --allow-empty -m "from the other machine"
   git -C "$T/other" push -q origin main
@@ -2572,9 +2574,13 @@ if group 76 "restore refuses manifest lines that are not package or unit names";
   if ! command -v pacman >/dev/null; then
     echo "  (pacman not installed: skipping the package half)"
   else
-    # Both manifests are replaced with a KNOWN set, so the "well-formed
+    # The manifests are replaced with a KNOWN set, so the "well-formed
     # entries still enumerate" assertion below can name an exact result
-    # instead of a count that no input could ever fail.
+    # instead of a count that no input could ever fail. The native list is
+    # padded past the stage's 100-entry truncation floor: a minimal container
+    # has fewer explicit packages than that, and the floor returns before the
+    # refusals this group is about.
+    seq -f 'known-native-%03g' 1 100 > "$FR/manifests/pacman-native.txt"
     printf -- '--noconfirm\naur-not-installed-zzz\n' > "$FR/manifests/pacman-aur.txt"
     printf 'ok-one.service\nok-two.timer\n/tmp/evil.service\n' > "$FR/manifests/systemd-user.txt"
     : > "$FR/manifests/systemd-user-off.txt"
@@ -2679,6 +2685,11 @@ if group 79 "a restore stage that fails still leaves one JSON object and a relea
   # on a zero-returning statement today, which is not a property anyone can
   # rely on while adding the next one.
   mk_fixture g79; seed_home; commit_baseline
+  # A known unit manifest: the snapshot fills systemd-user.txt from the running
+  # user session, and a container or a CI runner has none, so "the later stage
+  # still ran" needs names it can be seen enumerating.
+  printf 'ok-one.service\nok-two.timer\n' > "$FR/manifests/systemd-user.txt"
+  git -C "$FR" commit -qam "known unit manifest"
   # An etc/ tree the stage cannot enumerate: the stage now says so and returns
   # non-zero, which is exactly the shape the chain has to survive.
   chmod 000 "$FR/etc"
