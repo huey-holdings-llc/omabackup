@@ -273,6 +273,15 @@ setup_import() {
   done
   # Absolute, for the same reason setup_data_repo resolves its own directory.
   dir=$(cd "$dir" && pwd -P) || die "could not resolve the data repo path: $1"
+  # Under the repo lock from here, and BEFORE the config names this repo: an
+  # import aimed at the repo the timer is already snapshotting would otherwise
+  # write the marker, stage and commit while that run is mid-pipeline, and a
+  # refusal after config_write left the config pointing at a repo setup had
+  # just said it could not adopt. Setup is interactive, so a held lock is a
+  # refusal with the reason, not a wait that looks like a hang. take_lock
+  # keys on DATA_REPO, so it is set first; on refusal the process ends here.
+  DATA_REPO=$dir
+  take_lock || die "the repo lock is held (a snapshot may be running); try again shortly"
   # An imported repo was cloned by someone else, under whatever umask they
   # had, and this path chmod'd nothing at all, so all of .git stayed readable.
   # setup_marker below tightens it, once the marker says the repo is ours.
@@ -302,6 +311,11 @@ setup_import() {
   git -C "$DATA_REPO" add -- "${adopted[@]}" >/dev/null || die "could not stage the adoption marker"
   git_ident_args
   git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -qm "omabackup: adopt existing repo" >/dev/null 2>&1 || true
+  # A repo from an older version lacks the ignore patterns added since. The
+  # gate used to append them on the first scan and leave the edit; the sync
+  # now owns its commit, and adoption is the other path that commits.
+  data_repo_gitignore_sync_commit
+  drop_lock
   setup_phase "imported"
 }
 

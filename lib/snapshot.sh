@@ -771,6 +771,10 @@ cmd_snapshot() {
   fi
 
   repo_assert_clean
+  # The shipped ignore patterns, and their commit, belong here: under the
+  # lock, on the one path that commits every day. Not on a dry run, which
+  # promises the repo is not modified.
+  [[ $dry == 1 ]] || data_repo_gitignore_sync_commit
   snapshot_floors_from_history
   snapshot_assert_allowlist
   snapshot_stage

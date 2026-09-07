@@ -883,12 +883,14 @@ if group 37 "a stale .git/index.lock self-heals"; then
   [[ ! -f "$FR/.git/index.lock" ]] && ok "stale lock removed" || bad "stale lock still present"
 fi
 if group 38 "a future/garbage last-run stamp does not blind the staleness check"; then
-  mk_fixture g38; seed_home; commit_baseline
-  # Backdate the last COMMIT well past staleDays, so a garbage stamp's
-  # fallback (last commit time) still catches real staleness instead of
-  # silently reading as healthy.
+  mk_fixture g38; seed_home
+  # Backdate the last SNAPSHOT well past staleDays, so a garbage stamp's
+  # fallback (the last snapshot commit's time) still catches real staleness
+  # instead of silently reading as healthy. It used to backdate an empty
+  # commit, which the fallback now rightly ignores: only a commit that touched
+  # the snapshot's own paths counts as a snapshot.
   old_ts=$(( $(date +%s) - 10*86400 ))
-  GIT_COMMITTER_DATE="@$old_ts" git -C "$FR" commit -q --allow-empty -m "old" --date="@$old_ts"
+  check "a snapshot dated ten days ago" env HOME="$FH" GIT_COMMITTER_DATE="@$old_ts" GIT_AUTHOR_DATE="@$old_ts" "$CLI" snapshot --no-push
   printf 'not-a-number\n' > "$FR/manifests/.last-run"
   has "garbage stamp falls back to commit time and still reports staleness" "$(ob health)" "days ago"
   echo $(( $(date +%s) + 2592000 )) > "$FR/manifests/.last-run"
@@ -1698,6 +1700,21 @@ if group 61 "setup --import adopts an existing engine repo; unattended trust sta
     "$(jq -r .remote.trusted "$OMABACKUP_CONFIG")" "false"
   [[ -e "$FR/.gitleaks.toml" ]] && bad "import wrote a .gitleaks.toml the engine never reads" \
     || ok "import lays down no .gitleaks.toml either"
+  # A held lock refuses the import BEFORE the config names the repo: the
+  # refusal used to come after config_write, so a busy repo silently replaced
+  # a working configuration with one setup had just said it could not adopt
+  # (Codex, PR 3).
+  jq '.dataRepo="/somewhere/else"' "$OMABACKUP_CONFIG" > "$T/c61b" && mv "$T/c61b" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  rm -f "$FR/.omabackup"
+  flock "$FR/.lock" sleep 30 &
+  hold61=$!
+  sleep 0.5
+  l61=$(env HOME="$FH" OMABACKUP_LOCK_WAIT=1 "$CLI" setup --import "$FR" --no-timers --yes 2>&1); rc61=$?
+  kill "$hold61" 2>/dev/null; wait "$hold61" 2>/dev/null || true
+  eq "import refuses while the repo lock is held" "$rc61" "1"
+  has "and says so" "$l61" "lock is held"
+  eq "and the config still names the repo it had before" "$(jq -r .dataRepo "$OMABACKUP_CONFIG")" "/somewhere/else"
+  eq "and no marker was written" "$([[ -f "$FR/.omabackup" ]] && echo yes || echo no)" "no"
 
   git init -q "$T/notarepo"
   fails "import refuses a directory without the lists" env HOME="$FH" "$CLI" setup --import "$T/notarepo" --no-timers --yes
@@ -3639,21 +3656,32 @@ if group 92 "omabackup's own unit files are not drift, and their neighbours stil
   eq "and lint is happy with the seeded entry" "$(obj lint --no-walk | jq -r .ok)" "true"
 fi
 
-if group 93 "an existing repo's .gitignore gains the patterns this version ships"; then
+if group 93 "an existing repo's .gitignore gains the patterns this version ships, and the sync owns its commit"; then
   # Both cp sites in setup are conditional (`[[ -f .gitignore ]] || cp`), which
   # is right on its own -- a rewrite would take lines the user added -- but
   # together they meant a repo created before a class was added to
   # share/data.gitignore never got it, and nothing was going to. `.omabackup.*`
   # is the live example: on such a repo the marker's interrupted-setup scratch
   # file is an untracked file the login check names at every new terminal.
+  #
+  # The sync used to run from data_repo_require, so every verb, including the
+  # read-only ones the widget calls every few minutes, wrote to the data repo
+  # outside the lock, and then left the edit for a human to commit. It now
+  # runs from the snapshot, under the lock, and commits what it appended.
   mk_fixture g93; seed_home
   # A pre-0.7.0 .gitignore: the shipped file minus two of its lines, plus one
   # of the user's own that nothing may touch.
   grep -vxF -e '.omabackup.*' -e 'Cookies*' "$HERE/../share/data.gitignore" > "$FR/.gitignore"
   printf '\n# mine, not omabackup\nmy-own-scratch/\n' >> "$FR/.gitignore"
   git -C "$FR" commit -qam "a .gitignore from an older version"
-
+  n93=$(wc -l < "$FR/.gitignore")
+  # Read-only verbs, and a dry run, do not write to the data repo at all.
   eq "status still answers about this repo" "$(obj status | jq -r .repo)" "$FR"
+  obj lint --no-walk >/dev/null; ob drift >/dev/null; ob snapshot --dry-run >/dev/null
+  eq "status, lint, drift and a dry run leave .gitignore alone" "$(wc -l < "$FR/.gitignore")" "$n93"
+  eq "and the repo clean" "$(git -C "$FR" status --porcelain -- .gitignore)" ""
+  # The snapshot syncs, and commits the sync on its own, before its own commit.
+  check "the snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
   eq "the marker-scratch pattern is there now" \
     "$(grep -cxF '.omabackup.*' "$FR/.gitignore")" "1"
   eq "and so is every other shipped line it lacked" \
@@ -3661,39 +3689,121 @@ if group 93 "an existing repo's .gitignore gains the patterns this version ships
   eq "the line the user added is untouched" \
     "$(grep -cxF 'my-own-scratch/' "$FR/.gitignore")" "1"
   eq "nothing shipped was removed" "$(grep -cxF '.staging/' "$FR/.gitignore")" "1"
-  # ONCE. Every verb calls data_repo_require, so a sync that cannot tell
-  # "already there" from "missing" would append the same block on every run.
-  n93=$(wc -l < "$FR/.gitignore")
+  eq "the sync's edit is committed" "$(git -C "$FR" status --porcelain -- .gitignore)" ""
+  eq "in a commit of its own that names what it did" \
+    "$(git -C "$FR" log -1 --format=%s -- .gitignore)" "omabackup: .gitignore gains 2 ignore pattern(s) this version ships"
+  eq "and that commit holds .gitignore and nothing else" \
+    "$(git -C "$FR" log -1 --name-only --format= -- .gitignore)" ".gitignore"
+  if git -C "$FR" log -1 --name-only --format= | grep -qx '.gitignore'; then
+    bad "the snapshot commit swept .gitignore up" "$(git -C "$FR" log -1 --oneline --name-only)"
+  else
+    ok "the snapshot's own commit does not carry .gitignore"
+  fi
+  # ONCE. A second snapshot, and every read-only verb, append nothing.
+  n93=$(wc -l < "$FR/.gitignore"); c93=$(git -C "$FR" rev-list --count HEAD)
   obj status >/dev/null; obj lint --no-walk >/dev/null; ob drift >/dev/null
-  eq "three more verbs append nothing" "$(wc -l < "$FR/.gitignore")" "$n93"
+  check "a second snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "a second snapshot and three verbs append nothing" "$(wc -l < "$FR/.gitignore")" "$n93"
   eq "and no pattern is duplicated" "$(grep -cxF '.omabackup.*' "$FR/.gitignore")" "1"
+  eq "and no second sync commit exists" \
+    "$(git -C "$FR" log --format=%s | grep -c 'gitignore gains' || true)" "1"
+  [[ $(git -C "$FR" rev-list --count HEAD) -le $((c93 + 1)) ]] \
+    && ok "the second snapshot made at most its own commit" || bad "extra commits after the second snapshot"
+
   # A repo that already has every line is the normal case, and it must not be
   # written to at all: mk_fixture copies the shipped file verbatim.
-  mk_fixture g93b; seed_home
+  mk_fixture g93b; seed_home; commit_baseline
+  c93b=$(git -C "$FR" rev-list --count HEAD)
   obj status >/dev/null
-  eq "a current repo is left completely alone" \
+  check "a snapshot on a current repo" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "a current repo's .gitignore is left completely alone" \
     "$(git -C "$FR" status --porcelain -- .gitignore)" ""
-  # The edit the sync makes is reported as an uncommitted edit, so it needs a
-  # button that commits it. Without .gitignore in push's watch list the widget
-  # shows a count nothing it offers can clear.
+  eq "and gets no sync commit" \
+    "$(git -C "$FR" log --format=%s | grep -c 'gitignore gains' || true)" "0"
+  [[ $(git -C "$FR" rev-list --count HEAD) -le $((c93b + 1)) ]] \
+    && ok "at most the snapshot's own commit" || bad "extra commits on a current repo"
+
+  # The user's OWN uncommitted edit to .gitignore: the patterns are still
+  # appended (every run without them can commit a credential file), but the
+  # tool signs no commit that carries an edit it did not make. The edit is
+  # reported, and push offers to commit exactly that file.
   mk_fixture g93c; seed_home
   grep -vxF '.omabackup.*' "$HERE/../share/data.gitignore" > "$FR/.gitignore"
   git -C "$FR" commit -qam "a .gitignore from an older version"
-  eq "the sync's own edit is reported" \
+  printf 'my-unfinished-edit/\n' >> "$FR/.gitignore"
+  s93c=$(ob snapshot --no-push || true)
+  eq "the shipped pattern was still appended" "$(grep -cxF '.omabackup.*' "$FR/.gitignore")" "1"
+  eq "the user's edit is intact" "$(grep -cxF 'my-unfinished-edit/' "$FR/.gitignore")" "1"
+  eq "nothing was committed for .gitignore" \
+    "$(git -C "$FR" log --format=%s | grep -c 'gitignore gains' || true)" "0"
+  has "and the run says why" "$s93c" "already uncommitted"
+  eq "the edit is reported" \
     "$(obj status | jq -r '[.uncommitted[] | select(test("gitignore"))] | length')" "1"
   eq "and push offers to commit exactly that file" \
     "$(obj push | jq -r '[.files[]? | select(. == ".gitignore")] | length')" "1"
+  # Something the user STAGED before the run is the other way an edit rides
+  # into a commit that is not theirs. snapshot_commit unstages it; the sync
+  # commit runs before that and must see it and stand down.
+  mk_fixture g93s; seed_home
+  grep -vxF '.omabackup.*' "$HERE/../share/data.gitignore" > "$FR/.gitignore"
+  git -C "$FR" commit -qam "a .gitignore from an older version"
+  printf 'staged-by-hand\n' >> "$FR/allowlist.txt"; git -C "$FR" add allowlist.txt
+  h93s=$(git -C "$FR" rev-parse HEAD)
+  s93s=$(ob snapshot --no-push || true)
+  eq "with a dirty index the pattern is appended" "$(grep -cxF '.omabackup.*' "$FR/.gitignore")" "1"
+  eq "but not committed" "$(git -C "$FR" log --format=%s | grep -c 'gitignore gains' || true)" "0"
+  has "and the run says the index was the reason" "$s93s" "already staged"
+  if git -C "$FR" log "$h93s..HEAD" --name-only --format= | grep -qx 'allowlist.txt'; then
+    bad "the staged allowlist edit rode into a commit" "$(git -C "$FR" log "$h93s..HEAD" --oneline --name-only | head -6)"
+  else
+    ok "the staged allowlist edit rode into no commit"
+  fi
+
+  # Adoption is the other path that commits, and a repo from an older version
+  # is exactly what it adopts: the sync and its commit happen there too, so
+  # the very first status after import reports a clean repo.
+  mk_fixture g93i; seed_home; rm "$FR/.omabackup"
+  grep -vxF '.omabackup.*' "$HERE/../share/data.gitignore" > "$FR/.gitignore"
+  git -C "$FR" commit -qam "a .gitignore from an older version"
+  check "import adopts the older repo" env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes
+  eq "import synced the shipped pattern" "$(grep -cxF '.omabackup.*' "$FR/.gitignore")" "1"
+  eq "and committed it" "$(git -C "$FR" status --porcelain | grep -c . || true)" "0"
+  eq "as the sync's own commit" \
+    "$(git -C "$FR" log --format=%s | grep -c 'gitignore gains' || true)" "1"
+
+  # The sync commit lands BEFORE the pipeline's checks, so a run that then
+  # refuses still leaves it as HEAD. Health's stand-in for a missing stamp
+  # used to be HEAD's time, which made that refused run read as a snapshot
+  # taken just now and silenced the stale-backup problem (Codex, PR 3). The
+  # stand-in is the last commit that touched the snapshot's own paths.
+  mk_fixture g93r; seed_home
+  old93=$(( $(date +%s) - 5*86400 ))
+  check "a snapshot dated five days ago" env HOME="$FH" GIT_COMMITTER_DATE="@$old93" GIT_AUTHOR_DATE="@$old93" "$CLI" snapshot --no-push
+  grep -vxF '.omabackup.*' "$HERE/../share/data.gitignore" > "$FR/.gitignore"
+  git -C "$FR" commit -qam "a .gitignore from an older version"
+  rm -f "$FR/manifests/.last-run"
+  # A credential-shaped name in an allowlisted folder: the filename gate
+  # refuses, and it runs after the sync.
+  allow '.config/mytool'
+  printf 'k\n' > "$FH/.config/mytool/mytool.key"
+  fails "the run refuses at the filename gate" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the sync commit is HEAD all the same" \
+    "$(git -C "$FR" log -1 --format=%s)" "omabackup: .gitignore gains 1 ignore pattern(s) this version ships"
+  st93r=$(obj status)
+  eq "but the last snapshot still reads as five days old" "$(jq -r .last_run_age_days <<<"$st93r")" "5"
+  has "and the stale-backup problem is reported" "$(jq -r '.problems[]' <<<"$st93r")" "last snapshot was 5 days ago"
+  rm -f "$FH/.config/mytool/mytool.key"
 
   # GREP HAS THREE EXIT CODES, and only two of them are an answer. 0 is "the
   # line is there", 1 is "it is not", and anything above 1 is grep saying it
   # could not look. Read as a plain boolean, that third code means "absent",
   # so a .gitignore this tool cannot READ but can WRITE had the entire shipped
-  # block appended to it -- on every verb, forever, to a file that may already
-  # have had every line. A sync that cannot compare does not sync.
+  # block appended to it -- on every run, to a file that may already have had
+  # every line. A sync that cannot compare does not sync.
   mk_fixture g93d; seed_home
   before93=$(wc -c < "$FR/.gitignore")
   chmod 200 "$FR/.gitignore"
-  w93=$(ob status || true)
+  w93=$(ob snapshot --no-push || true)
   chmod 600 "$FR/.gitignore"
   eq "an unreadable .gitignore is left byte for byte as it was" \
     "$(wc -c < "$FR/.gitignore")" "$before93"

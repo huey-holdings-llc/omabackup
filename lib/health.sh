@@ -67,7 +67,17 @@ health_collect() {
   if [[ -r "$DATA_REPO/manifests/.last-run" ]]; then
     last=$(cat "$DATA_REPO/manifests/.last-run" 2>/dev/null) || last=""
   fi
-  case "$last" in ''|*[!0-9]*) last=$(git -C "$DATA_REPO" log -1 --format=%ct 2>/dev/null || true) ;; esac
+  # No stamp (a fresh clone has none) or garbage: the stand-in is the last
+  # commit that touched the snapshot's own output paths, which is the last
+  # snapshot. HEAD's time stood in before, and HEAD is whatever committed
+  # last: the adoption marker, a list commit from push --confirm, or the
+  # .gitignore sync's own commit, which lands before the pipeline's checks and
+  # so exists even when the run then refused. Any of those made a stale
+  # backup read as fresh. HEAD only when no snapshot has ever been committed.
+  case "$last" in ''|*[!0-9]*)
+    last=$(git -C "$DATA_REPO" log -1 --format=%ct -- home etc manifests modes.txt 2>/dev/null || true)
+    case "$last" in '') last=$(git -C "$DATA_REPO" log -1 --format=%ct 2>/dev/null || true) ;; esac ;;
+  esac
   case "$last" in ''|*[!0-9]*) last=0 ;; esac
   H_LAST=$last; H_AGE_DAYS=-1
   if [[ "$H_LAST" -eq 0 ]]; then
