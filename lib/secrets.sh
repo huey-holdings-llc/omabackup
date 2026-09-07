@@ -92,12 +92,29 @@ gitleaks_available() { have gitleaks; }
 # anything, so a private key walked straight through the gate that exists to
 # stop it. `%f\0` with `grep -z` keeps the name whole, and `[^/]+` is what
 # lets the whole name match once the newline is part of it.
+#
+# find's own exit status is checked, separately from the greps that follow
+# it. The whole walk used to sit in one pipeline ending in `|| true`, which
+# was there for grep's "no match" exit and swallowed find's too: a find that
+# died on an unreadable directory, or did not start at all, produced no
+# names, no names matched, and the gate passed. A gate that could not look
+# refuses the run. The list goes through a file (a redirect, not a pipe, so
+# find's status is find's) because a NUL byte does not survive a bash
+# variable, and the file lives in $STATE_DIR, never /tmp.
 secrets_filename_gate() {
-  local hits
-  hits=$(find "$1" -type f -printf '%f\0' 2>/dev/null \
-    | grep -zE "$SECRET_NAME_RE" \
+  local hits names rc
+  # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
+  mkdir -m 700 -p "$STATE_DIR" 2>/dev/null || true
+  names=$(mktemp "$STATE_DIR/.gate.XXXXXX") || die "filename gate: cannot create its scratch file under $STATE_DIR; no snapshot was committed"
+  rc=0; find "$1" -type f -printf '%f\0' > "$names" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    rm -f "$names"
+    die "filename gate could not walk the staging tree (find exited $rc); a gate that cannot look does not pass. No snapshot was committed"
+  fi
+  hits=$(grep -zE "$SECRET_NAME_RE" "$names" \
     | grep -zvE "$SECRET_KEY_PUB_RE" \
     | tr '\n\0' ' \n' || true)
+  rm -f "$names"
   [[ -z "$hits" ]] || die "credential-looking filename(s) in the staging tree: $(head -3 <<<"$hits" | tr '\n' ' ')"
 }
 
@@ -128,7 +145,7 @@ secrets_scan_staging() {
   # read, so a real leak never reached reset/die at all.
   local rc=0
   if [[ "${JSON:-0}" == 1 ]]; then "${gl[@]}" >&2 || rc=$?; else "${gl[@]}" || rc=$?; fi
-  [[ $rc -eq 0 ]] || die "gitleaks exited $rc scanning the staging tree; investigate the output above; nothing committed"
+  [[ $rc -eq 0 ]] || die "gitleaks exited $rc scanning the staging tree; investigate the output above; no snapshot was committed"
 }
 
 # secrets_scan_staged: the authoritative gate, over exactly what `git add`
@@ -161,5 +178,5 @@ secrets_scan_staged() {
   else
     ( cd "$DATA_REPO" && "${gl[@]}" ) || rc=$?
   fi
-  [[ $rc -eq 0 ]] || { git -C "$DATA_REPO" reset -q; die "gitleaks exited $rc on the staged commit; staging undone, nothing committed"; }
+  [[ $rc -eq 0 ]] || { git -C "$DATA_REPO" reset -q; die "gitleaks exited $rc on the staged commit; staging undone, no snapshot was committed"; }
 }

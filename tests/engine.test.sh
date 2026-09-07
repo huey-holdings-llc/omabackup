@@ -3866,5 +3866,31 @@ if group 95 "verify without a last-run stamp reasons from the last snapshot, not
   eq "with a stamp the stamp decides" "$(obj verify | jq -r .ok)" "true"
 fi
 
+if group 96 "a filename gate that cannot walk the staging tree refuses the run"; then
+  # The gate's find sat in one pipeline ending in `|| true`, put there for
+  # grep's no-match exit, and it swallowed find's exit too: a find that died
+  # on an unreadable directory, or never started, produced no names, nothing
+  # matched, and the gate passed. A gate that cannot look must refuse. The
+  # lever is a find on PATH that fails only on the gate's own basename walk,
+  # so every other find in the pipeline (the drift scan, the size check)
+  # behaves, and the failure is the gate's alone.
+  mk_fixture g96; seed_home; commit_baseline
+  mkdir -p "$T/fakebin"
+  real_find=$(command -v find)
+  printf '#!/bin/sh\ncase "$*" in *"%%f\\0"*) "%s" "$@"; echo "find: fake failure on the gate walk" >&2; exit 1 ;; esac\nexec "%s" "$@"\n' "$real_find" "$real_find" > "$T/fakebin/find"
+  chmod +x "$T/fakebin/find"
+  printf 'export NEWLINE=1\n' >> "$FH/.bashrc"
+  head96=$(git -C "$FR" rev-parse HEAD)
+  out96=$(env HOME="$FH" PATH="$T/fakebin:$PATH" "$CLI" snapshot --no-push 2>&1); rc96=$?
+  eq "the run refuses" "$rc96" "1"
+  has "and names the gate that could not look" "$out96" "filename gate could not walk"
+  eq "nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$head96"
+  eq "the gate's scratch file is cleaned up" "$(find "$OMABACKUP_STATE_DIR" -name '.gate.*' | wc -l)" "0"
+  # With a working find the same edit commits, so the refusal above was the
+  # gate's and not something else in the pipeline.
+  check "the run commits once find works" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "and leaves no scratch file either" "$(find "$OMABACKUP_STATE_DIR" -name '.gate.*' | wc -l)" "0"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

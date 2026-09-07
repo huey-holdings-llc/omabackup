@@ -43,6 +43,15 @@ the last snapshot and the import read as a fidelity problem. The run also
 says when it is reasoning from a stand-in, and that a snapshot writes the
 real stamp.
 
+### Security
+
+The filename gate refuses the run when its walk of the staging tree fails.
+The walk sat in one pipeline ending in `|| true`, put there for grep's
+no-match exit, and that swallowed `find`'s exit too: a `find` that died on
+an unreadable directory produced no names, nothing matched, and the gate
+passed. `find`'s status is now checked on its own, and a gate that cannot
+look does not pass.
+
 ## [0.7.0] - 2026-09-06
 
 If you have been running 0.2.0, this is the release where the plugin stops
