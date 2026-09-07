@@ -286,6 +286,12 @@ setup_import() {
   DATA_REPO=$dir
   # shellcheck disable=SC2034  # STAGE: read by later libs (lib/config.sh), not this file
   STAGE="$dir/.staging"
+  # Under the repo lock from here: an import aimed at the repo the timer is
+  # already snapshotting would otherwise write the marker, stage and commit
+  # while that run is mid-pipeline, and the sync's clean-index check below
+  # could be true one moment and false the next. Setup is interactive, so a
+  # held lock is a refusal with the reason, not a wait that looks like a hang.
+  take_lock || die "the repo lock is held (a snapshot may be running); try again shortly"
   # `adopted` collects exactly what THIS run wrote, so the commit below can
   # stage it by name, the same half of the mutation rule setup_seed keeps.
   local -a adopted=()
@@ -306,6 +312,7 @@ setup_import() {
   # gate used to append them on the first scan and leave the edit; the sync
   # now owns its commit, and adoption is the other path that commits.
   data_repo_gitignore_sync_commit
+  drop_lock
   setup_phase "imported"
 }
 

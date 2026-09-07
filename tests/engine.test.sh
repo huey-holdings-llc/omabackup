@@ -3754,6 +3754,29 @@ if group 93 "an existing repo's .gitignore gains the patterns this version ships
   eq "as the sync's own commit" \
     "$(git -C "$FR" log --format=%s | grep -c 'gitignore gains' || true)" "1"
 
+  # The sync commit lands BEFORE the pipeline's checks, so a run that then
+  # refuses still leaves it as HEAD. Health's stand-in for a missing stamp
+  # used to be HEAD's time, which made that refused run read as a snapshot
+  # taken just now and silenced the stale-backup problem (Codex, PR 3). The
+  # stand-in is the last commit that touched the snapshot's own paths.
+  mk_fixture g93r; seed_home
+  old93=$(( $(date +%s) - 5*86400 ))
+  check "a snapshot dated five days ago" env HOME="$FH" GIT_COMMITTER_DATE="@$old93" GIT_AUTHOR_DATE="@$old93" "$CLI" snapshot --no-push
+  grep -vxF '.omabackup.*' "$HERE/../share/data.gitignore" > "$FR/.gitignore"
+  git -C "$FR" commit -qam "a .gitignore from an older version"
+  rm -f "$FR/manifests/.last-run"
+  # A credential-shaped name in an allowlisted folder: the filename gate
+  # refuses, and it runs after the sync.
+  allow '.config/mytool'
+  printf 'k\n' > "$FH/.config/mytool/mytool.key"
+  fails "the run refuses at the filename gate" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the sync commit is HEAD all the same" \
+    "$(git -C "$FR" log -1 --format=%s)" "omabackup: .gitignore gains 1 ignore pattern(s) this version ships"
+  st93r=$(obj status)
+  eq "but the last snapshot still reads as five days old" "$(jq -r .last_run_age_days <<<"$st93r")" "5"
+  has "and the stale-backup problem is reported" "$(jq -r '.problems[]' <<<"$st93r")" "last snapshot was 5 days ago"
+  rm -f "$FH/.config/mytool/mytool.key"
+
   # GREP HAS THREE EXIT CODES, and only two of them are an answer. 0 is "the
   # line is there", 1 is "it is not", and anything above 1 is grep saying it
   # could not look. Read as a plain boolean, that third code means "absent",
