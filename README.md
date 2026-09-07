@@ -298,6 +298,36 @@ repo and its remote are never touched by either command.
 | State | `~/.local/state/omabackup/status.json` (the widget's view) and `omabackup.log` (rotated at 1 MB) |
 | Data repo | wherever setup put it, default `~/.local/share/omabackup/data` |
 
+The config file is plain JSON and every key has a default, so a file that
+names only `dataRepo` is complete. A key this version does not know is
+warned about; one close enough to a known key to be a typo is refused.
+
+```
+dataRepo         absolute path of the data repo (written by setup)
+remote.url       the data repo's origin, kept in step with git by setup
+remote.trusted   false; true lets a non-GitHub remote be pushed to without
+                 the visibility probe (GitHub remotes are always probed)
+maxFileSize      8m; an allowlisted file above it is listed, not copied
+staleDays        2; a last snapshot older than this is a problem, and a
+                 push verdict older than this counts as unprobed
+maxMissingPct    25; this share of allowlist entries or more vanishing at
+                 once refuses the run
+maxScanFiles     2000; a folder with more files than this is one collapsed
+                 row in the drift report
+notify           true; false silences the desktop notifications
+shellNag         false; true makes setup add the login check to ~/.bashrc
+timer.calendar   daily; the snapshot timer's OnCalendar
+timer.jitter     30m; its RandomizedDelaySec
+setupPhase       setup's own resume marker, not something to edit
+```
+
+Edits take effect on the next run, with two exceptions that only setup reads.
+`timer.*` is written into the unit files, so rerun `omabackup setup --yes`
+after changing it. `shellNag` set to true adds the login check the next time
+setup runs; set back to false it removes nothing, so take the two lines under
+the OmaBackup comment out of `~/.bashrc` yourself (`setup --remove` does,
+but it uninstalls everything else too).
+
 The data repo itself, whose root and `.git` are kept at mode 700 (setup sets
 both, and every verb re-asserts them, since `.git` holds the whole backup in
 full history):

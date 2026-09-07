@@ -3702,5 +3702,31 @@ if group 93 "an existing repo's .gitignore gains the patterns this version ships
     "$(git -C "$FR" status --porcelain -- .gitignore)" ""
 fi
 
+if group 94 "notify: false in the config actually silences notifications"; then
+  # cfg() read every value through jq's `// empty`, and the alternative
+  # operator treats false exactly like null, so a configured false came back
+  # as the empty string and notify() then defaulted it to true. The README
+  # documented the knob; nothing honoured it. remote.trusted and shellNag are
+  # the same class and were harmless only because every reader of theirs
+  # compares against the word true.
+  mk_fixture g94; seed_home; commit_baseline
+  mkdir -p "$T/fakebin"
+  for n in notify-send omarchy-notification-send; do
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/nf.log"\n' "$T" > "$T/fakebin/$n"
+    chmod +x "$T/fakebin/$n"
+  done
+  # notify-failure is the one verb whose whole job is a notification, and it
+  # reads the config for exactly this knob.
+  nf94() { : > "$T/nf.log"; env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_NOTIFY=1 "$CLI" notify-failure snapshot >/dev/null 2>&1; cat "$T/nf.log"; }
+  set94() { jq --argjson v "$1" '.notify=$v' "$OMABACKUP_CONFIG" > "$T/c94.json" && mv "$T/c94.json" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"; }
+  set94 true
+  [[ -n "$(nf94)" ]] && ok "control: notify true sends" || bad "control: notify true sent nothing"
+  set94 false
+  eq "notify false sends nothing" "$(nf94)" ""
+  # The default, with the key absent, is still on: fail loud is the direction.
+  jq 'del(.notify)' "$OMABACKUP_CONFIG" > "$T/c94.json" && mv "$T/c94.json" "$OMABACKUP_CONFIG" && chmod 600 "$OMABACKUP_CONFIG"
+  [[ -n "$(nf94)" ]] && ok "an absent notify key still sends" || bad "an absent notify key sent nothing"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
