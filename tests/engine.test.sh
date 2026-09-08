@@ -3663,10 +3663,17 @@ if group 92 "omabackup's own unit files are not drift, and their neighbours stil
   eq "without the seed line the tool's units are still not drift" \
     "$(grep -c 'systemd/user/omabackup-' <<<"$d92b" || true)" "0"
   has "and the hand-written unit beside them still is" "$d92b" "systemd/user/my-own.service"
-  # The tool's own config IS worth a decision, so it is drift on an adopted
-  # repo and an optional seed entry on a fresh one.
-  eq "the seed allowlist names the tool's own config" \
-    "$(grep -cxF '?.config/omabackup/config.json' "$HERE/../share/allowlist.example")" "1"
+  # Exact names, not a prefix: a unit that merely starts with omabackup- is
+  # somebody else's and must stay visible (Codex, PR 6).
+  printf '[Unit]\nDescription=not ours\n' > "$FH/.config/systemd/user/omabackup-report.service"
+  has "a hand-written unit that shares the prefix is still reported" "$(ob drift)" "systemd/user/omabackup-report.service"
+  # The tool's own config directory is machine-local (an absolute dataRepo,
+  # a remote URL that may carry credentials): never backed up, never drift.
+  mkdir -p "$FH/.config/omabackup"; printf '{"dataRepo":"/x"}\n' > "$FH/.config/omabackup/config.json"
+  eq "the tool's own config directory is not drift" \
+    "$(ob drift | grep -c 'config/omabackup' || true)" "0"
+  eq "and the seed allowlist does not back it up" \
+    "$(grep -c 'config/omabackup' "$HERE/../share/allowlist.example" || true)" "0"
 fi
 
 if group 93 "an existing repo's .gitignore gains the patterns this version ships, and the sync owns its commit"; then

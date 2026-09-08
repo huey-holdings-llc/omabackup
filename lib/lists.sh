@@ -82,16 +82,22 @@ is_partially_covered() {
   return 1
 }
 
-# The tool's own five units are ignored on every repo, adopted or seeded,
-# before the list is consulted: setup writes them and rewrites them on every
-# rerun, and a restore gets them from setup, never from the backup. The seed
-# ignore list spells the same rule out for repos that want it visible, but a
-# repo adopted from an older version has no such line, and the first popup
-# after adoption opened on five rows about the tool itself. Names only: the
-# directory's other contents are exactly what the scan exists to find.
+# The tool's own files are ignored on every repo, adopted or seeded, before
+# the list is consulted. The five units setup writes (by their exact shipped
+# names, not a prefix: a hand-written omabackup-report.service is somebody
+# else's and stays visible) are rewritten on every setup rerun, and a restore
+# gets them from setup, never from the backup. The config directory is
+# machine-local: dataRepo is an absolute path on this machine and remote.url
+# may carry credentials, so it is neither backed up nor offered for it. The
+# seed ignore list spells the unit rule out for repos that want it visible,
+# but a repo adopted from an older version has no such line, and the first
+# popup after adoption opened on seven rows about the tool itself.
 is_ignored() {
   local q="$1" c base
-  case "$q" in .config/systemd/user/omabackup-*.service|.config/systemd/user/omabackup-*.timer) return 0 ;; esac
+  case "$q" in
+    .config/systemd/user/omabackup-failed.service|.config/systemd/user/omabackup-selftest.service|.config/systemd/user/omabackup-selftest.timer|.config/systemd/user/omabackup-snapshot.service|.config/systemd/user/omabackup-snapshot.timer) return 0 ;;
+    .config/omabackup|.config/omabackup/*) return 0 ;;
+  esac
   for c in "${IGNORED[@]}"; do
     case "$c" in
       */'**')
