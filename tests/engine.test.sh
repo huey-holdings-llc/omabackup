@@ -3654,6 +3654,40 @@ if group 92 "omabackup's own unit files are not drift, and their neighbours stil
   # shape this tool exists to prevent.
   has "a hand-written unit beside them is still reported" "$d92" "systemd/user/my-own.service"
   eq "and lint is happy with the seeded entry" "$(obj lint --no-walk | jq -r .ok)" "true"
+  # A repo adopted from an older version has no seed line for them, and the
+  # first popup after adoption opened on five rows about the tool itself. The
+  # scan exempts its own unit names on its own; the seed line is a courtesy.
+  grep -vF 'systemd/user/omabackup-' "$FR/drift-ignore.txt" > "$T/di92" && mv "$T/di92" "$FR/drift-ignore.txt"
+  git -C "$FR" commit -qam "an ignore list from before the units existed"
+  d92b=$(ob drift)
+  eq "without the seed line the tool's units are still not drift" \
+    "$(grep -c 'systemd/user/omabackup-' <<<"$d92b" || true)" "0"
+  has "and the hand-written unit beside them still is" "$d92b" "systemd/user/my-own.service"
+  # Exact names, not a prefix: a unit that merely starts with omabackup- is
+  # somebody else's and must stay visible (Codex, PR 6).
+  printf '[Unit]\nDescription=not ours\n' > "$FH/.config/systemd/user/omabackup-report.service"
+  has "a hand-written unit that shares the prefix is still reported" "$(ob drift)" "systemd/user/omabackup-report.service"
+  # The tool's own config directory is machine-local (an absolute dataRepo,
+  # a remote URL that may carry credentials): never backed up, never drift.
+  # WHEREVER it lives: the exemption is derived from CONFIG_FILE, because
+  # lib/config.sh honours XDG_CONFIG_HOME and a hardcoded ~/.config/omabackup
+  # exempted the wrong directory on a machine that sets it (Codex, PR 6).
+  mkdir -p "$FH/.config/omabackup"
+  cp "$OMABACKUP_CONFIG" "$FH/.config/omabackup/config.json"
+  eq "the default config directory is not drift" \
+    "$(env HOME="$FH" OMABACKUP_CONFIG="$FH/.config/omabackup/config.json" "$CLI" drift 2>&1 | grep -c 'config/omabackup' || true)" "0"
+  # The same, with XDG_CONFIG_HOME pointing somewhere else entirely and no
+  # OMABACKUP_CONFIG override: the real config directory is exempt and the
+  # default one, which this run does not use, is reported like any other.
+  mkdir -p "$FH/.config-alt/omabackup"
+  cp "$OMABACKUP_CONFIG" "$FH/.config-alt/omabackup/config.json"
+  d92x=$(env -u OMABACKUP_CONFIG HOME="$FH" XDG_CONFIG_HOME="$FH/.config-alt" "$CLI" drift 2>&1)
+  eq "an XDG_CONFIG_HOME config directory is not drift" \
+    "$(grep -c 'config-alt/omabackup' <<<"$d92x" || true)" "0"
+  has "and the unused default one is reported like anything else" "$d92x" ".config/omabackup"
+  rm -rf "$FH/.config-alt"
+  eq "and the seed allowlist does not back it up" \
+    "$(grep -c 'config/omabackup' "$HERE/../share/allowlist.example" || true)" "0"
 fi
 
 if group 93 "an existing repo's .gitignore gains the patterns this version ships, and the sync owns its commit"; then

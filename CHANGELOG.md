@@ -21,6 +21,16 @@ writes the marker and runs the sync.
 
 ### Fixed
 
+The drift scan no longer reports the tool's own files, on any data repo:
+the five systemd units setup writes (by their exact names; a hand-written
+unit beside them, even one starting `omabackup-`, is still reported) and
+`~/.config/omabackup`. The seed ignore list had a line for the units, but a
+repo adopted from an older version has no such line, so the first popup
+after adoption opened on seven rows about the tool itself. The config
+directory is machine-local, `dataRepo` is an absolute path on this machine
+and `remote.url` may carry credentials, so it is not backed up and not
+offered for it; a restored machine gets its config from `setup`.
+
 With no `manifests/.last-run` stamp (a fresh clone never has one), `status`
 judged the backup's age by HEAD's commit time, so any commit that was not a
 snapshot, the adoption marker, a list commit, the `.gitignore` sync's own,
