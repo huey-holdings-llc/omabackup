@@ -3669,9 +3669,23 @@ if group 92 "omabackup's own unit files are not drift, and their neighbours stil
   has "a hand-written unit that shares the prefix is still reported" "$(ob drift)" "systemd/user/omabackup-report.service"
   # The tool's own config directory is machine-local (an absolute dataRepo,
   # a remote URL that may carry credentials): never backed up, never drift.
-  mkdir -p "$FH/.config/omabackup"; printf '{"dataRepo":"/x"}\n' > "$FH/.config/omabackup/config.json"
-  eq "the tool's own config directory is not drift" \
-    "$(ob drift | grep -c 'config/omabackup' || true)" "0"
+  # WHEREVER it lives: the exemption is derived from CONFIG_FILE, because
+  # lib/config.sh honours XDG_CONFIG_HOME and a hardcoded ~/.config/omabackup
+  # exempted the wrong directory on a machine that sets it (Codex, PR 6).
+  mkdir -p "$FH/.config/omabackup"
+  cp "$OMABACKUP_CONFIG" "$FH/.config/omabackup/config.json"
+  eq "the default config directory is not drift" \
+    "$(env HOME="$FH" OMABACKUP_CONFIG="$FH/.config/omabackup/config.json" "$CLI" drift 2>&1 | grep -c 'config/omabackup' || true)" "0"
+  # The same, with XDG_CONFIG_HOME pointing somewhere else entirely and no
+  # OMABACKUP_CONFIG override: the real config directory is exempt and the
+  # default one, which this run does not use, is reported like any other.
+  mkdir -p "$FH/.config-alt/omabackup"
+  cp "$OMABACKUP_CONFIG" "$FH/.config-alt/omabackup/config.json"
+  d92x=$(env -u OMABACKUP_CONFIG HOME="$FH" XDG_CONFIG_HOME="$FH/.config-alt" "$CLI" drift 2>&1)
+  eq "an XDG_CONFIG_HOME config directory is not drift" \
+    "$(grep -c 'config-alt/omabackup' <<<"$d92x" || true)" "0"
+  has "and the unused default one is reported like anything else" "$d92x" ".config/omabackup"
+  rm -rf "$FH/.config-alt"
   eq "and the seed allowlist does not back it up" \
     "$(grep -c 'config/omabackup' "$HERE/../share/allowlist.example" || true)" "0"
 fi

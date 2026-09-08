@@ -92,11 +92,23 @@ is_partially_covered() {
 # seed ignore list spells the unit rule out for repos that want it visible,
 # but a repo adopted from an older version has no such line, and the first
 # popup after adoption opened on seven rows about the tool itself.
+#
+# The config directory is derived from CONFIG_FILE, not hardcoded to
+# ~/.config/omabackup: lib/config.sh honours XDG_CONFIG_HOME, so on a machine
+# that sets it the hardcoded pattern exempted a directory the tool does not
+# use and offered the real config for allowlisting. A config outside $HOME
+# (OMABACKUP_CONFIG in the suite) exempts nothing, which is right: the scan
+# only ever walks $HOME, and a ~/.config/omabackup that is not this run's
+# config is somebody else's directory.
 is_ignored() {
-  local q="$1" c base
+  local q="$1" c base cfgdir=""
   case "$q" in
     .config/systemd/user/omabackup-failed.service|.config/systemd/user/omabackup-selftest.service|.config/systemd/user/omabackup-selftest.timer|.config/systemd/user/omabackup-snapshot.service|.config/systemd/user/omabackup-snapshot.timer) return 0 ;;
-    .config/omabackup|.config/omabackup/*) return 0 ;;
+  esac
+  cfgdir=${CONFIG_FILE%/*}
+  case "$cfgdir" in
+    "$HOME"/?*) cfgdir=${cfgdir#"$HOME"/}
+      case "$q" in "$cfgdir"|"$cfgdir"/*) return 0 ;; esac ;;
   esac
   for c in "${IGNORED[@]}"; do
     case "$c" in
