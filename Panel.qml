@@ -79,6 +79,11 @@ Panel {
   // !hasRemote as "the origin is gone" painted that accusation in the urgent
   // colour before the file had been read once. An unknown remote is unknown.
   readonly property bool remoteMissing: !!(st && st.remote === "missing")
+  // What the backup pushes to, named. Absent or empty means the row is not
+  // shown at all, which is the honest answer on first paint and on a repo
+  // with no origin; the Pushed row above already says "none (local only)".
+  readonly property string remoteLabel: st && st.remote_label ? st.remote_label : ""
+  readonly property bool remoteLinkable: !!(st && st.remote_linkable)
   readonly property bool timerKnown: !!(st && st.timers_checked)
   readonly property bool timerArmed: !!(st && st.timer_enabled && st.timer_active)
 
@@ -241,6 +246,15 @@ Panel {
     root.svc.pushOrConfirm(true, function(rep) { root.reportAction(rep, "push failed") })
   }
   function openTriage() { root.close(); if (root.svc) root.svc.openTerminal() }
+  // The repo's page, if there is one this tool can name. Guarded on the same
+  // field that decides whether the row is a link, so the b key is a no-op
+  // rather than a refusal on a local-only or non-GitHub repo. Closes first:
+  // a browser takes the focus, and a popup left open behind it is litter.
+  function openRemote() {
+    if (!root.remoteLinkable || !root.svc) return
+    root.close()
+    root.svc.openRemote()
+  }
   function setupAction() {
     if (!root.svc) return
     if (root.setupState === "not-configured") root.svc.runSetup()
@@ -321,6 +335,7 @@ Panel {
         else if (t === "p" || t === "P") root.pushOrConfirm()
         else if (t === "t" || t === "T") root.openTriage()
         else if (t === "n" || t === "N") root.askNotes = !root.askNotes
+        else if (t === "b" || t === "B") root.openRemote()
       }
 
       Flickable {
@@ -436,6 +451,16 @@ Panel {
                    : !root.hasRemote ? "unknown"
                    : root.unpushed > 0 ? root.unpushed + " commit(s) waiting" : "up to date"
               valueColor: root.remoteMissing || (root.hasRemote && root.unpushed > 0) ? root.urgent : ""
+              foreground: root.foreground; dimColor: root.dim; fontFamily: root.fontFamily
+            }
+            InfoRow {
+              visible: root.remoteLabel.length > 0
+              width: parent.width
+              label: "Backup repo"
+              value: root.remoteLabel
+              activatable: root.remoteLinkable
+              activateName: "Open " + root.remoteLabel + " on GitHub"
+              onActivated: root.openRemote()
               foreground: root.foreground; dimColor: root.dim; fontFamily: root.fontFamily
             }
             InfoRow {
@@ -665,7 +690,14 @@ Panel {
           Text {
             width: parent.width
             horizontalAlignment: Text.AlignHCenter
-            text: "s snapshot · p push · t triage · n notes · r refresh · Esc close"
+            // Non-breaking spaces inside each hint, ordinary ones around the
+            // separators: the row wraps between hints and never inside one,
+            // which a plain space did (it broke "r" from "refresh").
+            text: "s\u00A0snapshot · p\u00A0push · t\u00A0triage · b\u00A0repo · n\u00A0notes · r\u00A0refresh · Esc\u00A0close"
+            // Seven hints do not fit the popup's default width, and a clipped
+            // hint row is worse than a wrapped one: the last hint is Esc, the
+            // one a person most needs to read.
+            wrapMode: Text.WordWrap
             color: root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

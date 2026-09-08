@@ -105,6 +105,9 @@ QtObject {
   function ignore(path, reason, onDone) { act(reason ? ["ignore", path, reason] : ["ignore", path], function (o) { svc.refresh(); if (onDone) onDone(o) }) }
   function resolveGone(path, verb, onDone) { act(["resolve-gone", path, verb], function (o) { svc.refresh(); if (onDone) onDone(o) }) }
   function openTerminal() { act(["open"], null) }
+  // The repository's own page. The URL is built by the CLI from a validated
+  // owner/repo, so nothing here names a host, a scheme or a browser.
+  function openRemote() { act(["open", "--remote"], null) }
   function runSetup() { Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", svc.cli, "setup"]) }
 
   Component.onCompleted: refresh()

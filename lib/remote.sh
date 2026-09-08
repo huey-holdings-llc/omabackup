@@ -126,6 +126,55 @@ remote_github_slug() {
   return 0
 }
 
+# remote_pushurl_differs: 0 when origin pushes to any URL other than the one it
+# fetches from. `remote.origin.pushurl` overrides the fetch URL for pushes
+# only, so everything that reasons about "where the backup goes" has to ask
+# this first: the probe refuses such a remote outright, and the popup must not
+# name the fetch repository as the backup target when a push would go
+# somewhere else entirely.
+remote_pushurl_differs() {
+  local url pu
+  url=$(remote_origin_url)
+  [[ -n "$url" ]] || return 1
+  while IFS= read -r pu; do
+    [[ -n "$pu" && "$pu" != "$url" ]] || continue
+    return 0
+  done < <(remote_push_urls)
+  return 1
+}
+
+# remote_display_label URL SLUG: a short, safe identity for a remote, for the
+# popup and anything else that shows a person WHERE their backup goes. SLUG is
+# remote_github_slug's answer for the same URL, passed in so it is computed
+# once per run rather than once per caller.
+#
+# NEVER the raw URL. remote_url_parts strips the userinfo before it returns, so
+# a password cannot reach the label by construction, and a URL-shaped string
+# that parser cannot read gets no label at all rather than a raw one: a string
+# with "://" in it is the one shape that can carry a password, and printing an
+# unparsed one is how it would leak into the popup and the log.
+#
+#   git@github.com:o/r.git            -> o/r
+#   https://gitlab.example.com/a/b    -> gitlab.example.com/a/b
+#   /srv/git/dots.git                 -> /srv/git/dots.git
+#   https://[not a url               -> (nothing)
+remote_display_label() {
+  local u=$1 slug=${2:-} hp host path
+  [[ -n "$u" ]] || return 0
+  [[ -z "$slug" ]] || { printf '%s' "$slug"; return 0; }
+  hp=$(remote_url_parts "$u")
+  host=${hp%%$'\t'*}; path=${hp#*$'\t'}
+  if [[ -n "$host" ]]; then
+    path=${path#/}; path=${path%/}; path=${path%.git}
+    if [[ -n "$path" ]]; then printf '%s/%s' "$host" "$path"; else printf '%s' "$host"; fi
+    return 0
+  fi
+  # No host. A local path has no userinfo to hide and is the thing the operator
+  # typed, so it is printed; anything URL-shaped is not.
+  case "$u" in *://*) return 0 ;; esac
+  printf '%s' "$u"
+}
+
 # remote_verdict_write VERIFIABLE REASON: record the push gate's last answer,
 # against the URL it was an answer about.
 #

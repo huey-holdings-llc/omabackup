@@ -1174,6 +1174,55 @@ if group 50 "status: JSON for the bar widget"; then
   eq "status.json exists after status" "$(test -f "$OMABACKUP_STATE_DIR/status.json" && echo yes)" "yes"
   eq "status.json equals stdout" "$(obj status | jq -S .)" "$(jq -S . "$OMABACKUP_STATE_DIR/status.json")"
   eq "setup is ready in the fixture" "$(obj status | jq -r .setup)" "ready"
+
+  # remote_label / remote_linkable: the popup names the repository the backup
+  # goes to, and offers a click only for a remote whose page this tool can
+  # actually name. The fixture's origin is a local bare path, which has a
+  # label (it is what the operator typed) and no page.
+  eq "a local bare remote is labelled by its path, and is not linkable" \
+    "$(obj status | jq -c '[.remote_label, .remote_linkable]')" "[\"$BARE\",false]"
+  # Every spelling of the same GitHub repo yields the same owner/repo label.
+  for u50 in "git@github.com:o/r.git" "https://github.com/o/r" "https://GitHub.com/o/r/" \
+             "ssh://git@github.com:22/o/r" "http://github.com/o/r" "https://user@github.com/o/r"; do
+    git -C "$FR" remote set-url origin "$u50"
+    eq "github remote labelled and linkable: $u50" \
+      "$(obj status | jq -c '[.remote_label, .remote_linkable]')" '["o/r",true]'
+  done
+  # A GitHub host whose path is not exactly owner/repo has no page this tool
+  # can name: it is still labelled, and it is NOT offered as a link.
+  git -C "$FR" remote set-url origin "https://github.com/o/r/extra"
+  eq "an unslugged github path is labelled but not linkable" \
+    "$(obj status | jq -c '[.remote_label, .remote_linkable]')" '["github.com/o/r/extra",false]'
+  # Another host is labelled host/path, and a password in the URL never
+  # reaches the label: remote_url_parts strips the userinfo before it returns.
+  git -C "$FR" remote set-url origin "https://alice:hunter2secret@gitlab.example.com/alice/dots.git"
+  l50=$(obj status | jq -r .remote_label)
+  eq "a non-github remote is labelled host/path" "$l50" "gitlab.example.com/alice/dots"
+  eq "and no password reaches the label" "$(grep -c hunter2secret <<<"$l50" || true)" "0"
+  eq "nor the status file" "$(grep -c hunter2secret "$OMABACKUP_STATE_DIR/status.json" || true)" "0"
+  # A pushurl that differs means the fetch URL is NOT where the backup goes,
+  # and the engine refuses to push to either until it is removed. Naming the
+  # fetch repository as the backup target would be a lie the panel tells
+  # confidently (Codex, PR 8).
+  git -C "$FR" remote set-url origin "https://github.com/o/r"
+  git -C "$FR" remote set-url --push origin "https://github.com/someone/else"
+  eq "a differing push url means no label and no link" \
+    "$(obj status | jq -c '[.remote_label, .remote_linkable]')" '["",false]'
+  o50p=$(env HOME="$FH" "$CLI" open --remote 2>&1); rc50p=$?
+  eq "and open --remote refuses" "$rc50p" "1"
+  has "naming the mismatch" "$o50p" "pushes to a different URL"
+  git -C "$FR" remote set-url --push --delete origin "https://github.com/someone/else" 2>/dev/null || true
+  eq "removing the pushurl brings the label back" \
+    "$(obj status | jq -c '[.remote_label, .remote_linkable]')" '["o/r",true]'
+  # No origin at all: no label, no link. The Pushed row already says local only.
+  git -C "$FR" remote remove origin
+  eq "no origin means no label and no link" \
+    "$(obj status | jq -c '[.remote_label, .remote_linkable]')" '["",false]'
+  # Put the fixture back exactly as it was: the assertions after this one are
+  # about health, and health reads the upstream, which a remove/add drops.
+  git -C "$FR" remote add origin "$BARE"
+  git -C "$FR" fetch -q origin
+  git -C "$FR" branch --set-upstream-to=origin/main main >/dev/null 2>&1
   jq '.remote.trusted=false' "$OMABACKUP_CONFIG" > "$T/c2" && mv "$T/c2" "$OMABACKUP_CONFIG"
   eq "setup reports remote-unverified for an untrusted non-GitHub remote" "$(obj status | jq -r .setup)" "remote-unverified"
   jq '.remote.trusted=true' "$OMABACKUP_CONFIG" > "$T/c2" && mv "$T/c2" "$OMABACKUP_CONFIG"
@@ -3972,6 +4021,65 @@ if group 97 "a remote URL with a password in it is refused, and never printed"; 
     env HOME="$FH" "$CLI" setup --data-repo "$FR" --remote "ssh://git@example.com/alice/dots.git" --no-timers --yes
   eq "and stored" "$(jq -r .remote.url "$OMABACKUP_CONFIG")" "ssh://git@example.com/alice/dots.git"
   git -C "$FR" remote set-url origin "$BARE"
+fi
+
+if group 98 "open --remote opens the repo's own page, and builds the URL itself"; then
+  # The popup may launch nothing but the CLI, so "show me the repository" is a
+  # verb. The URL is built HERE from a slug remote_github_slug has already
+  # validated as exactly owner/repo, which is what stops anything a git remote
+  # says from choosing the host, the scheme or the path.
+  mk_fixture g98; seed_home; commit_baseline
+  mkdir -p "$T/fakebin"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/browser.log"\n' "$T" > "$T/fakebin/omarchy-launch-browser"
+  chmod +x "$T/fakebin/omarchy-launch-browser"
+  # setsid -f detaches, so the log lands a moment after the verb returns.
+  br98() { : > "$T/browser.log"; env HOME="$FH" PATH="$T/fakebin:$PATH" "$CLI" open --remote 2>&1; }
+  wait98() { local i; for i in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$T/browser.log" ]] && break; sleep 0.2; done; cat "$T/browser.log"; }
+
+  git -C "$FR" remote set-url origin "git@github.com:alice/dots.git"
+  o98=$(br98); rc98=$?
+  eq "the verb succeeds on a github remote" "$rc98" "0"
+  eq "and reports the page it opened" "$(jq -r .opened <<<"$o98")" "https://github.com/alice/dots"
+  eq "the browser was launched with exactly that URL, and nothing else" \
+    "$(wait98)" "https://github.com/alice/dots"
+  # The remote is never passed through: an ssh URL still produces an https page.
+  git -C "$FR" remote set-url origin "ssh://git@github.com:22/alice/dots"
+  br98 >/dev/null
+  eq "an ssh remote still opens the https page" "$(wait98)" "https://github.com/alice/dots"
+
+  # A GitHub host whose path is not exactly owner/repo is unverifiable, and a
+  # guessed URL is worse than a refusal.
+  git -C "$FR" remote set-url origin "https://github.com/alice/dots/tree/main"
+  : > "$T/browser.log"
+  o98b=$(env HOME="$FH" PATH="$T/fakebin:$PATH" "$CLI" open --remote 2>&1); rcb=$?
+  eq "an unslugged github path refuses" "$rcb" "1"
+  has "and says no page is known" "$o98b" "no web page is known"
+  eq "and launches nothing" "$(wc -c < "$T/browser.log")" "0"
+
+  # Another host has no page this tool can name either.
+  git -C "$FR" remote set-url origin "https://gitlab.example.com/alice/dots.git"
+  : > "$T/browser.log"
+  o98c=$(env HOME="$FH" PATH="$T/fakebin:$PATH" "$CLI" open --remote 2>&1); rcc=$?
+  eq "a non-github remote refuses" "$rcc" "1"
+  has "and says why" "$o98c" "no web page is known"
+  eq "and launches nothing either" "$(wc -c < "$T/browser.log")" "0"
+
+  # No origin at all is its own message: there is nothing to open, rather than
+  # something this tool cannot name.
+  git -C "$FR" remote remove origin
+  : > "$T/browser.log"
+  o98d=$(env HOME="$FH" PATH="$T/fakebin:$PATH" "$CLI" open --remote 2>&1); rcd=$?
+  eq "no remote refuses" "$rcd" "1"
+  has "and says there is no remote" "$o98d" "no remote"
+  eq "and launches nothing at all" "$(wc -c < "$T/browser.log")" "0"
+  git -C "$FR" remote add origin "$BARE"
+
+  # A typo is a usage error, exit 2, like every other verb's.
+  fails "open rejects an unknown flag" env HOME="$FH" "$CLI" open --bogus
+  eq "and exits 2 for it" "$(env HOME="$FH" "$CLI" open --bogus >/dev/null 2>&1; echo $?)" "2"
+  # Bare `open` is deliberately NOT exercised here: it launches a real terminal
+  # on whoever is running the suite. The flag loop is proven by --bogus above
+  # and by the --remote cases; the terminal path itself is unchanged.
 fi
 
 echo; echo "passed=$pass failed=$fail"

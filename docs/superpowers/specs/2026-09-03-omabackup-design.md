@@ -213,6 +213,8 @@ drift[]            {type: NEW|MODIFIED|GONE|TOOBIG|EXCLUDED|ERROR, path, note,
                     optional, dir}
 unpushed, diverged, upstream_readable
 remote             "configured" | "missing" | "none"
+remote_label       what the popup names the backup target, or ""
+remote_linkable    true when `open --remote` has a page it can open
 push_verifiable, push_reason
 uncommitted[]      repo files the timer will not commit
 timers_checked, timer_enabled, timer_active, timer_next,
@@ -220,13 +222,22 @@ selftest_enabled, selftest_active
 problems[]         strings; any entry makes state "fault"
 ```
 
-What the four late fields are for, since none of them was in the original list:
+What the late fields are for, since none of them was in the original list:
 
 - `remote` is three-valued because git alone cannot tell a deliberate
   local-only install from an origin somebody removed. `configured` is an
   origin that exists, `none` is "empty to stay local" answered at setup, and
   `missing` is a URL the config records with no origin behind it, which is a
   fault: every commit since has gone nowhere.
+- `remote_label` and `remote_linkable` exist so the popup can name the
+  repository a backup goes to, which nothing on screen used to say. The
+  label is `owner/repo` for GitHub, `host/path` for another host, and the
+  path for a local remote; it is never the raw URL, because that is the
+  one shape that can carry a password (`remote_url_parts` strips the
+  userinfo, and a URL it cannot read gets no label rather than a raw one).
+  `remote_linkable` is true only for a validated GitHub `owner/repo`, which
+  is the only remote whose web page this tool can name; it gates the click
+  and matches exactly what `open --remote` will accept.
 - `upstream_readable` is false when the ahead count could not be read at all,
   so the widget can tell "nothing waiting" from "nobody knows".
 - `optional` on a drift item is true when the allowlist entry behind a GONE
