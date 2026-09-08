@@ -355,6 +355,31 @@ setup_remote() {
   # repo that might be public". Refused BEFORE anything is written, so a
   # refusal leaves neither the git remote nor the config half-changed.
   local target=${url:-$have_origin}
+  # A password inside the URL is refused before anything is written, new or
+  # already on origin: it would land in .git/config, in this tool's config,
+  # and in every line that prints the remote. The message shows the URL with
+  # the password already replaced, so the refusal itself does not print it.
+  #
+  # Push URLs too. `remote.origin.pushurl` overrides the fetch URL for pushes
+  # only, so a clean fetch URL with a credential-bearing pushurl passed this
+  # guard entirely, and it is the push URL that a password would actually be
+  # used on. lib/remote.sh refuses such a remote for a different reason (it
+  # cannot verify two destinations from one probe) and names the URL in a
+  # warning, which is how the password reached the journal.
+  local pw_url
+  local -a pw_urls=("$target")
+  if [[ -n "$have_origin" ]]; then
+    # mapfile, not an unquoted expansion: a URL is data, and splitting it on
+    # whitespace would check two halves of one string rather than the string.
+    local -a push_urls=()
+    mapfile -t push_urls < <(remote_push_urls)
+    pw_urls+=(${push_urls[@]+"${push_urls[@]}"})
+  fi
+  for pw_url in ${pw_urls[@]+"${pw_urls[@]}"}; do
+    [[ -n "$pw_url" ]] || continue
+    remote_url_has_password "$pw_url" || continue
+    die "the remote URL carries a password ($(remote_url_display "$pw_url")); OmaBackup will not store one. Use an SSH remote, or HTTPS with a credential helper (git config credential.helper), fix origin with: git -C $DATA_REPO remote set-url origin <url> (and git -C $DATA_REPO remote set-url --push --delete origin <url> if a push URL is set), then rerun setup"
+  done
   if [[ $trust == 1 && -n "$target" ]] && remote_is_github "$target"; then
     die "GitHub remotes are verified automatically; trust is only for other hosts"
   fi
@@ -570,7 +595,7 @@ setup_check() {
   j=$(jq -cn \
     --argjson ok "$ok" --argjson tools "$tools_json" --argjson cfg "$cfg" --argjson repo "$repo" \
     --argjson marker "$marker" --argjson us "$units_s" --argjson ut "$units_t" \
-    --arg url "$url" --arg kind "$kind" --argjson trusted "$trusted" \
+    --arg url "$(remote_url_display "$url")" --arg kind "$kind" --argjson trusted "$trusted" \
     '{ok:$ok, tools:$tools, config:$cfg, dataRepo:$repo, marker:$marker,
       units:{snapshot:$us, selftest:$ut}, remote:{url:$url, kind:$kind, trusted:$trusted}}')
 

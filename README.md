@@ -564,6 +564,11 @@ actually broken.
   so `status` reports it. Unset it wherever it came from, usually
   `~/.config/environment.d` or a shell rc file, and remember a
   `systemd --user` unit inherits it too.
+* **"the remote URL carries a password"**: `setup` will not store a URL of
+  the form `https://user:password@host/...`. It would land in `.git/config`,
+  in the config file and in the log. Use an SSH remote, or HTTPS with a
+  credential helper (`git config credential.helper`), point origin at the
+  password-free form with `git remote set-url origin`, then rerun `setup`.
 * **"added N ignore pattern(s) this version ships"**: an upgrade found
   patterns in `share/data.gitignore` that your data repo's `.gitignore` did
   not have, and the snapshot appended them under a dated comment and

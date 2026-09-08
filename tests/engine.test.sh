@@ -3926,5 +3926,53 @@ if group 96 "a filename gate that cannot walk the staging tree refuses the run";
   eq "and leaves no scratch file either" "$(find "$OMABACKUP_STATE_DIR" -name '.gate.*' | wc -l)" "0"
 fi
 
+if group 97 "a remote URL with a password in it is refused, and never printed"; then
+  # setup stored whatever URL it was given, and remote_url_parts strips the
+  # userinfo for the GitHub check, so https://user:password@host/... passed
+  # every check and landed in .git/config, in config.json and in every line
+  # that prints the remote (Codex, PR 6).
+  mk_fixture g97; seed_home; commit_baseline
+  before97=$(jq -r .remote.url "$OMABACKUP_CONFIG")
+  bad97="https://alice:hunter2secret@example.com/alice/dots.git"
+  out97=$(env HOME="$FH" "$CLI" setup --data-repo "$FR" --remote "$bad97" --no-timers --yes 2>&1); rc97=$?
+  eq "setup refuses a --remote with a password" "$rc97" "1"
+  has "and says why" "$out97" "carries a password"
+  eq "without printing the password" "$(grep -c hunter2secret <<<"$out97" || true)" "0"
+  # Fixed-string: the stars in the redaction are not a regex.
+  grep -qF -- "https://alice:***@example.com/alice/dots.git" <<<"$out97" \
+    && ok "but with the rest of the URL, redacted" || bad "the redacted URL is not in the refusal" "$out97"
+  eq "origin was not touched" "$(git -C "$FR" remote get-url origin)" "$BARE"
+  eq "and the config still names the remote it had" "$(jq -r .remote.url "$OMABACKUP_CONFIG")" "$before97"
+  # An origin that already carries one is refused the same way at adoption,
+  # and status never prints the password either.
+  git -C "$FR" remote set-url origin "$bad97"
+  rm -f "$FR/.omabackup"
+  imp97=$(env HOME="$FH" "$CLI" setup --import "$FR" --no-timers --yes 2>&1); irc97=$?
+  eq "import refuses a repo whose origin carries a password" "$irc97" "1"
+  eq "and prints no password" "$(grep -c hunter2secret <<<"$imp97" || true)" "0"
+  git -C "$FR" remote set-url origin "$BARE"
+  # A PUSH URL carries the password just as well, and it is the one a push
+  # actually uses. A clean fetch URL with a credential-bearing pushurl passed
+  # the guard entirely, and lib/remote.sh then named that pushurl in a warning
+  # (Codex, PR 7). Both halves are covered: the refusal, and the warning.
+  git -C "$FR" remote set-url origin "$BARE"
+  git -C "$FR" remote set-url --push origin "$bad97"
+  p97=$(env HOME="$FH" "$CLI" setup --data-repo "$FR" --no-timers --yes 2>&1); prc=$?
+  eq "setup refuses a password in the PUSH url" "$prc" "1"
+  has "and says why" "$p97" "carries a password"
+  eq "without printing the password" "$(grep -c hunter2secret <<<"$p97" || true)" "0"
+  # The pushurl-differs warning is the other place that URL is printed.
+  w97=$(env HOME="$FH" OMABACKUP_NET=1 "$CLI" snapshot --no-push 2>&1 || true)
+  eq "the pushurl-differs warning prints no password either" "$(grep -c hunter2secret <<<"$w97" || true)" "0"
+  has "but still names the mismatch" "$w97" "pushes to a different URL"
+  git -C "$FR" remote set-url --push --delete origin "$bad97" 2>/dev/null || true
+  git -C "$FR" remote set-url origin "$BARE"
+  # A userinfo WITHOUT a password is fine: git@ and user@ forms are normal.
+  check "a user@ URL without a password is accepted" \
+    env HOME="$FH" "$CLI" setup --data-repo "$FR" --remote "ssh://git@example.com/alice/dots.git" --no-timers --yes
+  eq "and stored" "$(jq -r .remote.url "$OMABACKUP_CONFIG")" "ssh://git@example.com/alice/dots.git"
+  git -C "$FR" remote set-url origin "$BARE"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

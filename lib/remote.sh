@@ -33,7 +33,7 @@ remote_push_urls() { git -C "$DATA_REPO" remote get-url --push --all origin 2>/d
 remote_trust_ok() {
   [[ "$CFG_REMOTE_TRUSTED" == true ]] || return 1
   [[ "$CFG_REMOTE_URL" != "$1" ]] || return 0
-  warn "origin has changed since it was trusted (trusted: ${CFG_REMOTE_URL:-none}); rerun: omabackup setup --trust-remote"
+  warn "origin has changed since it was trusted (trusted: $(remote_url_display "${CFG_REMOTE_URL:-none}")); rerun: omabackup setup --trust-remote"
   return 1
 }
 
@@ -72,6 +72,30 @@ remote_url_parts() {
   host=${host%.}
   printf '%s\t%s' "$host" "$path"
   return 0
+}
+
+# remote_url_has_password URL: 0 when a scheme://user:password@host URL
+# carries a password. Only the scheme form can: scp-like user@host:path has
+# nowhere to put one. A password in a remote URL lands in .git/config, in
+# this tool's config, and in every line that prints the remote, so setup
+# refuses it rather than storing it.
+remote_url_has_password() {
+  local u=$1 auth
+  case "$u" in *://*) ;; *) return 1 ;; esac
+  auth=${u#*://}; auth=${auth%%/*}
+  case "$auth" in *@*) auth=${auth%@*} ;; *) return 1 ;; esac
+  case "$auth" in *:?*) return 0 ;; esac
+  return 1
+}
+
+# remote_url_display URL: the URL with any password replaced by ***, for
+# every place a remote is printed. The comparison sites keep the raw value.
+remote_url_display() {
+  local u=$1 rest auth path user
+  remote_url_has_password "$u" || { printf '%s' "$u"; return 0; }
+  rest=${u#*://}; auth=${rest%%/*}; path=${rest#"$auth"}
+  user=${auth%@*}; user=${user%%:*}
+  printf '%s://%s:***@%s%s' "${u%%://*}" "$user" "${auth##*@}" "$path"
 }
 
 # remote_is_github URL: 0 when the URL's HOST is GitHub, whatever shape the
@@ -154,7 +178,7 @@ remote_probe_derive() {
   # and the fix is one command for the user: git remote set-url --push --delete.
   while IFS= read -r pu; do
     [[ -n "$pu" && "$pu" != "$url" ]] || continue
-    warn "origin pushes to a different URL than it fetches from ($pu); refusing until the pushurl is removed"
+    warn "origin pushes to a different URL than it fetches from ($(remote_url_display "$pu")); refusing until the pushurl is removed"
     PUSH_REASON="pushurl-differs"
     return 0
   done < <(remote_push_urls)

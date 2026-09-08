@@ -167,7 +167,7 @@ health_collect() {
     H_REMOTE=configured
   elif [[ -n "${CFG_REMOTE_URL:-}" ]]; then
     H_REMOTE=missing
-    H_PROBLEMS+=("a remote was configured ($CFG_REMOTE_URL) but the repo has no origin; run omabackup setup")
+    H_PROBLEMS+=("a remote was configured ($(remote_url_display "$CFG_REMOTE_URL")) but the repo has no origin; run omabackup setup")
   else
     H_REMOTE=none
   fi
