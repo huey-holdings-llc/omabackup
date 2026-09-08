@@ -572,6 +572,10 @@ open_remote_page() {
   local url slug page
   url=$(remote_origin_url)
   [[ -n "$url" ]] || { widget_reply_fail "this data repo has no remote, so there is no page to open"; return 1; }
+  # Same rule the label follows: origin pushes elsewhere, so the fetch URL is
+  # not where the backup goes and the engine will not push to either.
+  ! remote_pushurl_differs \
+    || { widget_reply_fail "origin pushes to a different URL than it fetches from, so there is no one repository to open; remove the pushurl with: git -C $DATA_REPO remote set-url --push --delete origin"; return 1; }
   slug=$(remote_github_slug "$url")
   [[ -n "$slug" ]] || { widget_reply_fail "no web page is known for this remote; only a GitHub remote has one this tool can name"; return 1; }
   page="https://github.com/$slug"

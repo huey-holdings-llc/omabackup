@@ -73,8 +73,6 @@ an unreadable directory produced no names, nothing matched, and the gate
 passed. `find`'s status is now checked on its own, and a gate that cannot
 look does not pass.
 
-## [Unreleased]
-
 ### Added
 
 The popup names the repository your backups go to. A new row under Pushed

@@ -1200,6 +1200,20 @@ if group 50 "status: JSON for the bar widget"; then
   eq "a non-github remote is labelled host/path" "$l50" "gitlab.example.com/alice/dots"
   eq "and no password reaches the label" "$(grep -c hunter2secret <<<"$l50" || true)" "0"
   eq "nor the status file" "$(grep -c hunter2secret "$OMABACKUP_STATE_DIR/status.json" || true)" "0"
+  # A pushurl that differs means the fetch URL is NOT where the backup goes,
+  # and the engine refuses to push to either until it is removed. Naming the
+  # fetch repository as the backup target would be a lie the panel tells
+  # confidently (Codex, PR 8).
+  git -C "$FR" remote set-url origin "https://github.com/o/r"
+  git -C "$FR" remote set-url --push origin "https://github.com/someone/else"
+  eq "a differing push url means no label and no link" \
+    "$(obj status | jq -c '[.remote_label, .remote_linkable]')" '["",false]'
+  o50p=$(env HOME="$FH" "$CLI" open --remote 2>&1); rc50p=$?
+  eq "and open --remote refuses" "$rc50p" "1"
+  has "naming the mismatch" "$o50p" "pushes to a different URL"
+  git -C "$FR" remote set-url --push --delete origin "https://github.com/someone/else" 2>/dev/null || true
+  eq "removing the pushurl brings the label back" \
+    "$(obj status | jq -c '[.remote_label, .remote_linkable]')" '["o/r",true]'
   # No origin at all: no label, no link. The Pushed row already says local only.
   git -C "$FR" remote remove origin
   eq "no origin means no label and no link" \

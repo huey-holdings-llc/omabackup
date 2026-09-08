@@ -126,6 +126,23 @@ remote_github_slug() {
   return 0
 }
 
+# remote_pushurl_differs: 0 when origin pushes to any URL other than the one it
+# fetches from. `remote.origin.pushurl` overrides the fetch URL for pushes
+# only, so everything that reasons about "where the backup goes" has to ask
+# this first: the probe refuses such a remote outright, and the popup must not
+# name the fetch repository as the backup target when a push would go
+# somewhere else entirely.
+remote_pushurl_differs() {
+  local url pu
+  url=$(remote_origin_url)
+  [[ -n "$url" ]] || return 1
+  while IFS= read -r pu; do
+    [[ -n "$pu" && "$pu" != "$url" ]] || continue
+    return 0
+  done < <(remote_push_urls)
+  return 1
+}
+
 # remote_display_label URL SLUG: a short, safe identity for a remote, for the
 # popup and anything else that shows a person WHERE their backup goes. SLUG is
 # remote_github_slug's answer for the same URL, passed in so it is computed

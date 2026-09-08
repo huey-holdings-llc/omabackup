@@ -171,9 +171,16 @@ health_collect() {
   local origin_url no_upstream=0; origin_url=$(remote_origin_url)
   if [[ -n "$origin_url" ]]; then
     H_REMOTE=configured
-    local origin_slug; origin_slug=$(remote_github_slug "$origin_url")
-    [[ -z "$origin_slug" ]] || H_REMOTE_LINKABLE=true
-    H_REMOTE_LABEL=$(remote_display_label "$origin_url" "$origin_slug")
+    # ...unless origin pushes somewhere other than it fetches from. Then the
+    # fetch URL is not where the backup goes, the push URL is, and the engine
+    # refuses to push to either until the pushurl is removed. Naming the fetch
+    # repository as the backup target would be the panel's worst kind of lie.
+    # The pushurl-differs push_reason is what explains it.
+    if ! remote_pushurl_differs; then
+      local origin_slug; origin_slug=$(remote_github_slug "$origin_url")
+      [[ -z "$origin_slug" ]] || H_REMOTE_LINKABLE=true
+      H_REMOTE_LABEL=$(remote_display_label "$origin_url" "$origin_slug")
+    fi
   elif [[ -n "${CFG_REMOTE_URL:-}" ]]; then
     H_REMOTE=missing
     H_PROBLEMS+=("a remote was configured ($(remote_url_display "$CFG_REMOTE_URL")) but the repo has no origin; run omabackup setup")
