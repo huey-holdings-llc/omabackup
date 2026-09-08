@@ -53,6 +53,24 @@ the last snapshot and the import read as a fidelity problem. The run also
 says when it is reasoning from a stand-in, and that a snapshot writes the
 real stamp.
 
+A snapshot that refuses now says so at once, instead of looking healthy for
+two days. `manifests/.last-run` moves only when a run finishes, so a run that
+refused left the previous run's timestamp standing and nothing was reported
+until `staleDays` had passed. The panel could meanwhile say "Nothing unbacked.
+Every allowlisted path is captured", because the drift scan runs before the
+gates that refuse, so its report was accurate and its meaning was not. For a
+tool whose promise is telling you what it is not backing up, that was the
+wrong way to fail: it happened on a real machine for four hours, every run
+stopped by the secret scan over a plan file that quoted a database password.
+
+The outcome of the last attempt is now recorded alongside its time, and
+`status` reports a refused run as a problem immediately, naming the reason
+that stopped it, so the panel turns red on the first failure and tells you
+what to fix rather than sending you to the journal. A dry run records nothing,
+since it is an inspection and not a backup. A run the timer had to kill never
+reaches the refusal path, so the `OnFailure=` hook files it instead, and it
+never overwrites a reason the refusal already explained.
+
 ### Security
 
 `setup` refuses a remote URL that carries a password, whether it arrives
@@ -86,26 +104,6 @@ and it is never assembled in the widget: the popup launches nothing but
 the command line, as it always has. Two new `status.json` fields,
 `remote_label` and `remote_linkable`, carry it, and neither ever holds a
 raw URL, because that is the one shape that can carry a password.
-
-### Fixed
-
-A snapshot that refuses now says so at once, instead of looking healthy for
-two days. `manifests/.last-run` moves only when a run finishes, so a run that
-refused left the previous run's timestamp standing and nothing was reported
-until `staleDays` had passed. The panel could meanwhile say "Nothing unbacked.
-Every allowlisted path is captured", because the drift scan runs before the
-gates that refuse, so its report was accurate and its meaning was not. For a
-tool whose promise is telling you what it is not backing up, that was the
-wrong way to fail: it happened on a real machine for four hours, every run
-stopped by the secret scan over a plan file that quoted a database password.
-
-The outcome of the last attempt is now recorded alongside its time, and
-`status` reports a refused run as a problem immediately, naming the reason
-that stopped it, so the panel turns red on the first failure and tells you
-what to fix rather than sending you to the journal. A dry run records nothing,
-since it is an inspection and not a backup. A run the timer had to kill never
-reaches the refusal path, so the `OnFailure=` hook files it instead, and it
-never overwrites a reason the refusal already explained.
 
 ## [0.7.0] - 2026-09-06
 
