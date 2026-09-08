@@ -178,7 +178,7 @@ remote_probe_derive() {
   # and the fix is one command for the user: git remote set-url --push --delete.
   while IFS= read -r pu; do
     [[ -n "$pu" && "$pu" != "$url" ]] || continue
-    warn "origin pushes to a different URL than it fetches from ($pu); refusing until the pushurl is removed"
+    warn "origin pushes to a different URL than it fetches from ($(remote_url_display "$pu")); refusing until the pushurl is removed"
     PUSH_REASON="pushurl-differs"
     return 0
   done < <(remote_push_urls)

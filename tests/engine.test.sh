@@ -3951,6 +3951,22 @@ if group 97 "a remote URL with a password in it is refused, and never printed"; 
   eq "import refuses a repo whose origin carries a password" "$irc97" "1"
   eq "and prints no password" "$(grep -c hunter2secret <<<"$imp97" || true)" "0"
   git -C "$FR" remote set-url origin "$BARE"
+  # A PUSH URL carries the password just as well, and it is the one a push
+  # actually uses. A clean fetch URL with a credential-bearing pushurl passed
+  # the guard entirely, and lib/remote.sh then named that pushurl in a warning
+  # (Codex, PR 7). Both halves are covered: the refusal, and the warning.
+  git -C "$FR" remote set-url origin "$BARE"
+  git -C "$FR" remote set-url --push origin "$bad97"
+  p97=$(env HOME="$FH" "$CLI" setup --data-repo "$FR" --no-timers --yes 2>&1); prc=$?
+  eq "setup refuses a password in the PUSH url" "$prc" "1"
+  has "and says why" "$p97" "carries a password"
+  eq "without printing the password" "$(grep -c hunter2secret <<<"$p97" || true)" "0"
+  # The pushurl-differs warning is the other place that URL is printed.
+  w97=$(env HOME="$FH" OMABACKUP_NET=1 "$CLI" snapshot --no-push 2>&1 || true)
+  eq "the pushurl-differs warning prints no password either" "$(grep -c hunter2secret <<<"$w97" || true)" "0"
+  has "but still names the mismatch" "$w97" "pushes to a different URL"
+  git -C "$FR" remote set-url --push --delete origin "$bad97" 2>/dev/null || true
+  git -C "$FR" remote set-url origin "$BARE"
   # A userinfo WITHOUT a password is fine: git@ and user@ forms are normal.
   check "a user@ URL without a password is accepted" \
     env HOME="$FH" "$CLI" setup --data-repo "$FR" --remote "ssh://git@example.com/alice/dots.git" --no-timers --yes
