@@ -531,7 +531,17 @@ cmd_timer() {
 # Always an argv array, never a shell string; detached so the popup does not
 # wait on it.
 cmd_open() {
+  # Flags before the repo check: a typo is a usage error whatever state the
+  # repo is in, and every other verb answers that way.
+  local want_remote=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --remote) want_remote=1; shift ;;
+      *) usage_die "open: unknown flag $1" ;;
+    esac
+  done
   data_repo_require
+  [[ $want_remote == 0 ]] || { open_remote_page; return $?; }
   local -a term=()
   if have omarchy-launch-floating-terminal-with-presentation; then
     term=(omarchy-launch-floating-terminal-with-presentation)
@@ -547,4 +557,37 @@ cmd_open() {
     return 1
   fi
   printf '{"ok":true}\n'
+}
+
+# open_remote_page: the data repo's own page in a browser. Only a GitHub remote
+# has a page this tool can name, and the URL is BUILT HERE from a slug
+# remote_github_slug has already validated as exactly owner/repo -- so nothing
+# a git remote says can choose the host, the scheme or the path. argv, never a
+# shell string, and detached so the popup does not wait on a browser starting.
+#
+# The refusals below are the same condition status.json reports as
+# remote_linkable:false, so the popup does not offer the click in the first
+# place; a person typing the verb still gets a reason rather than silence.
+open_remote_page() {
+  local url slug page
+  url=$(remote_origin_url)
+  [[ -n "$url" ]] || { widget_reply_fail "this data repo has no remote, so there is no page to open"; return 1; }
+  slug=$(remote_github_slug "$url")
+  [[ -n "$slug" ]] || { widget_reply_fail "no web page is known for this remote; only a GitHub remote has one this tool can name"; return 1; }
+  page="https://github.com/$slug"
+  local -a browser=()
+  if have omarchy-launch-browser; then
+    browser=(omarchy-launch-browser)
+  elif have xdg-open; then
+    browser=(xdg-open)
+  else
+    widget_reply_fail "no browser launcher available (omarchy-launch-browser or xdg-open)"
+    return 1
+  fi
+  have setsid || { widget_reply_fail "setsid is not available"; return 1; }
+  if ! setsid -f "${browser[@]}" "$page" >/dev/null 2>&1; then
+    widget_reply_fail "could not open $page"
+    return 1
+  fi
+  printf '{"ok":true,"opened":%s}\n' "$(jstr "$page")"
 }

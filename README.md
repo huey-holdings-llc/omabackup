@@ -227,6 +227,7 @@ else below is used when it is there and skipped, or reported, when it is not.
 | `python3` | `python` | re-parsing a normalized JSON file to prove the rule did not break it | yes |
 | `omarchy-launch-floating-terminal-with-presentation` or `xdg-terminal-exec` | Omarchy, `xdg-terminal-exec` | the popup's "open a terminal in the data repo" button (the Omarchy launcher is preferred) | yes |
 | `wl-copy` | `wl-clipboard` | copying the gitleaks install command from the setup card | yes |
+| `omarchy-launch-browser` or `xdg-open` | Omarchy, `xdg-utils` | `open --remote`: the backup repository's page on GitHub (the Omarchy launcher is preferred) | yes |
 | `omarchy-notification-send` or `notify-send` | Omarchy, `libnotify` | desktop notifications for a failed or diverged run | yes |
 | `gh` | `github-cli` | `setup --create-private` only | no, optional |
 
@@ -411,7 +412,7 @@ omabackup <verb> [args] [--json]
   health                                            login check (silent when ok)
   timer pause|resume|status|run
   self-test [--real]
-  open                                              terminal in the data repo
+  open [--remote]                                   a terminal in the data repo, or its page on GitHub
   version
 ```
 
@@ -429,10 +430,21 @@ caller. Exit codes: 0 ran, 1 refused or unhealthy, 2 usage.
 | `s` | Snapshot now |
 | `p` | Push, or open the commit confirmation if the lists are dirty |
 | `t` | Open a terminal in the data repo |
+| `b` | Open the backup repository on GitHub (nothing happens if the remote has no page) |
 | `n` | Toggle ask-for-a-reason mode on Ignore |
 | `r` | Refresh |
 | `Tab` | Move to the next bar panel |
 | `Esc` | Close |
+
+The popup names the repository your backups go to, under Pushed. A GitHub
+remote shows as `owner/repo` and opens in your browser when you click it or
+press `b`; another host shows as `host/path` as plain text, because a
+GitHub repository is the only one whose web page this tool can work out
+from a git remote. A local-only repo shows no such row at all: the line
+above it already says so. The URL is built by the CLI from the remote,
+validated to be exactly `owner/repo`, so nothing a git remote says can
+send your browser somewhere else. `omabackup open --remote` does the same
+thing from a terminal.
 
 Right-click the bar icon to refresh without opening the popup. The bar shows
 a quiet glyph when everything is healthy, a drift count when something needs

@@ -73,6 +73,22 @@ an unreadable directory produced no names, nothing matched, and the gate
 passed. `find`'s status is now checked on its own, and a gate that cannot
 look does not pass.
 
+## [Unreleased]
+
+### Added
+
+The popup names the repository your backups go to. A new row under Pushed
+reads `Backup repo`, showing `owner/repo` for a GitHub remote as a link
+that opens it in your browser, or `host/path` as plain text for another
+host. A local-only repo shows no row, since the line above already says
+so. `b` does the same from the keyboard, and `omabackup open --remote`
+from a terminal. The URL is built by the engine from a remote validated to
+be exactly `owner/repo`, so nothing a git remote says can choose the host,
+and it is never assembled in the widget: the popup launches nothing but
+the command line, as it always has. Two new `status.json` fields,
+`remote_label` and `remote_linkable`, carry it, and neither ever holds a
+raw URL, because that is the one shape that can carry a password.
+
 ## [0.7.0] - 2026-09-06
 
 If you have been running 0.2.0, this is the release where the plugin stops

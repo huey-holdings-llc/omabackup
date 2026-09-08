@@ -49,6 +49,7 @@ health_not_configured_json() {
       last_run:0, last_run_age_days:-1,
       drift_scan_complete:false, drift_count:0, drift_truncated:false, drift:[],
       unpushed:0, diverged:false, upstream_readable:false, remote:"none",
+      remote_label:"", remote_linkable:false,
       push_verifiable:false, push_reason:"unprobed", uncommitted:[],
       timers_checked:false, timer_enabled:false, timer_active:false, timer_next:"",
       selftest_enabled:false, selftest_active:false, problems:[]}'
@@ -162,9 +163,17 @@ health_collect() {
   # commit since had gone nowhere. The config is what records the INTENT, so
   # it decides which of the two quiet answers this is.
   H_UNPUSHED=0; H_DIVERGED=false; H_UPSTREAM_READABLE=false
+  # The popup names the repository the backup goes to, so the label and whether
+  # it is worth a click are decided here, once, from the live origin. Both are
+  # pure string work over one `git remote get-url` this block already ran: no
+  # network, because status refreshes every time the popup opens.
+  H_REMOTE_LABEL=""; H_REMOTE_LINKABLE=false
   local origin_url no_upstream=0; origin_url=$(remote_origin_url)
   if [[ -n "$origin_url" ]]; then
     H_REMOTE=configured
+    local origin_slug; origin_slug=$(remote_github_slug "$origin_url")
+    [[ -z "$origin_slug" ]] || H_REMOTE_LINKABLE=true
+    H_REMOTE_LABEL=$(remote_display_label "$origin_url" "$origin_slug")
   elif [[ -n "${CFG_REMOTE_URL:-}" ]]; then
     H_REMOTE=missing
     H_PROBLEMS+=("a remote was configured ($(remote_url_display "$CFG_REMOTE_URL")) but the repo has no origin; run omabackup setup")
@@ -349,6 +358,8 @@ health_status_json() {
     --argjson diverged "$H_DIVERGED" \
     --argjson upstream_readable "$H_UPSTREAM_READABLE" \
     --arg remote "$H_REMOTE" \
+    --arg remote_label "$H_REMOTE_LABEL" \
+    --argjson remote_linkable "$H_REMOTE_LINKABLE" \
     --argjson push_verifiable "$H_PUSH_VERIFIABLE" \
     --arg push_reason "$H_PUSH_REASON" \
     --argjson uncommitted "[$H_UNCOMMITTED_JSON]" \
@@ -364,7 +375,7 @@ health_status_json() {
       drift_scan_complete:$scan_complete, drift_count:$drift_count,
       drift_truncated:$drift_truncated, drift:$drift,
       unpushed:$unpushed, diverged:$diverged, upstream_readable:$upstream_readable,
-      remote:$remote,
+      remote:$remote, remote_label:$remote_label, remote_linkable:$remote_linkable,
       push_verifiable:$push_verifiable, push_reason:$push_reason,
       uncommitted:$uncommitted,
       timers_checked:$timers_checked, timer_enabled:$timer_enabled, timer_active:$timer_active,
