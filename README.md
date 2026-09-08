@@ -581,6 +581,14 @@ actually broken.
   in the config file and in the log. Use an SSH remote, or HTTPS with a
   credential helper (`git config credential.helper`), point origin at the
   password-free form with `git remote set-url origin`, then rerun `setup`.
+* **"the last snapshot refused and nothing was backed up"**: the most recent
+  run stopped at one of the gates, and the rest of the line is the reason it
+  gave. Nothing was committed, so nothing left this machine. This appears the
+  moment it happens rather than waiting for the backup to go stale, and it
+  clears itself on the next run that finishes. The commonest cause is the
+  secret scan finding a credential-shaped string in a file you back up: fix
+  the file, or decide the finding is not a secret and record that decision,
+  then run `omabackup snapshot` again.
 * **"added N ignore pattern(s) this version ships"**: an upgrade found
   patterns in `share/data.gitignore` that your data repo's `.gitignore` did
   not have, and the snapshot appended them under a dated comment and

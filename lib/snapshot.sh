@@ -733,6 +733,9 @@ cmd_snapshot() {
     esac
   done
   SNAP_DRY=$dry
+  # From here every refusal is recorded as a failed run. A dry run is an
+  # inspection, not a backup attempt, so it records nothing either way.
+  [[ $dry == 1 ]] || RUN_RECORDING=1
   # Stamped at the START of the run, not the end: anything comparing a live
   # file against this stamp treats a file newer than it as "changed since the
   # snapshot". Stamping at the end left a window where a file rewritten
@@ -799,6 +802,10 @@ cmd_snapshot() {
   remote_probe
   snapshot_commit
   printf '%s\n' "$RUN_START" > "$DATA_REPO/manifests/.last-run"
+  # The attempt succeeded. Recorded before the push, which is a separate
+  # gate with its own reporting: a run that commits and cannot push has
+  # still backed the machine up.
+  run_record true ""
   if [[ $nopush == 1 ]]; then
     # shellcheck disable=SC2034  # read by lib/remote.sh and lib/health.sh
     SKIP_PUSH=1
