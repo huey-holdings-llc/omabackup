@@ -355,6 +355,13 @@ setup_remote() {
   # repo that might be public". Refused BEFORE anything is written, so a
   # refusal leaves neither the git remote nor the config half-changed.
   local target=${url:-$have_origin}
+  # A password inside the URL is refused before anything is written, new or
+  # already on origin: it would land in .git/config, in this tool's config,
+  # and in every line that prints the remote. The message shows the URL with
+  # the password already replaced, so the refusal itself does not print it.
+  if [[ -n "$target" ]] && remote_url_has_password "$target"; then
+    die "the remote URL carries a password ($(remote_url_display "$target")); OmaBackup will not store one. Use an SSH remote, or HTTPS with a credential helper (git config credential.helper), fix origin with: git -C $DATA_REPO remote set-url origin <url>, then rerun setup"
+  fi
   if [[ $trust == 1 && -n "$target" ]] && remote_is_github "$target"; then
     die "GitHub remotes are verified automatically; trust is only for other hosts"
   fi
@@ -570,7 +577,7 @@ setup_check() {
   j=$(jq -cn \
     --argjson ok "$ok" --argjson tools "$tools_json" --argjson cfg "$cfg" --argjson repo "$repo" \
     --argjson marker "$marker" --argjson us "$units_s" --argjson ut "$units_t" \
-    --arg url "$url" --arg kind "$kind" --argjson trusted "$trusted" \
+    --arg url "$(remote_url_display "$url")" --arg kind "$kind" --argjson trusted "$trusted" \
     '{ok:$ok, tools:$tools, config:$cfg, dataRepo:$repo, marker:$marker,
       units:{snapshot:$us, selftest:$ut}, remote:{url:$url, kind:$kind, trusted:$trusted}}')
 

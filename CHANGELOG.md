@@ -55,6 +55,13 @@ real stamp.
 
 ### Security
 
+`setup` refuses a remote URL that carries a password, whether it arrives
+as `--remote` or is already on the repo's origin, and says how to fix it
+(an SSH remote, or HTTPS with a credential helper). The refusal, `setup
+check` and every warning that prints a remote show any password as `***`.
+A password in a URL would otherwise sit in `.git/config`, in the tool's
+config and in the log; raised by the Codex review on PR 6.
+
 The filename gate refuses the run when its walk of the staging tree fails.
 The walk sat in one pipeline ending in `|| true`, put there for grep's
 no-match exit, and that swallowed `find`'s exit too: a `find` that died on
