@@ -98,6 +98,21 @@ cmd_notify_failure() {
       if declare -F run_record_unless_failed >/dev/null; then
         run_record_unless_failed "the run did not finish (see journalctl --user -u omabackup-snapshot)" || true
       fi
+      # ...and refresh status.json, because the widget watches that file and
+      # nothing else. Recording the verdict without rewriting the status left
+      # the popup showing the previous healthy state until its own ten-minute
+      # refresh came round, which is most of the promptness this fix is for.
+      # Guarded twice: the function may not be sourced on this path, and a
+      # repo it cannot read must not turn a failure notification into a
+      # different failure.
+      # In a SUBSHELL, because this verb runs without a loaded config on
+      # purpose (the dispatcher only peeks at notify, so DATA_REPO is unset
+      # here) and config_load can die. The side effect wanted is a written
+      # file, which survives the subshell; a failure inside it must not turn a
+      # failure notification into a different failure.
+      if declare -F health_write_status >/dev/null; then
+        ( config_load >/dev/null 2>&1 && health_write_status >/dev/null 2>&1 ) || true
+      fi
       notify "OmaBackup: snapshot FAILED" "Run: omabackup status, then journalctl --user -u omabackup-snapshot -n 50" critical ;;
     selftest)
       if [[ "$result" == timeout ]]; then

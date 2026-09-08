@@ -314,6 +314,14 @@ run_record() {
 # knows only that the unit failed, so writing unconditionally would replace
 # "gitleaks found a secret in the staging tree" with "the run did not finish".
 # The specific reason is the one worth keeping.
+# run_record_start: this run is under way and has no verdict yet. Written by a
+# real snapshot before it does anything, and it is what makes the OnFailure
+# hook correlate correctly: without it, a run the unit KILLED inherited the
+# PREVIOUS run's failure record, so status went on naming an old gate (quite
+# possibly one already fixed) instead of saying the latest run did not finish.
+# A null verdict reads as "nothing to report" everywhere, the same as no file.
+run_record_start() { run_record null "the run has not finished"; }
+
 run_record_unless_failed() {
   local prev=""
   if [[ -r "$STATE_DIR/last-run.json" ]]; then
@@ -321,6 +329,9 @@ run_record_unless_failed() {
     # treats the two the same, which is the whole point of this field.
     prev=$(jq -r 'if .ok == null then "" else (.ok|tostring) end' "$STATE_DIR/last-run.json" 2>/dev/null) || prev=""
   fi
+  # Only a failure from THIS invocation stands: run_record_start reset the
+  # verdict to null when the run began, so a false here was written by this
+  # run's own die, with a better reason than this path could give.
   [[ "$prev" == false ]] && return 0
   run_record false "$1"
 }

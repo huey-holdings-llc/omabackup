@@ -736,6 +736,9 @@ cmd_snapshot() {
   # From here every refusal is recorded as a failed run. A dry run is an
   # inspection, not a backup attempt, so it records nothing either way.
   [[ $dry == 1 ]] || RUN_RECORDING=1
+  # Clear last run's verdict before this one does anything, so a run the unit
+  # kills cannot be reported with the previous run's reason.
+  [[ $dry == 1 ]] || run_record_start
   # Stamped at the START of the run, not the end: anything comparing a live
   # file against this stamp treats a file newer than it as "changed since the
   # snapshot". Stamping at the end left a window where a file rewritten

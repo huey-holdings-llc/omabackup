@@ -4140,6 +4140,30 @@ if group 99 "a snapshot that refuses says so at once, instead of looking healthy
   has "the specific reason survives" "$(jq -r .reason "$rec99")" "credential-looking filename"
   rm -f "$ghp99"
 
+  # A run the unit kills after an EARLIER run refused must be reported as
+  # "did not finish", not with the older run's gate reason: status would
+  # otherwise go on naming a gate that may already be fixed (Codex, PR 9).
+  # run_record_start is what makes this correlate: a new run clears the
+  # verdict, so a false can only have come from this run's own refusal.
+  printf 'x\n' > "$ghp99"
+  fails "an earlier run refuses with a reason" env HOME="$FH" "$CLI" snapshot --no-push
+  has "leaving that reason on record" "$(jq -r .reason "$rec99")" "credential-looking filename"
+  rm -f "$ghp99"
+  # Now a run that starts and is killed before it can refuse or finish.
+  env HOME="$FH" "$CLI" snapshot --no-push >/dev/null 2>&1 &
+  k99=$!
+  sleep 0.3
+  kill -9 $k99 2>/dev/null; wait $k99 2>/dev/null || true
+  check "OnFailure fires for the killed run" env HOME="$FH" "$CLI" notify-failure snapshot
+  has "and it is reported as not finishing" "$(jq -r .reason "$rec99")" "did not finish"
+  eq "not with the older gate's reason" \
+    "$(jq -r .reason "$rec99" | grep -c 'credential-looking' || true)" "0"
+  # The widget watches status.json and nothing else, so the failure hook has
+  # to refresh it rather than leaving the popup on the last healthy state.
+  has "and status.json carries the refusal too" \
+    "$(jq -r '.problems[]' "$OMABACKUP_STATE_DIR/status.json")" "the last snapshot refused"
+  check "a run succeeds again" env HOME="$FH" "$CLI" snapshot --no-push
+
   # A leftover failure from before the last successful run must not nag: the
   # record is compared against the stamp, not trusted on its own.
   check "a later run succeeds" env HOME="$FH" "$CLI" snapshot --no-push
