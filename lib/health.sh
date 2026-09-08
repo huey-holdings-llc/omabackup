@@ -92,6 +92,31 @@ health_collect() {
     fi
   fi
 
+  # --- did the last ATTEMPT refuse? The stamp above only moves when a run
+  # finishes, so a run that refuses leaves it standing and nothing is said
+  # until staleDays have passed. That is two days of a panel reporting a
+  # healthy backup while every run is being stopped at a gate. The reason
+  # comes from the refusal itself, so the problem names what to fix rather
+  # than sending the operator to the journal.
+  local lr_ok lr_reason lr_at
+  if [[ -r "$STATE_DIR/last-run.json" ]]; then
+    # NOT `.ok // empty`: jq's alternative operator treats false exactly like
+    # null, so the one value this field exists to carry read back as absent.
+    lr_ok=$(jq -r 'if .ok == null then "" else (.ok|tostring) end' "$STATE_DIR/last-run.json" 2>/dev/null) || lr_ok=""
+    lr_reason=$(jq -r '.reason // ""' "$STATE_DIR/last-run.json" 2>/dev/null) || lr_reason=""
+    lr_at=$(jq -r '.at // 0' "$STATE_DIR/last-run.json" 2>/dev/null) || lr_at=0
+    case "$lr_at" in ''|*[!0-9]*) lr_at=0 ;; esac
+    # `>= H_LAST`: a record older than the last successful run is a leftover
+    # from a version that did not clear it, and must not nag forever.
+    if [[ "$lr_ok" == false && "$lr_at" -ge "$H_LAST" ]]; then
+      if [[ -n "$lr_reason" ]]; then
+        H_PROBLEMS+=("the last snapshot refused and nothing was backed up: $lr_reason")
+      else
+        H_PROBLEMS+=("the last snapshot refused and nothing was backed up; run omabackup snapshot to see why")
+      fi
+    fi
+  fi
+
   # --- drift report: a scan that never finished is a FAULT, never "clean".
   local drift_file="$DATA_REPO/manifests/drift.txt" items arr count
   H_SCAN_COMPLETE=false; H_DRIFT_COUNT=0; H_DRIFT_TRUNCATED=false; H_DRIFT_JSON="[]"

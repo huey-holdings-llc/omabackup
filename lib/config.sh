@@ -276,6 +276,66 @@ state_write_status() {
   return 0
 }
 
+# run_record OK REASON: what the last snapshot ATTEMPT did, as opposed to when
+# the last successful one finished. Written to $STATE_DIR/last-run.json.
+#
+# manifests/.last-run is written only by a run that gets to the end, so a run
+# that refuses leaves the previous run's timestamp standing and health reports
+# staleness only once staleDays have passed. On the owner's laptop that meant
+# four hours of refused snapshots, every one of them stopped by the secret gate
+# over a plan file quoting a database password, while the popup said "Nothing
+# unbacked. Every allowlisted path is captured" -- the drift scan runs before
+# the gate, so its report was accurate and its meaning was not. A backup tool
+# whose whole promise is telling you what it is NOT backing up has to say the
+# run refused, the first time, not two days later.
+#
+# Never fatal, and never noisy: this runs on the way out of a run that has
+# already failed, and an unwritable state directory must not replace that
+# failure's message with a different one.
+run_record() {
+  local ok=$1 reason=${2:-}
+  # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
+  mkdir -m 700 -p "$STATE_DIR" 2>/dev/null || return 0
+  local tmp
+  tmp=$(mktemp "$STATE_DIR/.last-run.XXXXXX" 2>/dev/null) || return 0
+  if jq -cn --argjson ok "$ok" --arg r "$reason" --argjson at "$(date +%s)" \
+       '{ok:$ok, reason:$r, at:$at}' > "$tmp" 2>/dev/null \
+     && chmod 600 "$tmp" 2>/dev/null \
+     && mv -f "$tmp" "$STATE_DIR/last-run.json" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+
+# run_record_unless_failed REASON: file a failed run, but never over a failure
+# that has already explained itself. A run stopped at a gate writes its own
+# reason through die on the way out; the systemd OnFailure path then runs and
+# knows only that the unit failed, so writing unconditionally would replace
+# "gitleaks found a secret in the staging tree" with "the run did not finish".
+# The specific reason is the one worth keeping.
+# run_record_start: this run is under way and has no verdict yet. Written by a
+# real snapshot before it does anything, and it is what makes the OnFailure
+# hook correlate correctly: without it, a run the unit KILLED inherited the
+# PREVIOUS run's failure record, so status went on naming an old gate (quite
+# possibly one already fixed) instead of saying the latest run did not finish.
+# A null verdict reads as "nothing to report" everywhere, the same as no file.
+run_record_start() { run_record null "the run has not finished"; }
+
+run_record_unless_failed() {
+  local prev=""
+  if [[ -r "$STATE_DIR/last-run.json" ]]; then
+    # `.ok // empty` would read false as absent: jq's alternative operator
+    # treats the two the same, which is the whole point of this field.
+    prev=$(jq -r 'if .ok == null then "" else (.ok|tostring) end' "$STATE_DIR/last-run.json" 2>/dev/null) || prev=""
+  fi
+  # Only a failure from THIS invocation stands: run_record_start reset the
+  # verdict to null when the run began, so a false here was written by this
+  # run's own die, with a better reason than this path could give.
+  [[ "$prev" == false ]] && return 0
+  run_record false "$1"
+}
+
 # data_repo_assert_mode: the repo root and .git must be 0700. .git holds every
 # backed-up config in full history, and nothing was ever asserting its mode:
 # `mkdir -m 700 -p` leaves an EXISTING directory alone, and `setup --import`

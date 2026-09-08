@@ -10,6 +10,15 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 # die: refuse. Exit 1. With --json the refusal is still one JSON object.
 die() {
+  # A run that declared itself recordable (cmd_snapshot, for a real run) says
+  # so on its way out, so health can report "the last run refused, here is
+  # why" instead of a stale timestamp that still looks healthy. Guarded on the
+  # flag so a refusal from lint, drift or the widget is not filed as a failed
+  # backup, and `|| true` so a state directory nobody can write cannot change
+  # what this refusal says or the code it exits with.
+  if [[ -n "${RUN_RECORDING:-}" ]] && declare -F run_record >/dev/null; then
+    run_record false "$*" || true
+  fi
   if [[ "${JSON:-0}" == 1 ]]; then
     jq -cn --arg m "$*" '{ok:false, error:$m}'
   else
@@ -80,7 +89,31 @@ notify() {
 cmd_notify_failure() {
   local result=${2:-}
   case "${1:-}" in
-    snapshot) notify "OmaBackup: snapshot FAILED" "Run: omabackup status, then journalctl --user -u omabackup-snapshot -n 50" critical ;;
+    snapshot)
+      # A run the unit KILLED never reaches die, so it records nothing on its
+      # own and health would read the previous run's verdict. This is the one
+      # path systemd guarantees to reach on a failure, so it files the run as
+      # refused; a run that died at a gate has already written its own reason,
+      # and this overwrite says only what this path actually knows.
+      if declare -F run_record_unless_failed >/dev/null; then
+        run_record_unless_failed "the run did not finish (see journalctl --user -u omabackup-snapshot)" || true
+      fi
+      # ...and refresh status.json, because the widget watches that file and
+      # nothing else. Recording the verdict without rewriting the status left
+      # the popup showing the previous healthy state until its own ten-minute
+      # refresh came round, which is most of the promptness this fix is for.
+      # Guarded twice: the function may not be sourced on this path, and a
+      # repo it cannot read must not turn a failure notification into a
+      # different failure.
+      # In a SUBSHELL, because this verb runs without a loaded config on
+      # purpose (the dispatcher only peeks at notify, so DATA_REPO is unset
+      # here) and config_load can die. The side effect wanted is a written
+      # file, which survives the subshell; a failure inside it must not turn a
+      # failure notification into a different failure.
+      if declare -F health_write_status >/dev/null; then
+        ( config_load >/dev/null 2>&1 && health_write_status >/dev/null 2>&1 ) || true
+      fi
+      notify "OmaBackup: snapshot FAILED" "Run: omabackup status, then journalctl --user -u omabackup-snapshot -n 50" critical ;;
     selftest)
       if [[ "$result" == timeout ]]; then
         notify "OmaBackup: weekly self-test ran out of time" \

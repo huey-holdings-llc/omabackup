@@ -4082,5 +4082,95 @@ if group 98 "open --remote opens the repo's own page, and builds the URL itself"
   # and by the --remote cases; the terminal path itself is unchanged.
 fi
 
+if group 99 "a snapshot that refuses says so at once, instead of looking healthy for two days"; then
+  # manifests/.last-run only moves when a run FINISHES, so a run that refuses
+  # left the previous run's timestamp standing and health said nothing until
+  # staleDays had passed. On the owner's laptop that was four hours of refused
+  # snapshots reported as a healthy backup, while the drift line -- scanned
+  # before the gate that refused -- said every allowlisted path was captured.
+  mk_fixture g99; seed_home; allow '.config/mytool'; commit_baseline
+  rec99="$OMABACKUP_STATE_DIR/last-run.json"
+  eq "a successful run records itself as ok" "$(jq -r .ok "$rec99")" "true"
+  # The fixture snapshots with --no-push, so it always carries "no upstream
+  # configured". What matters here is that nothing reports a refused run.
+  eq "and nothing claims the run refused" \
+    "$(obj status | jq -r '[.problems[] | select(test("refused"))] | length')" "0"
+
+  # A credential-shaped filename stops the run at the filename gate, which is
+  # a refusal with a reason, exactly like the secret scan that bit the owner.
+  ghp99="$FH/.config/mytool/ghp_$(rand_body 20).txt"
+  printf 'x\n' > "$ghp99"
+  fails "the run refuses" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the refusal is recorded, not just logged" "$(jq -r .ok "$rec99")" "false"
+  has "with the reason that stopped it" "$(jq -r .reason "$rec99")" "credential-looking filename"
+  # ...and the panel says so NOW, on a stamp that is seconds old.
+  st99=$(obj status)
+  eq "status is a fault straight away" "$(jq -r .state <<<"$st99")" "fault"
+  eq "on a last_run that is not remotely stale" "$(jq -r .last_run_age_days <<<"$st99")" "0"
+  has "and the problem names the refusal" "$(jq -r '.problems[]' <<<"$st99")" "the last snapshot refused"
+  has "and carries the reason with it" "$(jq -r '.problems[]' <<<"$st99")" "credential-looking filename"
+
+  # A dry run is an inspection, not a backup attempt: it must not file a
+  # verdict about the backup in either direction.
+  before99=$(cat "$rec99")
+  fails "a dry run refuses too" env HOME="$FH" "$CLI" snapshot --dry-run
+  eq "but records nothing of its own" "$(cat "$rec99")" "$before99"
+
+  # Fixing it clears the fault on the next run. No timer, no waiting.
+  rm -f "$ghp99"
+  check "the next run succeeds" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "the record flips back to ok" "$(jq -r .ok "$rec99")" "true"
+  eq "and the refusal is gone from status" \
+    "$(obj status | jq -r '[.problems[] | select(test("refused"))] | length')" "0"
+
+  # A run the unit KILLED never reaches the refusal path, so systemd's
+  # OnFailure hook files it instead. That is the only path guaranteed to run.
+  check "notify-failure records a killed run" env HOME="$FH" "$CLI" notify-failure snapshot
+  eq "as a failure" "$(jq -r .ok "$rec99")" "false"
+  has "with what that path actually knows" "$(jq -r .reason "$rec99")" "did not finish"
+  has "and status reports it" "$(jq -r '.problems[]' <<<"$(obj status)")" "the last snapshot refused"
+
+  # ...but it must never overwrite a reason the refusal itself explained. The
+  # generic "did not finish" landing on top of "gitleaks found a secret" is
+  # the difference between a fixable message and a trip to the journal.
+  check "a run succeeds first" env HOME="$FH" "$CLI" snapshot --no-push
+  printf 'x\n' > "$ghp99"
+  fails "then one refuses with a reason" env HOME="$FH" "$CLI" snapshot --no-push
+  check "and OnFailure fires after it" env HOME="$FH" "$CLI" notify-failure snapshot
+  has "the specific reason survives" "$(jq -r .reason "$rec99")" "credential-looking filename"
+  rm -f "$ghp99"
+
+  # A run the unit kills after an EARLIER run refused must be reported as
+  # "did not finish", not with the older run's gate reason: status would
+  # otherwise go on naming a gate that may already be fixed (Codex, PR 9).
+  # run_record_start is what makes this correlate: a new run clears the
+  # verdict, so a false can only have come from this run's own refusal.
+  printf 'x\n' > "$ghp99"
+  fails "an earlier run refuses with a reason" env HOME="$FH" "$CLI" snapshot --no-push
+  has "leaving that reason on record" "$(jq -r .reason "$rec99")" "credential-looking filename"
+  rm -f "$ghp99"
+  # Now a run that starts and is killed before it can refuse or finish.
+  env HOME="$FH" "$CLI" snapshot --no-push >/dev/null 2>&1 &
+  k99=$!
+  sleep 0.3
+  kill -9 $k99 2>/dev/null; wait $k99 2>/dev/null || true
+  check "OnFailure fires for the killed run" env HOME="$FH" "$CLI" notify-failure snapshot
+  has "and it is reported as not finishing" "$(jq -r .reason "$rec99")" "did not finish"
+  eq "not with the older gate's reason" \
+    "$(jq -r .reason "$rec99" | grep -c 'credential-looking' || true)" "0"
+  # The widget watches status.json and nothing else, so the failure hook has
+  # to refresh it rather than leaving the popup on the last healthy state.
+  has "and status.json carries the refusal too" \
+    "$(jq -r '.problems[]' "$OMABACKUP_STATE_DIR/status.json")" "the last snapshot refused"
+  check "a run succeeds again" env HOME="$FH" "$CLI" snapshot --no-push
+
+  # A leftover failure from before the last successful run must not nag: the
+  # record is compared against the stamp, not trusted on its own.
+  check "a later run succeeds" env HOME="$FH" "$CLI" snapshot --no-push
+  jq '.ok=false | .reason="stale leftover" | .at=1' "$rec99" > "$T/r99" && mv "$T/r99" "$rec99"
+  eq "a failure older than the last good run is ignored" \
+    "$(obj status | jq -r '[.problems[] | select(test("refused"))] | length')" "0"
+fi
+
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]
