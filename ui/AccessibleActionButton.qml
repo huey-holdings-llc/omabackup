@@ -8,8 +8,8 @@ import qs.Ui
 // drift rows announced thirty identical "Add to allowlist" buttons, with
 // nothing to say which file each one was about, so the name becomes
 // "<verb>, <path>" whenever a row passes its path down. A typed string that
-// defaults to empty, never undefined: a button with no row behind it (the
-// group caret's Collapse, say) simply keeps the old behaviour.
+// defaults to empty, never undefined, so a button with no path to give keeps
+// the old behaviour.
 PanelActionButton {
   property string pathLabel: ""
   readonly property string accessibleVerb: (tooltipText || "").replace(/\s*\([^)]*\)\s*$/, "")
