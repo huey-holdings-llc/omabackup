@@ -551,6 +551,44 @@ repo_assert_clean() {
 }
 repo_branch() { git -C "$DATA_REPO" symbolic-ref --short -q HEAD; }
 
+# repo_own_edits: every edit in the data repo that is not the snapshot's own
+# output, one NUL-terminated path each, unsorted. This is THE list: `status`
+# counts it as uncommitted and the Commit button (cmd_push) commits it. They
+# used to be two lists, status counting everything outside the snapshot's
+# paths and the button staging five named files, and an edit in the first and
+# not the second was a count nothing on screen could clear. Two files read it
+# for that reason, which is why it sits beside the other repo questions here
+# rather than inside either of them.
+#
+# --untracked-files=all names an untracked directory file by file, which is
+# what a confirm dialog has to show. In -z porcelain a rename or copy carries
+# its source as a second record, whichever column says R or C; both paths are
+# the edit. A path under the snapshot's own turf (the source of a `git mv` out
+# of home/) is dropped: the button must never stage the snapshot's output.
+repo_own_edits() {
+  local rec p src=0
+  while IFS= read -r -d '' rec; do
+    if (( src )); then
+      src=0; p=$rec
+    else
+      p=${rec:3}
+      [[ "${rec:0:2}" == *[RC]* ]] && src=1
+    fi
+    case "$p" in home/*|etc/*|manifests/*|modes.txt|'') continue ;; esac
+    printf '%s\0' "$p"
+  done < <(git -C "$DATA_REPO" status --porcelain -z --untracked-files=all \
+             -- . ':!home' ':!etc' ':!manifests' ':!modes.txt' 2>/dev/null)
+}
+
+# own_edits_sig PATH...: the signature of one sorted list of own edits.
+# status.json carries it and the popup hands it back with --confirm, so the
+# button commits the list the person saw or nothing. It is computed from the
+# list already in hand, never from a second git call: a file saved between
+# two calls would be in the signature and not on screen.
+own_edits_sig() {
+  if (( $# )); then printf '%s\0' "$@"; fi | cksum | cut -d' ' -f1
+}
+
 # git_ident_args: fill GIT_IDENT_ARGS with the `-c user.*` a commit needs on a
 # machine that has no git identity at all, and leave it EMPTY on a machine
 # that has one -- the user's own name and address must never be overridden.

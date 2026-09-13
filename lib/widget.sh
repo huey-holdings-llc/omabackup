@@ -390,7 +390,7 @@ push_nothing_ahead() {
 # and require --confirm, then stage EXACTLY those paths, literally (never -A,
 # never a glob), and commit them.
 #
-# The set is repo_own_edits (lib/health.sh), the same list status counts as
+# The set is repo_own_edits (lib/config.sh), the same list status counts as
 # uncommitted. It used to be five named list files while status counted
 # everything, so an edit outside the five was an "N uncommitted" the button
 # ran against and never moved. Every file status reports as an uncommitted
