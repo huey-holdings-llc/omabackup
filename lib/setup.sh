@@ -599,14 +599,32 @@ setup_check() {
   # --json can then tell "checked and fine" from "not checked at all"
   # without also reading timer.systemdAnalyze to disambiguate a bare true.
   #
-  # Missing systemd-analyze is FAIL, not warn: setup_units (below in this
-  # file) now refuses to write a unit file it cannot validate, so a machine
-  # with no systemd-analyze cannot finish a timers setup at all, and this
-  # doctor has to say so at the same severity, not shrug it off as a
-  # cosmetic gap. cal_ok/jit_ok stay null either way -- neither value was
-  # actually checked -- the FAIL comes from ok=false and the line's own
-  # level below.
-  local have_sysd_analyze=false cal_ok=null jit_ok=null
+  # Missing systemd-analyze is FAIL, not warn, WHEN A SNAPSHOT TIMER UNIT IS
+  # INSTALLED: setup_units (below in this file) refuses to write a unit file
+  # it cannot validate, so a machine with no systemd-analyze cannot finish a
+  # timers setup at all, and this doctor has to say so at the same severity,
+  # not shrug it off as a cosmetic gap.
+  #
+  # With no unit installed those two lines are a warn instead, and leave ok
+  # alone. The documented way out on a box with no systemd-analyze is
+  # `setup --no-timers` (README Requirements, README Troubleshooting, and
+  # setup_units' own refusal), and taking it used to change nothing here: the
+  # two FAIL lines still printed, the doctor still exited 1, and the widget's
+  # SetupCard stayed red forever on a machine that had done exactly what it
+  # was told (whole-release review, FP-I1). A FAIL has to be something the
+  # user can clear on the configuration the docs send them to, and with no
+  # unit to put them in these two values reach nothing at all.
+  #
+  # cal_ok/jit_ok stay null in both of those cases -- neither value was
+  # actually checked -- so the FAIL comes from ok=false and the line's own
+  # level below, and --json still tells "checked and fine" from "not
+  # checked at all".
+  #
+  # $HOME/.config/systemd/user is where setup_units writes and where
+  # lib/health.sh reads the installed calendar back from; it is the same path
+  # spelt the same way.
+  local have_sysd_analyze=false cal_ok=null jit_ok=null snap_unit=false
+  [[ -f "$HOME/.config/systemd/user/omabackup-snapshot.timer" ]] && snap_unit=true
   if config_exists; then
     cfg=true
     # "setup-check" so config_load says whether minAllowlist is doing anything
@@ -621,7 +639,7 @@ setup_check() {
         && cal_ok=true || { cal_ok=false; ok=false; }
       systemd-analyze timespan -- "$CFG_TIMER_JITTER" >/dev/null 2>&1 \
         && jit_ok=true || { jit_ok=false; ok=false; }
-    else
+    elif [[ $snap_unit == true ]]; then
       ok=false
     fi
     url=$(remote_origin_url)
@@ -674,9 +692,11 @@ setup_check() {
     # fail vs warn is not decoration. FAIL is exactly the set of checks that
     # set ok=false above (the four required tools, the marker, a
     # timer.calendar or timer.jitter systemd-analyze itself rejects, and
-    # timer.calendar/timer.jitter when systemd-analyze is missing entirely --
-    # setup_units refuses to write a unit file it cannot validate, so this
-    # is not a cosmetic gap either), so a FAIL line means this verb exits 1,
+    # timer.calendar/timer.jitter when systemd-analyze is missing entirely
+    # AND a snapshot timer is installed -- setup_units refuses to write a
+    # unit file it cannot validate, so this is not a cosmetic gap either,
+    # while with no unit installed the same two lines are a warn that leaves
+    # the exit code alone), so a FAIL line means this verb exits 1,
     # and exiting 0 means there was no FAIL line. Everything else that is
     # wrong but does not refuse is a warn.
     setup_check_line "$have_git"      fail "git"      "not installed" "pacman -S git"
@@ -705,18 +725,29 @@ setup_check() {
       # all. Both are FAIL, not warn: a warn here used to leave a machine
       # free to finish `setup` with a value nothing had actually checked,
       # and now it cannot.
+      #
+      # The third branch is the machine with no systemd-analyze and no
+      # snapshot timer installed, which is where `setup --no-timers` leaves
+      # you: two values that reach nothing, no decision left to make, and so
+      # a warn that does not touch the exit code (FP-I1). The moment a unit
+      # exists the FAIL is back.
       if [[ "$have_sysd_analyze" == true ]]; then
         setup_check_line "$cal_ok" fail "timer.calendar" \
           "not a systemd OnCalendar expression" "edit timer.calendar in $CONFIG_FILE"
         setup_check_line "$jit_ok" fail "timer.jitter" \
           "not a systemd time span" "edit timer.jitter in $CONFIG_FILE"
-      else
+      elif [[ $snap_unit == true ]]; then
         setup_check_line false fail "timer.calendar" \
           "systemd-analyze not found, so it cannot be checked, and setup now refuses to write an unvalidated unit file" \
           "pacman -S systemd, or omabackup setup --no-timers to finish setup without a timer"
         setup_check_line false fail "timer.jitter" \
           "systemd-analyze not found, so it cannot be checked, and setup now refuses to write an unvalidated unit file" \
           "pacman -S systemd, or omabackup setup --no-timers to finish setup without a timer"
+      else
+        setup_check_line false warn "timer.calendar" \
+          "no snapshot timer is installed, so this value is not used" "omabackup setup"
+        setup_check_line false warn "timer.jitter" \
+          "no snapshot timer is installed, so this value is not used" "omabackup setup"
       fi
       # Rendered from units_s/units_t, the same two values --json reports, and
       # not gated on OMABACKUP_SKIP_TIMERS: the gate belongs on the PROBE (it

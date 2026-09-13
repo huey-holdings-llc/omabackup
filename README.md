@@ -255,10 +255,13 @@ shapes.
 
 A `FAIL` line is what makes the verb exit 1, so an exit of 0 means there was
 no `FAIL` line. It covers the tools in the first two tables, the config, the
-data repo (with its path) and its marker, the two timers and the remote, and
-every line that is not `ok` carries the command that fixes it, its own
-`pacman -S <package>` included. `setup check --json` prints the same answers
-as one object for the widget.
+data repo (with its path) and its marker, the two timers, the two timer
+values (`timer.calendar` and `timer.jitter`, checked against systemd's own
+grammar when `systemd-analyze` is there to ask, and reported as a `warn`
+saying the value is not used when no snapshot timer is installed) and the
+remote, and every line that is not `ok` carries the command that fixes it,
+its own `pacman -S <package>` included. `setup check --json` prints the same
+answers as one object for the widget.
 
 ## Install
 
@@ -742,7 +745,11 @@ actually broken.
   valid, so `setup` refuses to write an unvalidated unit file and `setup
   check` reports the same gap as a FAIL, rather than assuming the value is
   fine. Install `systemd` tooling, or run `omabackup setup --no-timers` to
-  finish setup without a timer.
+  finish setup without a timer. Taking that second way out clears the FAIL:
+  with no snapshot timer installed the two values reach nothing, so the
+  doctor reports them as `warn  timer.calendar: no snapshot timer is
+  installed, so this value is not used. Fix: omabackup setup` and exits 0.
+  The FAIL is back the moment a timer unit exists again.
 
 ## Development
 

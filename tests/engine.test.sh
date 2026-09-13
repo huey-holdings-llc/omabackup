@@ -5188,6 +5188,59 @@ if group 105 "setup check is a doctor: three line shapes, and a missing tool nam
   on105=$(env HOME="$FH" PATH="$D105" OMABACKUP_SKIP_TIMERS=0 "$CLI" setup check 2>/dev/null)
   has "an armed snapshot timer says ok" "$on105" "^ok    snapshot timer$"
   has "an armed self-test timer says ok" "$on105" "^ok    self-test timer$"
+  # The warn above came from OMABACKUP_SKIP_TIMERS, which leaves units_s false
+  # without asking systemctl anything: the disabled-timer line had never been
+  # exercised through the probe itself. A systemctl that answers "not enabled"
+  # for the snapshot timer and yes for the self-test one separates the two, so
+  # a probe that stopped answering could not hide behind the skip.
+  SC105="$T/nosnapbin"; mkdir -p "$SC105"
+  for f105 in "$D105"/*; do
+    [[ "$(basename "$f105")" == systemctl ]] || cp -P "$f105" "$SC105/"
+  done
+  cat > "$SC105/systemctl" <<'SC105EOF'
+#!/bin/sh
+for a in "$@"; do
+  [ "$a" = omabackup-snapshot.timer ] && exit 1
+done
+exit 0
+SC105EOF
+  chmod +x "$SC105/systemctl"
+  off105=$(env HOME="$FH" PATH="$SC105" OMABACKUP_SKIP_TIMERS=0 "$CLI" setup check 2>/dev/null)
+  has "a systemctl that says the snapshot timer is not enabled makes it a warn" "$off105" \
+    "^warn  snapshot timer:"
+  has "and it still names the systemctl line that arms it" "$off105" \
+    "systemctl --user enable --now omabackup-snapshot.timer"
+  has "while the self-test timer, which is enabled, still says ok" "$off105" \
+    "^ok    self-test timer$"
+
+  # THE MACHINE THE README SENDS TO --no-timers. With systemd-analyze absent
+  # the doctor FAILed for timer.calendar and timer.jitter and exited 1
+  # forever, on a box that had done exactly what it was told: the two values
+  # reach nothing without a unit to put them in, so there is no decision left
+  # for the user to make and nothing for a FAIL to mean.
+  nsa105=$(mk_path105 systemd-analyze)
+  check "setup --no-timers finishes on a PATH with no systemd-analyze" \
+    env HOME="$FH" PATH="$nsa105" "$CLI" setup --data-repo "$FR" --no-timers --yes
+  [[ -e "$FH/.config/systemd/user/omabackup-snapshot.timer" ]] \
+    && bad "--no-timers wrote a snapshot timer unit after all" \
+    || ok "and it leaves no snapshot timer unit behind"
+  nt105=$(env HOME="$FH" PATH="$nsa105" "$CLI" setup check 2>/dev/null); ntrc105=$?
+  has "with no unit installed, timer.calendar is a warn" "$nt105" \
+    "^warn  timer.calendar: no snapshot timer is installed, so this value is not used. Fix: omabackup setup$"
+  has "and timer.jitter the same" "$nt105" \
+    "^warn  timer.jitter: no snapshot timer is installed, so this value is not used. Fix: omabackup setup$"
+  eq "so the doctor exits 0 on the configuration the docs send you to" "$ntrc105" "0"
+
+  # ...and the FAIL is still there the moment a unit exists, because then the
+  # value really is in use and nothing on the machine can check it.
+  mkdir -p "$FH/.config/systemd/user"
+  printf '[Timer]\nOnCalendar=daily\n' > "$FH/.config/systemd/user/omabackup-snapshot.timer"
+  u105=$(env HOME="$FH" PATH="$nsa105" "$CLI" setup check 2>/dev/null); urc105=$?
+  has "with a unit installed, timer.calendar is a FAIL again" "$u105" \
+    "^FAIL  timer.calendar: systemd-analyze not found"
+  has "and timer.jitter too" "$u105" "^FAIL  timer.jitter: systemd-analyze not found"
+  eq "and the doctor exits 1" "$urc105" "1"
+  rm -f "$FH/.config/systemd/user/omabackup-snapshot.timer"
 
   # The --json shape is the widget's and it is additive only: the keys that
   # were there before are still there, still with the same types.

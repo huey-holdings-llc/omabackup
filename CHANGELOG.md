@@ -159,7 +159,13 @@ writing an unvalidated unit file anyway: neither value can be proved valid
 without it, so `setup` no longer shows a fault in the popup for a bad timer
 setting it already wrote. `setup check` reports the same thing as a doctor
 line (`ok`, or `FAIL` naming the fix, whether the value itself is bad or
-`systemd-analyze` is missing to check it with). `status` still catches the
+`systemd-analyze` is missing to check it with). The missing-`systemd-analyze`
+FAIL is asked only where the answer matters: with no snapshot timer unit
+installed, which is what `setup --no-timers` leaves you with, the two lines
+read `warn  timer.calendar: no snapshot timer is installed, so this value is
+not used. Fix: omabackup setup` and the doctor exits 0, so the documented way
+out of a box without `systemd-analyze` is not also a permanently red doctor
+and a permanently red SetupCard. `status` still catches the
 cheap, unconditional part of the same guard, the backslash, newline and
 percent sign a value must never carry, which forks nothing.
 
