@@ -323,7 +323,10 @@ health_collect() {
     behind=$(git -C "$DATA_REPO" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
     if [[ "${behind:-0}" -gt 0 ]]; then
       H_DIVERGED=true
-      H_PROBLEMS+=("remote has diverged -- pull --rebase needed")
+      # The same plain words the warning and the notification use: a git
+      # incantation is not an instruction a non-developer can act on, and the
+      # popup shows this string as it is.
+      H_PROBLEMS+=("the remote has diverged: it has commits this machine does not, so backups keep committing locally and nothing can be pushed. See the README Troubleshooting entry \"Remote has diverged\"")
     fi
     [[ "$H_UNPUSHED" -gt 0 ]] && H_PROBLEMS+=("$H_UNPUSHED commit(s) never pushed -- not yet off this machine")
   elif [[ "$H_REMOTE" == configured ]]; then

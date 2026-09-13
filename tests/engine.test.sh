@@ -5078,6 +5078,49 @@ if group 105 "setup check is a doctor: one line per check, and a missing tool na
     "boolean,boolean,boolean,boolean,boolean,boolean,string"
 fi
 
+if group 106 "setup --remove says how to confirm, and a diverged remote is explained in words"; then
+  mk_fixture g106; seed_home
+
+  # setup --remove with nothing that can ask: the answer is no, and the
+  # message has to say how to mean yes. It used to say only "cancelled".
+  d106="$T/nogum"; mkdir -p "$d106"
+  for b106 in bash sh env jq git rsync flock date cat grep sed awk find mktemp stat chmod \
+              mv rm cp ln cut sort tr head tail wc cksum paste readlink dirname basename \
+              touch mkdir sleep comm uniq xargs diff cmp; do
+    p106=$(command -v "$b106" 2>/dev/null) || continue
+    ln -sf "$p106" "$d106/$b106"
+  done
+  [[ -e "$d106/gum" ]] && bad "the no-gum PATH still carries gum" || ok "the no-gum PATH carries no gum"
+  r106=$(env HOME="$FH" PATH="$d106" "$CLI" setup --remove </dev/null 2>&1); rrc106=$?
+  eq "setup --remove with no terminal and no gum refuses (exit 1)" "$rrc106" "1"
+  has "and the refusal says how to mean yes" "$r106" "--yes"
+  [[ -f "$OMABACKUP_CONFIG" ]] && ok "the refused removal removed nothing" || bad "the config went anyway"
+
+  # Divergence, in words a non-developer can act on. The problem used to be
+  # "remote has diverged -- pull --rebase needed", a git incantation with no
+  # explanation and no recovery for the conflict case; the README carries
+  # both now, under a row this text names.
+  mk_fixture g106b; seed_home; commit_baseline
+  git -C "$FR" push -q -u origin main
+  git clone -q -b main "$BARE" "$T/other"
+  git -C "$T/other" config user.email t@t; git -C "$T/other" config user.name t
+  git -C "$T/other" commit -q --allow-empty -m "from the other machine"
+  git -C "$T/other" push -q origin main
+  printf '\nexport EDITOR=vim\n' >> "$FH/.bashrc"
+  env HOME="$FH" OMABACKUP_NET=1 "$CLI" snapshot --json >/dev/null 2>&1
+  p106b=$(env HOME="$FH" OMABACKUP_NET=1 "$CLI" status --json 2>/dev/null | jq -r '.problems[]')
+  has "the divergence problem still fires" "$p106b" "diverged"
+  has "and points at the README row that carries the recovery" "$p106b" "Remote has diverged"
+  eq "and no longer hands a git incantation to a non-developer" \
+    "$(grep -c -- 'pull --rebase' <<<"$p106b" || true)" "0"
+  grep -q '^\* \*\*Remote has diverged\*\*' "$HERE/../README.md" \
+    && ok "the README row it names exists" || bad "README has no 'Remote has diverged' troubleshooting row"
+  grep -A20 '^\* \*\*Remote has diverged\*\*' "$HERE/../README.md" | grep -q -- 'pull --rebase' \
+    && ok "and the row carries the command" || bad "the README row does not carry the pull --rebase command"
+  grep -A20 '^\* \*\*Remote has diverged\*\*' "$HERE/../README.md" | grep -q -- 'rebase --continue' \
+    && ok "and what to do when it conflicts" || bad "the README row does not say what to do on a conflict"
+fi
+
 group_close
 if (( ${#GROUP_SECS[@]} > 1 )); then
   echo; echo "slowest groups (seconds):"

@@ -570,6 +570,25 @@ actually broken.
   repo private, or point `remote.url` at a different one.
 * **gitleaks missing**: snapshots still commit locally, they just never
   push; `setup check` prints the exact `pacman -S gitleaks` to fix it.
+* **Remote has diverged**: the remote has commits this machine does not, so
+  nothing can be pushed. Backups keep committing locally, so nothing is lost
+  in the meantime, but they are not off this machine until this is sorted out.
+  It usually means another machine pushed a snapshot of its own, or you
+  edited a list in the repo's web interface. Replay your local commits on top
+  of the remote's:
+
+  ```bash
+  git -C ~/.local/share/omabackup/data pull --rebase
+  omabackup push
+  ```
+
+  (Use your own data repo path if it is somewhere else; `omabackup setup
+  check` prints it.) If the rebase stops on a conflict, git names the files.
+  Edit each one so it reads the way you want, `git add` it, then run
+  `git rebase --continue`, repeating until the rebase finishes, and then
+  `omabackup push`. To back out and think about it later, `git rebase --abort`
+  leaves everything exactly as it was; the next snapshot commits locally as
+  usual.
 * **"a name the report cannot represent"**: a file whose name holds a TAB or a
   newline cannot be written as a drift row, so the scan reports the directory
   it is in and marks the state a fault rather than writing a row that names a

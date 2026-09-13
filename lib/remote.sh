@@ -410,7 +410,12 @@ remote_push_if_ahead() {
     behind=$(git -C "$DATA_REPO" rev-list --count 'HEAD..@{upstream}' 2>/dev/null || echo 0)
     if [[ "${behind:-0}" -gt 0 ]]; then
       DIVERGED=true
-      warn "remote has diverged. Run: git -C $DATA_REPO pull --rebase"
+      # In words, not in git. "Run: git pull --rebase" is a fine instruction
+      # for a developer and no instruction at all for everyone else, and it
+      # says nothing about the rebase stopping on a conflict. The README
+      # Troubleshooting row carries both, so this says what happened and
+      # names the row.
+      warn "the remote has commits this machine does not, so nothing can be pushed. Backups keep committing locally. See the README Troubleshooting entry \"Remote has diverged\" for the way back."
       # The remote has commits we do not. Retrying forever is futile and a
       # daily "will retry" notification is pure cry-wolf -- the spec wants a
       # one-off, not a nag on every run of an unresolved divergence. Stamp
@@ -423,8 +428,8 @@ remote_push_if_ahead() {
         prev=$(cat "$stamp" 2>/dev/null || true)
       fi
       if [[ -z "$remote_head" || "$remote_head" != "$prev" ]]; then
-        notify "OmaBackup: remote diverged" "Backups are committing locally but cannot push.
-Run: git -C $DATA_REPO pull --rebase"
+        notify "OmaBackup: remote diverged" "The remote has commits this machine does not, so backups keep committing locally and cannot push.
+See Troubleshooting, \"Remote has diverged\", in the OmaBackup README."
         if [[ -n "$remote_head" ]]; then
           # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
           # WARN AND SKIP: the notification has already gone out, and a

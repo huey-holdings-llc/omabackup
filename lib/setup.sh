@@ -670,7 +670,12 @@ setup_check_line() {
 setup_remove() {
   local yes=0
   [[ "${1:-}" == --yes ]] && yes=1
-  confirm "Remove OmaBackup timers, CLI link, the ~/.bashrc login check and config? The data repo stays." "$yes" || die "cancelled"
+  # "cancelled" on its own was the whole message, and most of the people who
+  # saw it had cancelled nothing: confirm() answers no whenever there is no
+  # terminal or no gum to ask with (a script, a unit, a machine without gum),
+  # which is exactly the case where the reader needs telling how to mean yes.
+  confirm "Remove OmaBackup timers, CLI link, the ~/.bashrc login check and config? The data repo stays." "$yes" \
+    || die "cancelled. With no terminal or no gum to ask with the answer is always no, so rerun with --yes to remove without being asked"
   if [[ "${OMABACKUP_SKIP_TIMERS:-0}" != 1 ]]; then
     systemctl --user disable --now omabackup-snapshot.timer omabackup-selftest.timer 2>/dev/null || true
   fi
