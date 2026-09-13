@@ -179,7 +179,7 @@ cmd_allow() {
     else
       msg="the drift report does not name that path (or the folder is too broad); refresh and retry"
     fi
-    widget_reply_fail "$msg" || return 1
+    widget_reply_fail "$msg"; return 1
   fi
   rel=${rel%/}
   local entry; entry=$(widget_escape_glob "$rel")
