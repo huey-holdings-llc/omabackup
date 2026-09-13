@@ -63,6 +63,24 @@ drift_error_unrepresentable() {
   printf '# ERROR: a name the report cannot represent: %s/%s\n' "$parent" "$(printf '%q' "$name")"
 }
 
+# drift_etc_unparseable_row CANDIDATE: the "# ERROR" row for a /etc candidate
+# that failed the /etc scan's own producer-contract validation: pacman's
+# -Qii "Backup Files" list and -Qqo's "No package owns" stderr are both prose
+# with no NUL-delimited form, so a real newline inside a reported path splits
+# one entry into two physical lines. Read line by line, the fragment that
+# still matches the parser's marker looks like a whole path on its own and
+# used to become a NEW or MODIFIED row naming a file that was never on disk,
+# while the real path it was cut from went unreported. A candidate is only
+# ever trusted once it is confirmed against the filesystem and pacman's own
+# ownership answer (drift_scan, /etc sections 5 and 5b); this row stands in
+# for one that fails that check. Capped at 80 characters, with any embedded
+# newline shown as the two bytes `\n` rather than a raw one, so this stays a
+# single line no matter what pacman printed.
+drift_etc_unparseable_row() {
+  local s=${1//$'\n'/\\n}
+  printf '# ERROR: unparseable /etc path from pacman output (%s)\n' "${s:0:80}"
+}
+
 # drift_line_split LINE: split one report line into DRIFT_TYPE, DRIFT_PATH and
 # DRIFT_NOTE. Returns 1 for a line that is not a report row (blank, or a
 # comment other than "# ERROR"), so callers write `... || continue`.
@@ -499,11 +517,31 @@ drift_scan() {
     etc_live=$(grep -F '[modified]' <<<"$etc_qii" \
       | sed -E 's/^(Backup Files *: *)?[[:space:]]*//; s/ \[modified\]//' | sort -u)
     etc_known=$(read_list "$DATA_REPO/etc-allowlist.txt" | sort -u)
+    # A real newline in a backup file's path splits this prose the same way
+    # (see drift_etc_unparseable_row): the fragment that keeps the [modified]
+    # marker reads as a whole path on its own, so nothing here is trusted
+    # until it exists AND some package still claims it (one batched -Qqo
+    # call, the same ownership question section 5b asks over its own list).
+    local etc_candidates=() etc_bad=() etc_unowned=""
     while IFS= read -r f; do
       [ -z "$f" ] && continue
       echo "$f" | grep -qE "$etc_skip" && continue
-      grep -qxF "$f" <<<"$etc_known" || _drift_report NEW "$f"
+      if [ -e "$f" ]; then etc_candidates+=("$f"); else etc_bad+=("$f"); fi
     done <<<"$etc_live"
+    if [ ${#etc_candidates[@]} -gt 0 ]; then
+      etc_unowned=$(LC_ALL=C pacman -Qqo "${etc_candidates[@]}" 2>&1 >/dev/null \
+        | sed -nE 's/^error: No package owns (.*)$/\1/p')
+    fi
+    for f in "${etc_candidates[@]}"; do
+      if grep -qxF "$f" <<<"$etc_unowned"; then
+        etc_bad+=("$f")
+      else
+        grep -qxF "$f" <<<"$etc_known" || _drift_report NEW "$f"
+      fi
+    done
+    for f in "${etc_bad[@]}"; do
+      drift_etc_unparseable_row "$f"; found=$((found+1))
+    done
   fi
   fi
 
@@ -561,21 +599,40 @@ X11/xorg.conf.d fonts/conf.d"
     # locale that slipped through, a pacman that changed how it reports this)
     # used to read as a clean scan, which is how a hand-written
     # /etc/modprobe.d/*.conf goes unbacked while every monitor says fine.
-    local unowned_err
+    local unowned_err dropin_candidates=() dropin_bad=() dropin_still_unowned=""
     unowned_err=$(LC_ALL=C pacman -Qqo "${dropin_files[@]}" 2>&1 >/dev/null)
     unowned=$(sed -nE 's/^error: No package owns (.*)$/\1/p' <<<"$unowned_err")
     if [ -n "$unowned_err" ] && [ -z "$unowned" ]; then
       echo "# ERROR: cannot parse pacman ownership output; /etc drop-ins NOT checked"
       found=$((found+1))
     else
+      # Same producer contract as section 5 (drift_etc_unparseable_row): a
+      # real newline in a reported path splits this stderr line by line too,
+      # and the fragment that still matches "error: No package owns " reads
+      # as a whole path on its own. Trust none of them until they exist AND
+      # a second, batched pacman call still says nobody owns them.
       while IFS= read -r f; do
         [ -z "$f" ] && continue
-        real="/etc/${f#$ETC_DROPIN_ROOT/}"          # allowlist/ignore are written as /etc/...
-        echo "$real" | grep -qE "$etc_skip" && continue
-        grep -qxF "$real" <<<"$etc_known" && continue
-        is_ignored "$real" && continue
-        _drift_report NEW "$real"
+        if [ -e "$f" ]; then dropin_candidates+=("$f"); else dropin_bad+=("$f"); fi
       done <<<"$unowned"
+      if [ ${#dropin_candidates[@]} -gt 0 ]; then
+        dropin_still_unowned=$(LC_ALL=C pacman -Qqo "${dropin_candidates[@]}" 2>&1 >/dev/null \
+          | sed -nE 's/^error: No package owns (.*)$/\1/p')
+      fi
+      for f in "${dropin_candidates[@]}"; do
+        if grep -qxF "$f" <<<"$dropin_still_unowned"; then
+          real="/etc/${f#$ETC_DROPIN_ROOT/}"          # allowlist/ignore are written as /etc/...
+          echo "$real" | grep -qE "$etc_skip" && continue
+          grep -qxF "$real" <<<"$etc_known" && continue
+          is_ignored "$real" && continue
+          _drift_report NEW "$real"
+        else
+          dropin_bad+=("$f")
+        fi
+      done
+      for f in "${dropin_bad[@]}"; do
+        drift_etc_unparseable_row "$f"; found=$((found+1))
+      done
     fi
   fi
   fi

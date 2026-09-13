@@ -3089,11 +3089,19 @@ if group 81 "a pacman whose wording changed is an error, never a clean /etc scan
   mkdir -p "$T/fakebin"
 
   # A pacman that works, in the wording the parsers were written against.
+  # /etc/fstab is answered as owned on -Qqo: the -Qii branch now confirms
+  # ownership before trusting a modified-backup-file candidate (PR 6), and
+  # /etc/fstab is a real file every one of these test machines has.
   cat > "$T/fakebin/pacman" <<'FAKEOK'
 #!/bin/sh
 case "$1" in
   -Qii) printf 'Name            : fakepkg\nBackup Files    :\n/etc/fstab [modified]\n'; exit 0 ;;
-  -Qqo) shift; for f in "$@"; do echo "error: No package owns $f" >&2; done; exit 1 ;;
+  -Qqo) shift; for f in "$@"; do
+          case "$f" in
+            /etc/fstab) : ;;
+            *) echo "error: No package owns $f" >&2 ;;
+          esac
+        done; exit 1 ;;
 esac
 exit 0
 FAKEOK
@@ -5269,6 +5277,56 @@ EOF
   else
     bad "no second commit from order jitter alone" "$(git -C "$FR" diff --stat HEAD~1 HEAD)"
   fi
+fi
+
+if group 111 "a newline in pacman's own /etc prose never becomes a row"; then
+  # Both /etc sections parse pacman's prose, not an API: there is no `--null`
+  # / `-0` form for either the -Qii "Backup Files" list or the -Qqo "No
+  # package owns" stderr. A path containing a real newline breaks either
+  # parse into two physical lines, and the fragment that still matches the
+  # parser's own marker used to become a row on its own, naming a file that
+  # was never on disk while the real path it was cut from went unreported.
+  # A fake pacman reproduces that split directly, so this does not depend on
+  # creating a real file whose name contains a newline.
+  mk_fixture g111; seed_home
+  mkdir -p "$T/etcroot/sysctl.d"
+  good_qii="$T/etcroot/good-backup.conf"; printf 'x\n' > "$good_qii"
+  good_dropin="$T/etcroot/sysctl.d/good-dropin.conf"; printf 'vm.swappiness=10\n' > "$good_dropin"
+  mkdir -p "$T/fakebin"
+  cat > "$T/fakebin/pacman" <<PACMAN111
+#!/bin/sh
+case "\$1" in
+  -Qii)
+    printf 'Name            : fakepkg\nBackup Files    :\n%s [modified]\n' "$good_qii"
+    printf '%s\n%s [modified]\n' "$T/etcroot/newline-fragment-qii-a" "newline-fragment-qii-b"
+    ;;
+  -Qqo)
+    shift
+    for f in "\$@"; do
+      case "\$f" in
+        "$good_qii") : ;;
+        *) echo "error: No package owns \$f" >&2 ;;
+      esac
+    done
+    printf 'error: No package owns %s\n%s\n' "newline-fragment-dropin-a" "$T/etcroot/newline-fragment-dropin-b" >&2
+    exit 1
+    ;;
+esac
+exit 0
+PACMAN111
+  chmod +x "$T/fakebin/pacman"
+  d111() { env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_SKIP_ETC=0 OMABACKUP_ETC_ROOT="$T/etcroot" "$CLI" drift; }
+  out111=$(d111)
+  has "the good modified backup file is still reported" "$out111" "$(printf 'NEW        %s' "$good_qii")"
+  has "the good unowned drop-in is still reported" "$out111" "$(printf 'NEW        %s' '/etc/sysctl.d/good-dropin.conf')"
+  eq "exactly one unparseable-path ERROR row per split fragment" \
+    "$(grep -c 'unparseable /etc path from pacman output' <<<"$out111" || true)" "2"
+  has "the -Qii fragment is named in its ERROR row" "$out111" "newline-fragment-qii-b"
+  has "the -Qqo fragment is named in its ERROR row" "$out111" "newline-fragment-dropin-a"
+  ! grep -qE '^(NEW|MODIFIED)[[:space:]]+.*newline-fragment' <<<"$out111" \
+    && ok "neither fragment became a NEW or MODIFIED row" \
+    || bad "a fragment became a NEW or MODIFIED row" "$out111"
+  eq "the scan still finishes" "$(tail -1 <<<"$out111")" "# drift-scan-complete"
 fi
 
 group_close
