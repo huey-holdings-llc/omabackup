@@ -397,6 +397,28 @@ cmd_push() {
     widget_reply_fail "${#dirty[@]} uncommitted edits in the data repo is more than the Commit button commits at once ($UNCOMMITTED_LIMIT); look at them with git -C $DATA_REPO status and commit them by hand"
     return 1
   fi
+  # Nor is one it cannot show AS IT IS. json_escape drops control bytes, so a
+  # name holding one would be listed as a different name from the path the
+  # signature binds and git stages, and two names could list as one.
+  for p in ${dirty[@]+"${dirty[@]}"}; do
+    if [[ "$p" == *[[:cntrl:]]* ]]; then
+      widget_reply_fail "an edit in the data repo has a control character in its name, which the list cannot show as it is: $(printf '%q' "$p"); rename it, or commit it by hand"
+      return 1
+    fi
+  done
+  # The snapshot's filename gate (secrets_filename_gate), over what this button
+  # would add or change. The five list files it used to stage could never
+  # match; now an adopted repo's tracked `.env` or vault can, .gitignore only
+  # hides untracked files, and the content scan cannot read an encrypted
+  # vault. A deletion is not checked: taking such a file out is the fix.
+  local hits
+  hits=$(for p in ${dirty[@]+"${dirty[@]}"}; do
+           [[ -e "$DATA_REPO/$p" || -L "$DATA_REPO/$p" ]] && printf '%s\0' "${p##*/}"
+         done | grep -zE "$SECRET_NAME_RE" | grep -zvE "$SECRET_KEY_PUB_RE" | tr '\0' ' ' || true)
+  if [[ -n "$hits" ]]; then
+    widget_reply_fail "credential-looking filename(s) among the data repo's edits, nothing committed: ${hits% }; take them out of the repo (git -C $DATA_REPO rm --cached FILE) or rename them"
+    return 1
+  fi
 
   if [[ ${#dirty[@]} -gt 0 ]] && { [[ "$confirm" != --confirm ]] || [[ -n "$want_sig" && "$want_sig" != "$sig" ]]; }; then
     for p in "${dirty[@]}"; do files_json+=("$(jstr "$p")"); done

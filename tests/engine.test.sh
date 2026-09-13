@@ -4259,6 +4259,33 @@ FAKEGL
   eq "as a rename, with nothing left behind" \
     "$(git -C "$FR" status --porcelain | grep -c . || true)|$(git -C "$FR" show --name-status --format= HEAD | cut -c1)" "0|R"
 
+  # The snapshot's filename gate applies here too (Codex, PR 10). An adopted
+  # repo can already track a credential-named file, .gitignore only hides
+  # untracked ones, and the content scan cannot read an encrypted vault.
+  printf 'x\n' > "$FR/vault.kdbx"
+  git -C "$FR" add -f vault.kdbx && git -C "$FR" commit -qm "a vault someone tracked by hand"
+  printf 'y\n' >> "$FR/vault.kdbx"
+  head52=$(git -C "$FR" rev-parse HEAD)
+  v52=$(pj52 push --confirm)
+  eq "an edit to a credential-named file is refused by name" "$(jq -r .ok <<<"$v52")" "false"
+  has "saying why" "$(jq -r '.problems[0]' <<<"$v52")" "credential-looking filename"
+  eq "and nothing is committed" "$(git -C "$FR" rev-parse HEAD)" "$head52"
+  eq "or left staged" "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
+  # Taking it out of the repo is the fix, not the leak.
+  rm "$FR/vault.kdbx"
+  eq "deleting it commits" "$(pj52 push --confirm | jq -r .ok)" "true"
+  eq "as a deletion" "$(git -C "$FR" show --name-status --format= HEAD)" "$(printf 'D\tvault.kdbx')"
+
+  # json_escape drops control bytes, so the dialog would show a name that is
+  # not the path the signature binds and git stages (Codex, PR 10).
+  printf 'n\n' > "$FR/notes"$'\r'".md"
+  head52=$(git -C "$FR" rev-parse HEAD)
+  n52=$(pj52 push --confirm)
+  eq "a name with a control character is refused, not shown altered" "$(jq -r .ok <<<"$n52")" "false"
+  has "saying so" "$(jq -r '.problems[0]' <<<"$n52")" "control character"
+  eq "and nothing is committed" "$(git -C "$FR" rev-parse HEAD)" "$head52"
+  rm "$FR/notes"$'\r'".md"
+
   # Widening what the button commits must not widen what it lets through.
   printf 'TOKEN=sk-ant-api03-%sAA\n' "$(rand_body 90)" > "$FR/bin/tok.sh"
   head52=$(git -C "$FR" rev-parse HEAD)
