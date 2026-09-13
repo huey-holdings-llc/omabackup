@@ -120,17 +120,22 @@ manifests_generate() {
   fi
 
   # ---- services ----------------------------------------------------------
+  # The unit's own order (whatever systemd's internal enumeration returns
+  # this run) carries no meaning, so it is sorted away: two runs of an
+  # unchanged machine must list the same units in the same order.
   : > "$M/systemd-user.txt"; : > "$M/systemd-system.txt"; : > "$M/systemd-user-off.txt"
   if have systemctl; then
-    systemctl --user list-unit-files --state=enabled --no-legend > "$M/systemd-user.txt" 2>/dev/null || true
-    systemctl        list-unit-files --state=enabled --no-legend > "$M/systemd-system.txt" 2>/dev/null || true
+    systemctl --user list-unit-files --state=enabled --no-legend 2>/dev/null | LC_ALL=C sort > "$M/systemd-user.txt" || true
+    systemctl        list-unit-files --state=enabled --no-legend 2>/dev/null | LC_ALL=C sort > "$M/systemd-system.txt" || true
     # Units you deliberately turned OFF. Without this, `restore --services`
     # happily re-enables something you disabled on purpose.
-    systemctl --user list-unit-files --state=disabled,masked --no-legend > "$M/systemd-user-off.txt" 2>/dev/null || true
+    systemctl --user list-unit-files --state=disabled,masked --no-legend 2>/dev/null | LC_ALL=C sort > "$M/systemd-user-off.txt" || true
   fi
 
   # ---- identity and desktop ---------------------------------------------
-  id -nG > "$M/groups.txt" 2>/dev/null || printf '(none)\n' > "$M/groups.txt"
+  # Group membership order (NSS/sssd enumeration) carries no meaning either;
+  # sorted so the same memberships always produce the same line.
+  id -nG 2>/dev/null | tr ' ' '\n' | LC_ALL=C sort | paste -sd ' ' - > "$M/groups.txt" || printf '(none)\n' > "$M/groups.txt"
   if have dconf; then
     manifests_bounded dconf dump / > "$M/dconf.txt" 2>/dev/null || printf '(dconf unavailable)\n' > "$M/dconf.txt"
   else
@@ -165,25 +170,35 @@ manifests_generate() {
   fi
   # Connection NAMES only. The files under /etc/NetworkManager/system-connections
   # hold WiFi PSKs and WireGuard private keys and are never copied anywhere.
+  # nmcli's own listing order is not stable between runs (a connection can
+  # come back in a different slot after NetworkManager restarts), so it is
+  # sorted the same way every other order-meaningless generator here is.
   if have nmcli; then
-    manifests_bounded nmcli -t -f NAME,TYPE con show > "$M/network.txt" 2>/dev/null || printf '(nmcli unavailable)\n' > "$M/network.txt"
+    manifests_bounded nmcli -t -f NAME,TYPE con show 2>/dev/null | LC_ALL=C sort > "$M/network.txt" \
+      || printf '(nmcli unavailable)\n' > "$M/network.txt"
   else
     printf '(nmcli unavailable)\n' > "$M/network.txt"
   fi
 
   # ---- toolchains that live only on this disk ---------------------------
+  # Same bug class as npm-global.txt below: neither tool documents its
+  # listing order as stable, so both are sorted.
   if have code; then
-    manifests_bounded code --list-extensions > "$M/vscode-extensions.txt" 2>/dev/null || printf '(code CLI unavailable)\n' > "$M/vscode-extensions.txt"
+    manifests_bounded code --list-extensions 2>/dev/null | LC_ALL=C sort > "$M/vscode-extensions.txt" \
+      || printf '(code CLI unavailable)\n' > "$M/vscode-extensions.txt"
   else
     printf '(code CLI unavailable)\n' > "$M/vscode-extensions.txt"
   fi
   if have uv; then
-    uv tool list 2>/dev/null | grep -v '^- ' > "$M/uv-tools.txt" || printf '(uv unavailable)\n' > "$M/uv-tools.txt"
+    uv tool list 2>/dev/null | grep -v '^- ' | LC_ALL=C sort > "$M/uv-tools.txt" || printf '(uv unavailable)\n' > "$M/uv-tools.txt"
   else
     printf '(uv unavailable)\n' > "$M/uv-tools.txt"
   fi
+  # npm walks its own global node_modules directory, so its order follows
+  # whatever the filesystem's readdir returns; sorted for the same reason as
+  # the other package-ish lists above.
   if have npm; then
-    manifests_bounded npm ls -g --depth=0 --parseable 2>/dev/null | tail -n +2 | xargs -rn1 basename | grep -vx npm > "$M/npm-global.txt" \
+    manifests_bounded npm ls -g --depth=0 --parseable 2>/dev/null | tail -n +2 | xargs -rn1 basename | grep -vx npm | LC_ALL=C sort > "$M/npm-global.txt" \
       || printf '(npm unavailable)\n' > "$M/npm-global.txt"
   else
     printf '(npm unavailable)\n' > "$M/npm-global.txt"

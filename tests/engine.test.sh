@@ -345,9 +345,22 @@ if group 04 "idempotency"; then
   ob snapshot --no-push >/dev/null; rc=$?
   [[ $rc -eq 0 ]] && ok "snapshot runs" || bad "snapshot failed (rc=$rc)"
   n2=$(git -C "$FR" rev-list --count HEAD)
-  eq "unchanged machine makes no commit" "$n2" "$n1"
+  # A red run here on a real machine almost always means the machine itself
+  # changed between the two snapshots (a plugin updated, a package installed,
+  # a connection added), not a determinism bug in omabackup -- naming the
+  # manifest that moved is the fastest way to tell the two apart.
+  if [[ "$n2" == "$n1" ]]; then
+    ok "unchanged machine makes no commit"
+  else
+    bad "unchanged machine makes no commit" "$(git -C "$FR" diff --stat "HEAD~$((n2 - n1))" HEAD)"
+  fi
   eq "json says committed=false" "$(obj snapshot --no-push | jq -r .committed)" "false"
-  eq "working tree left clean" "$(git -C "$FR" status --porcelain)" ""
+  dirty04=$(git -C "$FR" status --porcelain)
+  if [[ -z "$dirty04" ]]; then
+    ok "working tree left clean"
+  else
+    bad "working tree left clean" "$(git -C "$FR" status --short)"
+  fi
 fi
 if group 05 "permissions are recorded in modes.txt"; then
   # git stores only the exec bit. The restore half of self-test.sh:160-184
@@ -5220,6 +5233,42 @@ if group 107 "the human dry run names what every restore stage would do, not jus
   git -C "$FR" commit -qam "no units left to enable"
   eq "a stage with nothing to do prints its zero" \
     "$(ob restore --services | grep -c '\[dry\] --services would enable 0 unit' || true)" "1"
+fi
+
+if group 113 "manifests absorb tool-order jitter (nmcli returns its connections in a different order)"; then
+  # A real NetworkManager can hand back the same connections in a different
+  # order between two runs seconds apart -- one re-ordered, one restarted --
+  # for reasons that carry no meaning. A fake nmcli on PATH plays that back
+  # deterministically: same three connections both times, reversed the
+  # second call. Prepended ahead of the suite's own nmcli stub (fake_tool,
+  # near the top of this file) so this group controls it precisely; every
+  # other generator stays on the ordinary fixed stubs.
+  mk_fixture g113; seed_home
+  mkdir -p "$T/fakebin113"
+  nmcli_called="$T/nmcli.called"
+  cat > "$T/fakebin113/nmcli" <<EOF
+#!/bin/sh
+if [ -f "$nmcli_called" ]; then
+  printf 'work:802-11-wireless\nhome:802-11-wireless\nlan:802-3-ethernet\n'
+else
+  : > "$nmcli_called"
+  printf 'lan:802-3-ethernet\nhome:802-11-wireless\nwork:802-11-wireless\n'
+fi
+EOF
+  chmod +x "$T/fakebin113/nmcli"
+  export PATH="$T/fakebin113:$PATH"
+  check "first snapshot runs" ob snapshot --no-push
+  n1_113=$(git -C "$FR" rev-list --count HEAD)
+  m1_113=$(cat "$FR/manifests/network.txt")
+  check "second snapshot runs" ob snapshot --no-push
+  n2_113=$(git -C "$FR" rev-list --count HEAD)
+  m2_113=$(cat "$FR/manifests/network.txt")
+  eq "network.txt is identical despite nmcli's reordering" "$m1_113" "$m2_113"
+  if [[ "$n2_113" == "$n1_113" ]]; then
+    ok "no second commit from order jitter alone"
+  else
+    bad "no second commit from order jitter alone" "$(git -C "$FR" diff --stat HEAD~1 HEAD)"
+  fi
 fi
 
 group_close

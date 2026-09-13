@@ -62,7 +62,11 @@ first.
   container. Fixture snapshots use stub machine-fact tools (pacman,
   systemctl and the rest print something fixed), which keeps a run to a few
   minutes; `OMABACKUP_TEST_REAL_MANIFESTS=1` puts every group on the real
-  ones, and `omabackup self-test --real` does that for you.
+  ones, and `omabackup self-test --real` does that for you. Group 04
+  (idempotency) is the one group that runs the real tools, and a red run on
+  a real machine names the manifest that moved; check whether the machine
+  changed between runs (a plugin updated, a package installed, a connection
+  added) before treating it as a bug.
 * **Tests first** for CLI changes. The harness is plain bash (`check`, `eq`,
   `fails`, `has`); each group builds a throwaway fixture (home directory,
   stock-config stand-in, data repo, bare remote) and drives `bin/omabackup`

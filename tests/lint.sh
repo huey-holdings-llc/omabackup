@@ -86,15 +86,20 @@ if command -v omarchy-plugin-validate >/dev/null; then
   if [[ $in_git == 1 ]]; then
     mkdir -p "$HERE/tests/tmp"
     if lint_tree=$(mktemp -d "$HERE/tests/tmp/lint-tree.XXXXXX"); then
-      copy_ok=1
+      copy_ok=1; copy_failed=""
       while IFS= read -r -d '' f; do
-        mkdir -p "$lint_tree/$(dirname "$f")" && cp -p "$f" "$lint_tree/$f" || copy_ok=0
+        # -P: copy a symlink AS a symlink instead of dereferencing it, so the
+        # validator sees the same tree a clone would. The symlink check above
+        # already fails the run on one; this just keeps the two checks from
+        # disagreeing about what a shipped symlink looks like.
+        mkdir -p "$lint_tree/$(dirname "$f")" && cp -Pp "$f" "$lint_tree/$f" \
+          || { copy_ok=0; [[ -z "$copy_failed" ]] && copy_failed="$f"; }
       done < <(shipped_paths)
       if [[ $copy_ok == 1 ]]; then
         omarchy-plugin-validate "$lint_tree" >/dev/null && ok "omarchy-plugin-validate (shipped tree)" \
           || bad "omarchy-plugin-validate"
       else
-        bad "could not assemble the shipped tree to validate"
+        bad "could not assemble the shipped tree to validate: could not copy '$copy_failed'"
       fi
     else
       bad "could not create a scratch directory under tests/tmp"
