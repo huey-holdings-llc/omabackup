@@ -3091,18 +3091,23 @@ if group 81 "a pacman whose wording changed is an error, never a clean /etc scan
   # A pacman that works, in the wording the parsers were written against.
   # /etc/fstab is answered as owned on -Qqo: the -Qii branch now confirms
   # ownership before trusting a modified-backup-file candidate (PR 6), and
-  # /etc/fstab is a real file every one of these test machines has.
+  # /etc/fstab is a real file every one of these test machines has. Real
+  # pacman exits 0 when every queried file is owned and only non-zero when
+  # at least one is not (Codex, PR 6 round 2: an all-owned batch that still
+  # exited non-zero with empty stderr is exactly the silent failure the
+  # ownership check must not mistake for "everyone is owned").
   cat > "$T/fakebin/pacman" <<'FAKEOK'
 #!/bin/sh
 case "$1" in
   -Qii) printf 'Name            : fakepkg\nBackup Files    :\n/etc/fstab [modified]\n'; exit 0 ;;
   -Qqo) shift; [ "$1" = "--" ] && shift
+        rc=0
         for f in "$@"; do
           case "$f" in
             /etc/fstab) : ;;
-            *) echo "error: No package owns $f" >&2 ;;
+            *) echo "error: No package owns $f" >&2; rc=1 ;;
           esac
-        done; exit 1 ;;
+        done; exit "$rc" ;;
 esac
 exit 0
 FAKEOK
@@ -5311,16 +5316,24 @@ case "\$1" in
     for f in "\$@"; do
       [ "\$f" = "$good_dropin" ] && is_dropin_call=1
     done
+    rc=0
     for f in "\$@"; do
       case "\$f" in
         "$good_qii") : ;;
-        *) echo "error: No package owns \$f" >&2 ;;
+        *) echo "error: No package owns \$f" >&2; rc=1 ;;
       esac
     done
+    # The extra line is a clean, well-formed "No package owns" answer for a
+    # candidate nobody asked about, standing in for the surviving half of a
+    # split (the non-matching residue a real split also produces is not
+    # simulated here: any such line would fail the WHOLE batch, per
+    # drift_etc_ownership_incomplete, which the mixed-diagnostic case below
+    # covers on its own; this case is about the surviving candidate itself).
     if [ "\$is_dropin_call" = 1 ]; then
-      printf 'error: No package owns %s\n%s\n' "newline-fragment-dropin-a" "$T/etcroot/newline-fragment-dropin-b" >&2
+      echo "error: No package owns newline-fragment-dropin-a" >&2
+      rc=1
     fi
-    exit 1
+    exit "\$rc"
     ;;
 esac
 exit 0
@@ -5409,6 +5422,63 @@ PACMAN111LOCK
   [ "$n111lock" -ge 1 ] \
     && ok "and it is at least one ERROR row instead" \
     || bad "and it is at least one ERROR row instead" "got $n111lock ERROR rows: $out111lock"
+
+  # The ownership check can fail SILENTLY too: a non-zero exit with nothing
+  # at all on stderr (a crash, a kill). A bare "stderr is empty" check alone
+  # read this exactly like "pacman ran and confirmed everyone is owned"
+  # (Codex, PR 6 round 2) -- the fake pacman here reproduces that gap
+  # directly: exit 1, print nothing.
+  good_qii4="$T/etcroot/good-backup-4.conf"; printf 'x\n' > "$good_qii4"
+  cat > "$T/fakebin/pacman" <<PACMAN111SILENT
+#!/bin/sh
+case "\$1" in
+  -Qii) printf 'Name            : fakepkg\nBackup Files    :\n%s [modified]\n' "$good_qii4" ;;
+  -Qqo) exit 1 ;;
+esac
+exit 0
+PACMAN111SILENT
+  chmod +x "$T/fakebin/pacman"
+  d111silent() { env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_SKIP_ETC=0 OMABACKUP_ETC_ROOT="$T/etcroot" "$CLI" drift; }
+  out111silent=$(d111silent)
+  ! grep -qE "^(NEW|MODIFIED)[[:space:]]+.*good-backup-4\.conf\$" <<<"$out111silent" \
+    && ok "a silent ownership-check failure (non-zero exit, no stderr) never reads as owned" \
+    || bad "a silent ownership-check failure was silently trusted as owned" "$out111silent"
+  n111silent=$(grep -c '^# ERROR' <<<"$out111silent" || true)
+  [ "$n111silent" -ge 1 ] \
+    && ok "and it is at least one ERROR row instead (silent failure)" \
+    || bad "and it is at least one ERROR row instead (silent failure)" "got $n111silent ERROR rows: $out111silent"
+
+  # One valid "No package owns" line beside one unrelated diagnostic: the
+  # candidate that DID parse must not be trusted piecemeal while the rest of
+  # the batch is quietly ignored. Both this batch's candidates go to ERROR,
+  # not a mix of one normal row and one fault.
+  good_qii5="$T/etcroot/good-backup-5.conf"; printf 'x\n' > "$good_qii5"
+  bad_qii5="$T/etcroot/bad-backup-5.conf"; printf 'x\n' > "$bad_qii5"
+  cat > "$T/fakebin/pacman" <<PACMAN111MIXED
+#!/bin/sh
+case "\$1" in
+  -Qii)
+    printf 'Name            : fakepkg\nBackup Files    :\n%s [modified]\n' "$good_qii5"
+    printf '%s [modified]\n' "$bad_qii5"
+    ;;
+  -Qqo)
+    echo "error: No package owns $bad_qii5" >&2
+    echo "error: could not lock database: File exists" >&2
+    exit 1
+    ;;
+esac
+exit 0
+PACMAN111MIXED
+  chmod +x "$T/fakebin/pacman"
+  d111mixed() { env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_SKIP_ETC=0 OMABACKUP_ETC_ROOT="$T/etcroot" "$CLI" drift; }
+  out111mixed=$(d111mixed)
+  ! grep -qE "^(NEW|MODIFIED)[[:space:]]+.*(good|bad)-backup-5\.conf\$" <<<"$out111mixed" \
+    && ok "a mix of one valid line and one unrelated diagnostic trusts neither candidate" \
+    || bad "a mixed ownership answer produced a normal row instead of failing the whole batch" "$out111mixed"
+  n111mixed=$(grep -c '^# ERROR' <<<"$out111mixed" || true)
+  [ "$n111mixed" -ge 1 ] \
+    && ok "and the batch becomes ERROR rows instead of a mix" \
+    || bad "and the batch becomes ERROR rows instead of a mix" "got $n111mixed ERROR rows: $out111mixed"
 fi
 
 group_close

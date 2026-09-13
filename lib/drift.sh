@@ -81,6 +81,34 @@ drift_etc_unparseable_row() {
   printf '# ERROR: unparseable /etc path from pacman output (%s)\n' "${s:0:80}"
 }
 
+# drift_etc_ownership_incomplete STDERR RC: 0 (true) when a batched
+# `pacman -Qqo` answer about /etc candidates cannot be trusted at all, so
+# every candidate in that batch must become an unparseable-ERROR row (or one
+# summary ERROR row for the whole batch) instead of a normal one. Sections 5
+# and 5b each infer "owned" (or "still unowned") from the ABSENCE of a
+# candidate in this stderr, so a call that did not actually answer must
+# never read as a clean "nobody is missing" -- the exact fail-open the /etc
+# scan exists to prevent (Codex, PR 6 round 2).
+#
+# Incomplete either way: the call exited non-zero with NOTHING on stderr
+# (pacman crashed, was killed, or failed silently in some way this parser
+# has never seen -- a bare `-z "$err"` check alone reads this the same as
+# "every candidate is owned"), or stderr held anything besides a clean run
+# of "error: No package owns <path>" lines, even one such line beside ones
+# that did parse (an unrelated diagnostic must fail the whole batch, not
+# get silently dropped while the lines beside it are trusted). A non-zero
+# exit whose stderr is made ENTIRELY of those lines is pacman's ordinary way
+# of saying "at least one of these is unowned", and is the expected answer,
+# not a failure.
+drift_etc_ownership_incomplete() {
+  local err=$1 rc=$2
+  if [ -z "$err" ]; then
+    [ "$rc" -ne 0 ]
+  else
+    grep -qvE '^error: No package owns ' <<<"$err"
+  fi
+}
+
 # drift_line_split LINE: split one report line into DRIFT_TYPE, DRIFT_PATH and
 # DRIFT_NOTE. Returns 1 for a line that is not a report row (blank, or a
 # comment other than "# ERROR"), so callers write `... || continue`.
@@ -525,25 +553,23 @@ drift_scan() {
     # `--` ends option parsing before the array: a fragment that happens to
     # start with `-` is a filename argument, never a flag that could corrupt
     # every other candidate answered in the same call.
-    local etc_candidates=() etc_bad=() etc_unowned="" etc_unowned_err=""
+    local etc_candidates=() etc_bad=() etc_unowned="" etc_unowned_err="" etc_qqo_rc=0
     while IFS= read -r f; do
       [ -z "$f" ] && continue
       echo "$f" | grep -qE "$etc_skip" && continue
       if [ -e "$f" ]; then etc_candidates+=("$f"); else etc_bad+=("$f"); fi
     done <<<"$etc_live"
     if [ ${#etc_candidates[@]} -gt 0 ]; then
-      etc_unowned_err=$(LC_ALL=C pacman -Qqo -- "${etc_candidates[@]}" 2>&1 >/dev/null)
+      etc_unowned_err=$(LC_ALL=C pacman -Qqo -- "${etc_candidates[@]}" 2>&1 >/dev/null); etc_qqo_rc=$?
       etc_unowned=$(sed -nE 's/^error: No package owns (.*)$/\1/p' <<<"$etc_unowned_err")
     fi
-    # This branch infers "owned" from ABSENCE in that stderr, so a validation
-    # call that failed for an unrelated reason (a locked database, a
-    # reworded message, pacman dying outright) would otherwise read as
-    # "every candidate here is owned" and every one of them would reach a
-    # normal row -- the exact fail-open this scan exists to prevent. Same
-    # producer contract as the drop-in ownership check below: stderr that
-    # produced nothing this parser recognises is a failed query, not a
-    # clean answer, so nothing from this batch is trusted.
-    if [ -n "$etc_unowned_err" ] && [ -z "$etc_unowned" ]; then
+    # See drift_etc_ownership_incomplete: this branch infers "owned" from
+    # ABSENCE in that stderr, so a validation call that did not actually
+    # answer (silently, or with an unrelated diagnostic beside whatever did
+    # parse) would otherwise read as "every candidate here is owned" and
+    # every one of them would reach a normal row -- the exact fail-open this
+    # scan exists to prevent.
+    if [ ${#etc_candidates[@]} -gt 0 ] && drift_etc_ownership_incomplete "$etc_unowned_err" "$etc_qqo_rc"; then
       echo "# ERROR: cannot parse pacman ownership output; modified /etc files NOT checked"
       found=$((found+1))
     else
@@ -618,10 +644,13 @@ X11/xorg.conf.d fonts/conf.d"
     # locale that slipped through, a pacman that changed how it reports this)
     # used to read as a clean scan, which is how a hand-written
     # /etc/modprobe.d/*.conf goes unbacked while every monitor says fine.
-    local unowned_err dropin_candidates=() dropin_bad=() dropin_still_unowned=""
-    unowned_err=$(LC_ALL=C pacman -Qqo "${dropin_files[@]}" 2>&1 >/dev/null)
+    local unowned_err dropin_candidates=() dropin_bad=() dropin_still_unowned="" dropin_qqo_rc=0
+    unowned_err=$(LC_ALL=C pacman -Qqo "${dropin_files[@]}" 2>&1 >/dev/null); dropin_qqo_rc=$?
     unowned=$(sed -nE 's/^error: No package owns (.*)$/\1/p' <<<"$unowned_err")
-    if [ -n "$unowned_err" ] && [ -z "$unowned" ]; then
+    # See drift_etc_ownership_incomplete: the same rule section 5's ownership
+    # check uses, so the two match. A bare "stderr empty" check alone read a
+    # silent, non-zero-exit failure the same as "every drop-in is owned".
+    if drift_etc_ownership_incomplete "$unowned_err" "$dropin_qqo_rc"; then
       echo "# ERROR: cannot parse pacman ownership output; /etc drop-ins NOT checked"
       found=$((found+1))
     else
