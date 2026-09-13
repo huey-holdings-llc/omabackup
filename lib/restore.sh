@@ -454,10 +454,10 @@ restore_stage_plugins() {
       restore_warn "  failed: $id"
     fi
   done < "$M"
-  # Guarded on the count rather than on $apply: the dry-run branch above is
-  # the only thing that fills RESTORE_WOULD here, so an --apply run adds
-  # nothing and says nothing.
-  if [[ ${#RESTORE_WOULD[@]} -gt "$would_start" ]]; then
+  # The same condition the loop's own dry-run branch uses, and the count is
+  # printed even when it is zero: "would add 0 plugin(s)" is an answer, and
+  # silence is the thing a dry run must never be.
+  if [[ "$apply" != 1 ]]; then
     log "[dry] --plugins would add $(( ${#RESTORE_WOULD[@]} - would_start )) plugin(s)"
     restore_list_would "$would_start"
   fi
@@ -514,9 +514,11 @@ restore_stage_services() {
       restore_warn "  could not enable $u"
     fi
   done < <(awk '{print $1}' "$M/systemd-user.txt" 2>/dev/null)
-  # Count, not $apply: this stage also fills RESTORE_WOULD on an --apply run
-  # that OMABACKUP_SKIP_TIMERS has kept away from systemctl.
-  if [[ ${#RESTORE_WOULD[@]} -gt "$would_start" ]]; then
+  # The same condition the loop's own dry-run branch uses, OMABACKUP_SKIP_TIMERS
+  # included: this stage also fills RESTORE_WOULD on an --apply run that the
+  # suite has kept away from systemctl. The count is printed even when it is
+  # zero, as the other two stages do.
+  if [[ "$apply" != 1 || "${OMABACKUP_SKIP_TIMERS:-0}" == 1 ]]; then
     log "[dry] --services would enable $(( ${#RESTORE_WOULD[@]} - would_start )) unit(s)"
     restore_list_would "$would_start"
   fi

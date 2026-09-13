@@ -5194,20 +5194,32 @@ if group 107 "the human dry run names what every restore stage would do, not jus
   printf 'known-aur-one\n' > "$FR/manifests/pacman-aur.txt"
   printf 'ok-one.service\n' > "$FR/manifests/systemd-user.txt"
   : > "$FR/manifests/systemd-user-off.txt"
-  git -C "$FR" add -A && git -C "$FR" commit -qm "manifests with one package and one unit"
+  # id, url, rev: the plugin stage adds anything the TSV names that is not
+  # already under ~/.config/omarchy/plugins, and the fixture home has none.
+  printf 'known-plugin\thttps://example.invalid/known-plugin\t\n' > "$FR/manifests/omarchy-plugins.tsv"
+  git -C "$FR" add -A && git -C "$FR" commit -qm "manifests with one package, one plugin and one unit"
 
-  h107=$(ob restore --packages --services)
+  h107=$(ob restore --packages --plugins --services)
   has "the package stage says how many it would install" "$h107" "\[dry\] --packages"
   has "and names one of them" "$h107" "known-native-001"
   has "and says how many it left out of the listing" "$h107" "more (add --json to list every one)"
+  has "the plugin stage says how many it would add" "$h107" "\[dry\] --plugins would add 1 plugin"
+  has "and names the plugin" "$h107" "plugin:known-plugin"
   has "the service stage says how many it would enable" "$h107" "\[dry\] --services"
   has "and names the unit" "$h107" "ok-one.service"
   eq "the dry run still changes nothing" \
     "$(git -C "$FR" status --porcelain | grep -c . || true)" "0"
   # --json is unchanged: the same paths, in the same array.
-  j107=$(obj restore --packages --services)
+  j107=$(obj restore --packages --plugins --services)
   eq "and --json still lists every one, the AUR package the human listing truncated included" \
-    "$(jq -r '[.would_write[] | select(. == "package:known-native-001" or . == "aur:known-aur-one" or . == "service:ok-one.service")] | length' <<<"$j107")" "3"
+    "$(jq -r '[.would_write[] | select(. == "package:known-native-001" or . == "aur:known-aur-one" or . == "plugin:known-plugin" or . == "service:ok-one.service")] | length' <<<"$j107")" "4"
+
+  # A stage with nothing to do still says so. Silence reads as "this stage did
+  # not run", and the three stages used to disagree about it.
+  : > "$FR/manifests/systemd-user.txt"
+  git -C "$FR" commit -qam "no units left to enable"
+  eq "a stage with nothing to do prints its zero" \
+    "$(ob restore --services | grep -c '\[dry\] --services would enable 0 unit' || true)" "1"
 fi
 
 group_close
