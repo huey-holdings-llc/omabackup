@@ -690,7 +690,7 @@ if group 21 "list hygiene"; then
   check "clean lists lint clean" env HOME="$FH" "$CLI" lint
   printf '*   # 2026-09-03 too wide\n' >> "$FR/drift-ignore.txt"
   fails "a bare * ignore is TOOWIDE" env HOME="$FH" "$CLI" lint
-  eq "json names the code" "$(obj lint | jq -r '.problems[0].code')" "TOOWIDE"
+  eq "json names the code" "$(obj lint | jq -r '.findings[0].code')" "TOOWIDE"
   sed -i '$d' "$FR/drift-ignore.txt"
   printf '.config/nonexistent-dir\n' >> "$FR/allowlist.txt"
   has "a required entry that resolves to nothing is MISSING" "$(ob lint; true)" "MISSING"
@@ -698,10 +698,10 @@ if group 21 "list hygiene"; then
   # An allowlist entry is copied in BOTH directions, so a parent-traversal
   # segment or an absolute path is a hard failure, not a note.
   printf '.config/../../etc\n' >> "$FR/allowlist.txt"
-  eq "a '..' segment is TRAVERSAL" "$(obj lint | jq -r '[.problems[].code] | index("TRAVERSAL") != null')" "true"
+  eq "a '..' segment is TRAVERSAL" "$(obj lint | jq -r '[.findings[].code] | index("TRAVERSAL") != null')" "true"
   sed -i '$d' "$FR/allowlist.txt"
   printf '/etc/passwd\n' >> "$FR/allowlist.txt"
-  eq "an absolute entry is ABSOLUTE" "$(obj lint | jq -r '[.problems[].code] | index("ABSOLUTE") != null')" "true"
+  eq "an absolute entry is ABSOLUTE" "$(obj lint | jq -r '[.findings[].code] | index("ABSOLUTE") != null')" "true"
   sed -i '$d' "$FR/allowlist.txt"
   echo new > "$FH/.local/bin/late"; printf '.local/bin\n' >> "$FR/allowlist.txt"
   check "a file newer than the last run is pending, not NOTBACKEDUP" env HOME="$FH" "$CLI" lint
@@ -718,7 +718,7 @@ if group 21 "list hygiene"; then
   [[ -e "$FR/home/.config/mytool/$nl21" ]] && ok "the file really is in the backup" \
     || bad "the newline-named file was not backed up"
   eq "and the completeness walk reports no NOTBACKEDUP fragments for it" \
-    "$(obj lint | jq -r '[.problems[] | select(.code == "NOTBACKEDUP")] | length')" "0"
+    "$(obj lint | jq -r '[.findings[] | select(.code == "NOTBACKEDUP")] | length')" "0"
   check "so lint is clean" env HOME="$FH" "$CLI" lint
 fi
 if [[ "${OMABACKUP_REAL_REPO:-0}" == 1 ]] && group 21R "list hygiene against the REAL data repo"; then
@@ -2428,7 +2428,7 @@ if group 71 "normalize rules are data: no command execution, no writes outside t
   printf 'home/.bashrc\t1e touch %s\n' "$mark71" >> "$FR/normalize.txt"
   l71=$(obj lint --no-walk)
   eq "lint refuses a rule that would run a command" "$(jq -r .ok <<<"$l71")" "false"
-  eq "the code is BADRULE" "$(jq -r '[.problems[]|select(.code=="BADRULE")]|length' <<<"$l71")" "1"
+  eq "the code is BADRULE" "$(jq -r '[.findings[]|select(.code=="BADRULE")]|length' <<<"$l71")" "1"
   [[ ! -e "$mark71" ]] && ok "lint never ran the command" || bad "lint executed the rule"
   s71=$(obj snapshot --no-push)
   eq "snapshot refuses the same rule" "$(jq -r .ok <<<"$s71")" "false"
@@ -2441,22 +2441,22 @@ if group 71 "normalize rules are data: no command execution, no writes outside t
   printf 'ORIGINAL\n' > "$T/victim.txt"
   printf '../../victim.txt\ts/ORIGINAL/OWNED-BY-NORMALIZE/\n' >> "$FR/normalize.txt"
   eq "lint refuses a traversal path as BADRULE" \
-    "$(obj lint --no-walk | jq -r '[.problems[]|select(.code=="BADRULE")]|length')" "1"
+    "$(obj lint --no-walk | jq -r '[.findings[]|select(.code=="BADRULE")]|length')" "1"
   eq "snapshot refuses the traversal path" "$(obj snapshot --no-push | jq -r .ok)" "false"
   eq "the file above the data repo is untouched" "$(cat "$T/victim.txt")" "ORIGINAL"
   cp "$T/normalize.bak" "$FR/normalize.txt"
 
   printf '/etc/passwd\ts/a/b/\n' >> "$FR/normalize.txt"
   eq "lint refuses an absolute path as BADRULE" \
-    "$(obj lint --no-walk | jq -r '[.problems[]|select(.code=="BADRULE")]|length')" "1"
+    "$(obj lint --no-walk | jq -r '[.findings[]|select(.code=="BADRULE")]|length')" "1"
   cp "$T/normalize.bak" "$FR/normalize.txt"
 
   # A syntax error stays BADSED: the two codes say different things, and only
   # one of them means "this rule tried to leave its box".
   printf 'home/.bashrc\ts/unterminated\n' >> "$FR/normalize.txt"
   b71=$(obj lint --no-walk)
-  eq "a syntax error is still BADSED" "$(jq -r '[.problems[]|select(.code=="BADSED")]|length' <<<"$b71")" "1"
-  eq "and it is not reported as BADRULE" "$(jq -r '[.problems[]|select(.code=="BADRULE")]|length' <<<"$b71")" "0"
+  eq "a syntax error is still BADSED" "$(jq -r '[.findings[]|select(.code=="BADSED")]|length' <<<"$b71")" "1"
+  eq "and it is not reported as BADRULE" "$(jq -r '[.findings[]|select(.code=="BADRULE")]|length' <<<"$b71")" "0"
   cp "$T/normalize.bak" "$FR/normalize.txt"
 
   # The check AFTER the glob expands. The path half is confined before the
@@ -4106,9 +4106,14 @@ if group 98 "open --remote opens the repo's own page, and builds the URL itself"
   git -C "$FR" remote set-url origin "git@github.com:alice/dots.git"
   o98=$(br98); rc98=$?
   eq "the verb succeeds on a github remote" "$rc98" "0"
-  eq "and reports the page it opened" "$(jq -r .opened <<<"$o98")" "https://github.com/alice/dots"
+  # br98 passes no --json, so this is the human reply: one line naming the
+  # page. The JSON field the popup reads is checked right after.
+  eq "and reports the page it opened" "$o98" "opened https://github.com/alice/dots"
   eq "the browser was launched with exactly that URL, and nothing else" \
     "$(wait98)" "https://github.com/alice/dots"
+  eq "--json names the same page in the field the popup reads" \
+    "$(env HOME="$FH" PATH="$T/fakebin:$PATH" "$CLI" open --remote --json 2>/dev/null | jq -r .opened)" \
+    "https://github.com/alice/dots"
   # The remote is never passed through: an ssh URL still produces an https page.
   git -C "$FR" remote set-url origin "ssh://git@github.com:22/alice/dots"
   br98 >/dev/null
@@ -4592,6 +4597,260 @@ if group 100 "status and snapshot agree on the drift count, TOOBIG and EXCLUDED 
     "$(jq -r .drift_count <<<"$s100")" "$actionable100"
   eq "snapshot --json .drift_count agrees with status --json .drift_count" \
     "$(jq -r .drift_count <<<"$j100")" "$(jq -r .drift_count <<<"$s100")"
+fi
+
+if group 101 "the triage verbs honour --json: one human line without it, one object with it"; then
+  # Service.qml appends --json to every call it makes, so the popup's contract
+  # is untouched; a person typing the verb gets a sentence instead of a JSON
+  # object they have to read back through jq. Exit codes do not move: 0 ran,
+  # 1 refused, 2 usage, in both modes.
+  mk_fixture g101; seed_home; commit_baseline
+  # shellcheck disable=SC2088  # matching the LITERAL "~/" status emits, not a path to expand
+  tp101() { printf '~/%s' "$1"; }
+  # The human mode with stderr dropped: these assertions also prove that the
+  # one line is ALL that reaches stdout.
+  obh() { env HOME="$FH" "$CLI" "$@" 2>/dev/null; }
+  mkdir -p "$FH/.config/appy"
+  printf 'y=1\n' > "$FH/.config/appy/y.toml"
+  printf 'w=1\n' > "$FH/.config/appy/w.toml"
+  printf 'v=1\n' > "$FH/.config/appy/v.toml"
+  { printf 'NEW        ~/.config/appy/y.toml\n'
+    printf 'NEW        ~/.config/appy/w.toml\n'
+    printf 'NEW        ~/.config/appy/v.toml\n'
+    printf 'GONE       ~/.config/gone101\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+
+  a101=$(obh allow "$(tp101 .config/appy/y.toml)"); a101rc=$?
+  eq "allow: one human line, no JSON" "$a101" "allowed ~/.config/appy/y.toml"
+  eq "allow: exit 0" "$a101rc" "0"
+  eq "allow --json: the object the widget has always read" \
+    "$(obj allow "$(tp101 .config/appy/w.toml)" | jq -c '[.ok,.lint_ok,.added]')" \
+    '[true,true,".config/appy/w.toml"]'
+
+  # A refusal is one line too, and the same sentence the JSON carries.
+  r101=$(obh allow "$(tp101 .config/never101.conf)"); r101rc=$?
+  eq "allow: a refusal is one human line" "$r101" \
+    "refused: the drift report does not name that path (or the folder is too broad); refresh and retry"
+  eq "allow: a refusal still exits 1" "$r101rc" "1"
+  rj101=$(obj allow "$(tp101 .config/never101.conf)"); rj101rc=$?
+  eq "allow --json: the refusal is still one JSON object" "$(jq -sc length <<<"$rj101")" "1"
+  eq "allow --json: and still ok:false" "$(jq -r .ok <<<"$rj101")" "false"
+  eq "allow --json: refusing still exits 1" "$rj101rc" "1"
+  eq "both modes carry the same reason" "$(jq -r '.problems[0]' <<<"$rj101")" "${r101#refused: }"
+
+  i101=$(obh ignore "$(tp101 .config/appy/v.toml)" 'regenerable')
+  eq "ignore: one human line, naming the reason" "$i101" \
+    "ignored ~/.config/appy/v.toml (reason: regenerable)"
+
+  # An allowlist entry that no longer resolves: the GONE row above is about
+  # this one, and taking it out is what makes lint clean again.
+  allow ".config/gone101"
+  g101=$(obh resolve-gone "$(tp101 .config/gone101)" remove); g101rc=$?
+  eq "resolve-gone: one human line, naming the verb" "$g101" "resolved ~/.config/gone101 (remove)"
+  eq "resolve-gone: exit 0" "$g101rc" "0"
+  grep -qx '.config/gone101' "$FR/allowlist.txt" && bad "resolve-gone did not remove the entry" \
+    || ok "resolve-gone: the entry is gone from allowlist.txt"
+
+  # push: the list edits above are uncommitted, so this is the confirm gate.
+  p101=$(obh push); p101rc=$?
+  eq "push: the confirm gate refuses in one line" "$p101rc" "1"
+  has "push: the line says what is waiting" "$p101" "uncommitted edit"
+  has "push: and how to confirm" "$p101" "push --confirm"
+  eq "push --json: the confirm gate is unchanged" \
+    "$(obj push | jq -c '[.ok,.needs_confirm,(.files|length>0),(.sig|length>0)]')" '[false,true,true,true]'
+
+  t101=$(obh timer status)
+  eq "timer status: one human line" "$t101" "timer: enabled=false active=false"
+  eq "timer status --json: unchanged" \
+    "$(obj timer status | jq -c '[.ok,.enabled,.active]')" '[true,false,false]'
+  tb101=$(obh timer sideways); tb101rc=$?
+  eq "timer: an unknown verb refuses in one line" "$tb101" "refused: usage: timer pause|resume|status|run"
+  eq "timer: and exits 1" "$tb101rc" "1"
+
+  mkdir -p "$T/fakebin"
+  for n in omarchy-launch-floating-terminal-with-presentation xdg-terminal-exec; do
+    printf '#!/bin/sh\npwd > "%s/open101.cwd"\nexit 0\n' "$T" > "$T/fakebin/$n"
+    chmod +x "$T/fakebin/$n"
+  done
+  : > "$T/open101.cwd"
+  o101=$(env PATH="$T/fakebin:$PATH" HOME="$FH" "$CLI" open 2>/dev/null); o101rc=$?
+  eq "open: one human line naming where it opened" "$o101" "opened a terminal in $FR"
+  eq "open: exit 0" "$o101rc" "0"
+  eq "open --json: unchanged" \
+    "$(env PATH="$T/fakebin:$PATH" HOME="$FH" "$CLI" open --json 2>/dev/null | jq -r .ok)" "true"
+
+  # --report is a different destination and says so. The pager is faked like
+  # group 59's: CI's container has no less, and the line is the subject here.
+  printf '#!/bin/sh\nexit 0\n' > "$T/fakebin/less"; chmod +x "$T/fakebin/less"
+  : > "$T/open101.cwd"
+  or101=$(env PATH="$T/fakebin:$PATH" HOME="$FH" "$CLI" open --report 2>/dev/null); or101rc=$?
+  eq "open --report: its own human line" "$or101" "opened the drift report in a terminal"
+  eq "open --report: exit 0" "$or101rc" "0"
+
+  # The lint gate's rollback is a reply too. Break the lists first, then make
+  # an edit that clears every pre-check and cannot survive lint --no-walk.
+  mkdir -p "$FH/.config/appr"; printf 'r=1\n' > "$FH/.config/appr/r.toml"
+  printf '.config/no-such-thing-101\n' >> "$FR/allowlist.txt"
+  printf 'NEW        ~/.config/appr/r.toml\n# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  lg101=$(obh allow "$(tp101 .config/appr/r.toml)"); lg101rc=$?
+  eq "the lint gate refuses in one human line" "$lg101" \
+    "refused: lint rejected the edit (rolled back): MISSING .config/no-such-thing-101"
+  eq "and exits 1" "$lg101rc" "1"
+  grep -qx '.config/appr/r.toml' "$FR/allowlist.txt" && bad "the lint-gate refusal did not roll back" \
+    || ok "and the edit was rolled back"
+  eq "the same refusal under --json still carries lint_ok:false" \
+    "$(obj allow "$(tp101 .config/appr/r.toml)" | jq -c '[.ok,.lint_ok]')" '[false,false]'
+  sed -i '/no-such-thing-101/d' "$FR/allowlist.txt"
+
+  # timer pause/resume and both run branches, against a systemctl that says
+  # yes to everything. OMABACKUP_SKIP_TIMERS=0 is what lets the unit branch
+  # run at all; the rest of this suite sets it to 1.
+  printf '#!/bin/sh\necho "$@" >> "%s/sysctl101.log"\nexit 0\n' "$T" > "$T/fakebin/systemctl"
+  chmod +x "$T/fakebin/systemctl"
+  : > "$T/sysctl101.log"
+  tw101() { env PATH="$T/fakebin:$PATH" HOME="$FH" OMABACKUP_SKIP_TIMERS=0 "$CLI" "$@" 2>/dev/null; }
+  eq "timer pause: one human line" "$(tw101 timer pause)" "timer paused"
+  eq "timer resume: one human line" "$(tw101 timer resume)" "timer resumed"
+  eq "timer run: the unit branch names the unit" "$(tw101 timer run)" "snapshot started (the systemd unit)"
+  # The wording and the branch, not just the wording: this one really did ask
+  # systemd, which is what makes the next assertion a different branch.
+  grep -qx -- '--user start --no-block omabackup-snapshot.service' "$T/sysctl101.log" \
+    && ok "timer run: and really asked systemd for it" || bad "timer run never reached systemctl"
+  # Last in this fixture on purpose: the fallback really does detach a snapshot.
+  : > "$T/sysctl101.log"
+  eq "timer run: the detached fallback says that instead" \
+    "$(env PATH="$T/fakebin:$PATH" HOME="$FH" OMABACKUP_SKIP_TIMERS=1 "$CLI" timer run 2>/dev/null)" \
+    "snapshot started (detached, no unit loaded)"
+  [[ -s "$T/sysctl101.log" ]] && bad "the detached fallback still called systemctl" \
+    || ok "timer run: and the fallback did not touch systemctl"
+
+  # A usage error is still a usage error in both modes: exit 2, and under
+  # --json one object carrying usage:true, not a widget-shaped refusal.
+  eq "open: an unknown flag exits 2 without --json" \
+    "$(env HOME="$FH" "$CLI" open --bogus >/dev/null 2>&1; echo $?)" "2"
+  u101=$(obj open --bogus); u101rc=$?
+  eq "open --json: an unknown flag exits 2" "$u101rc" "2"
+  eq "open --json: and is one usage object" "$(jq -c '[.ok,.usage]' <<<"$u101")" '[false,true]'
+
+  # push's SUCCESS lines need a repo with nothing dirty and a push the gate
+  # will allow, which the fixture above no longer is: its own fixture, last.
+  mk_fixture g101p; seed_home; commit_baseline
+  if command -v gitleaks >/dev/null 2>&1; then
+    git -C "$FR" add -A >/dev/null 2>&1; git -C "$FR" commit -qm "settle before the push lines" >/dev/null 2>&1
+    # THE LAST LINE, not the whole of stdout. Without --json the engine's own
+    # progress log speaks too ("==> Pushed to origin.", log() in lib/common.sh,
+    # which has always printed on this path); the reply is what the verb ends
+    # on. Under --json log() is silent and stdout is the one object, which the
+    # last assertion in this block pins.
+    pu101() { env HOME="$FH" "$CLI" push "$@" 2>/dev/null | tail -1; }
+    # Nothing dirty, commits waiting: the reply the verb ends on, count zero.
+    eq "push: a plain push reports what it committed" "$(pu101)" "committed 0 edit(s)"
+    # One list edit, confirmed: the same line with a count.
+    printf '\n# an edit for the Commit button\n' >> "$FR/drift-ignore.txt"
+    eq "push --confirm: the count is in the line" "$(pu101 --confirm)" "committed 1 edit(s)"
+    # An edit that only ever lived in the index (added, then deleted from the
+    # working tree) is gone after the unstage, so there is nothing left to
+    # stage and the verb takes its own early exit.
+    printf 'x\n' > "$FR/ghost101.txt"
+    git -C "$FR" add ghost101.txt
+    rm -f "$FR/ghost101.txt"
+    head101=$(git -C "$FR" rev-parse HEAD)
+    eq "push --confirm: an edit that vanished before staging commits nothing" \
+      "$(pu101 --confirm)" "committed 0 edit(s)"
+    eq "and it really did commit nothing" "$(git -C "$FR" rev-parse HEAD)" "$head101"
+    # And the invariant the popup depends on: under --json, stdout is that one
+    # object and nothing else, log line included.
+    jp101=$(env HOME="$FH" "$CLI" push --confirm --json 2>/dev/null)
+    eq "push --json: stdout is one line" "$(wc -l <<<"$jp101")" "1"
+    eq "push --json: and it is one JSON object" "$(jq -sc length <<<"$jp101")" "1"
+  else
+    echo "  (gitleaks not installed: skipping push's success lines)"
+  fi
+fi
+
+if group 102 "lint --json: problems[] are strings, findings[] keeps the objects"; then
+  # problems[] is one shape everywhere now, because Panel.qml renders every
+  # entry as text and Service.qml shows problems[0] as the error line. lint's
+  # {code,path,note} records are still the useful thing for a tool, so they
+  # move to findings[] rather than being thrown away.
+  mk_fixture g102; seed_home
+  printf '*\n' >> "$FR/drift-ignore.txt"
+  printf '/abs/entry\n?.config/absent102/x.conf\n' >> "$FR/allowlist.txt"
+  l102=$(obj lint --no-walk)
+  eq "lint --json is still one object" "$(jq -sc length <<<"$l102")" "1"
+  eq "and still says ok:false when there are problems" "$(jq -r .ok <<<"$l102")" "false"
+  eq "every problems[] entry is a string" "$(jq -c '[.problems[]|type]|unique' <<<"$l102")" '["string"]'
+  has "the string carries the code" "$(jq -r '.problems[]' <<<"$l102")" "TOOWIDE"
+  has "and the entry it is about" "$(jq -r '.problems[]' <<<"$l102")" "ABSOLUTE /abs/entry"
+  eq "findings[] keeps the objects" \
+    "$(jq -r '[.findings[]|select(.code=="TOOWIDE")]|length' <<<"$l102")" "1"
+  eq "one finding per problem" "$(jq -r '(.problems|length) == (.findings|length)' <<<"$l102")" "true"
+  eq "a finding still carries code, path and note" \
+    "$(jq -r '[.findings[]|select(.code=="ABSOLUTE")][0] | [(.code|type),(.path|type),(.note|type)] | join(",")' <<<"$l102")" \
+    "string,string,string"
+  eq "notes[] are untouched objects" "$(jq -c '[.notes[]|type]|unique' <<<"$l102")" '["object"]'
+  # The human rendering does not change at all.
+  h102=$(ob lint --no-walk; true)
+  has "the human lint still prints the code" "$h102" "TOOWIDE"
+  has "and still counts the problems" "$h102" "problem(s), see above"
+fi
+
+if group 103 "status on a data repo it cannot read records the fault, instead of leaving yesterday's file standing"; then
+  # data_repo_require die()s before anything is written, so a repo that broke
+  # overnight left the widget reading a green status.json from the last good
+  # run. The refusal on stdout is unchanged; what changes is that the file the
+  # popup reads now says what happened.
+  mk_fixture g103; seed_home; commit_baseline
+  # An upstream, so the "before" file is the reassuring one this fix is about
+  # rather than a fault for an unrelated reason.
+  git -C "$FR" push -q -u origin HEAD >/dev/null 2>&1
+  obj status >/dev/null; s103arc=$?
+  eq "a readable repo still reports normally" "$s103arc" "0"
+  eq "and status.json names the repo" "$(jq -r .repo "$OMABACKUP_STATE_DIR/status.json")" "$FR"
+  before103=$(jq -r '.generated // 0' "$OMABACKUP_STATE_DIR/status.json")
+  eq "status.json is not a fault yet" "$(jq -r '.state == "fault"' "$OMABACKUP_STATE_DIR/status.json")" "false"
+
+  # A full second, so a same-second collision cannot hide a file that was
+  # never rewritten.
+  sleep 1
+  rm -f "$FR/.omabackup"
+  s103=$(obj status); rc103=$?
+  eq "status refuses" "$rc103" "1"
+  eq "and the refusal is still one JSON object" "$(jq -sc length <<<"$s103")" "1"
+  eq "with ok:false" "$(jq -r .ok <<<"$s103")" "false"
+  has "naming the marker" "$(jq -r .error <<<"$s103")" ".omabackup marker"
+
+  eq "status.json now says fault" "$(jq -r .state "$OMABACKUP_STATE_DIR/status.json")" "fault"
+  after103=$(jq -r '.generated // 0' "$OMABACKUP_STATE_DIR/status.json")
+  [[ "$after103" -gt "$before103" ]] && ok "and it was rewritten just now" \
+    || bad "status.json was not rewritten" "generated $before103 -> $after103"
+  has "the reason is in problems[0]" "$(jq -r '.problems[0]' "$OMABACKUP_STATE_DIR/status.json")" \
+    "no .omabackup marker"
+  eq "problems[] is still an array of strings" \
+    "$(jq -c '[.problems[]|type]|unique' "$OMABACKUP_STATE_DIR/status.json")" '["string"]'
+  eq "repo is blank, as the not-configured writer leaves it" \
+    "$(jq -r .repo "$OMABACKUP_STATE_DIR/status.json")" ""
+  eq "the object still carries the whole schema" \
+    "$(jq -r 'has("drift") and has("uncommitted") and has("timer_next") and has("push_reason")' "$OMABACKUP_STATE_DIR/status.json")" "true"
+
+  # health is the other verb that reads through data_repo_require, and it is
+  # the one that runs at login, so it records the same fault.
+  rm -f "$OMABACKUP_STATE_DIR/status.json"
+  h103=$(obj health); h103rc=$?
+  eq "health refuses too" "$h103rc" "1"
+  eq "and its refusal is one JSON object" "$(jq -sc length <<<"$h103")" "1"
+  eq "health recorded the fault as well" "$(jq -r .state "$OMABACKUP_STATE_DIR/status.json")" "fault"
+
+  # A write verb must NOT be weakened by any of this: it still refuses outright,
+  # and from data_repo_require itself, not from some later gate that happens to
+  # say no too. `error` (not `problems`) is what die() emits, and the reason is
+  # the marker's.
+  # shellcheck disable=SC2088  # the literal "~/" prefix the drift report emits, not a path to expand
+  w103=$(obj allow '~/x'); w103rc=$?
+  eq "a write verb still refuses a repo with no marker" "$(jq -r .ok <<<"$w103")" "false"
+  eq "and it exits 1" "$w103rc" "1"
+  has "and the refusal is data_repo_require's own" "$(jq -r '.error // empty' <<<"$w103")" \
+    "no .omabackup marker"
 fi
 
 group_close
