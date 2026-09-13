@@ -27,11 +27,10 @@
 # refused on every single run, with a message about damage and nothing but a
 # suite-only variable to get past it. At least nine tenths of the last
 # committed count, rounded up, says the same thing at 15 entries as it does at
-# 200. A repo
-# whose HEAD carries no list with anything in it has nothing to compare
-# against, so it gets the bootstrap floor, which is the minAllowlist config
-# key (default 20); minAllowlist WRITTEN DOWN in the config overrides both,
-# and is the answer to "I trimmed the list on purpose".
+# 200. A repo whose HEAD carries no list with anything in it has nothing to
+# compare against, so it gets the bootstrap floor, which is the minAllowlist
+# config key (default 20); minAllowlist WRITTEN DOWN in the config overrides
+# both, and is the answer to "I trimmed the list on purpose".
 #
 # A committed allowlist.txt holding only comments is bootstrap, not history:
 # it is what setup leaves before the first list is written, and treating it as
@@ -81,8 +80,8 @@ snapshot_floors_from_history() {
     # then MIN_FILES (half the previous tree) passed too and the mass
     # disappearance was backed up over the good copy. At least nine tenths of
     # the previous entries have to remain: 2 -> 2, 3 -> 3, 10 -> 9, 15 -> 14,
-    # 20 -> 18. The clamp below is now belt and braces, since the ceiling of a
-    # ninth of anything at all is already 1 (Codex, PR 20).
+    # 20 -> 18. The clamp below is belt and braces now: nine tenths of one
+    # entry, rounded up, is already 1 (Codex, PR 20).
     floor=$(( (prev_entries * 9 + 9) / 10 ))
     [[ "$floor" -ge 1 ]] || floor=1
     MIN_ALLOWLIST_SOURCE=history
