@@ -166,6 +166,9 @@ step "docs"
 # the shared footer line, and until now nothing checked that. The verb table in
 # bin/omabackup is the source of truth; this is the one copy of it that lives
 # somewhere the table cannot reach, so it is the one that can drift.
+#
+# `sed '$d'` drops the footer, not `head -n -1`: the negative count is a GNU
+# extension and nothing else in this script needs one.
 readme_cli_block() {
   awk '
     /^### CLI$/       { want = 1; next }
@@ -173,7 +176,13 @@ readme_cli_block() {
     inblock           { print }
   ' README.md
 }
-if diff -u <(readme_cli_block) <(bin/omabackup help | head -n -1); then
+readme_cli=$(readme_cli_block)
+if [[ -z "$readme_cli" ]]; then
+  # An empty extraction is not drift, it is a check that has lost its footing:
+  # the "### CLI" heading or its fenced block is gone. Say that, rather than
+  # print a diff of the whole usage text against nothing and call it drift.
+  bad "README CLI usage block not found (expected a fenced block under '### CLI')"
+elif diff -u <(printf '%s\n' "$readme_cli") <(bin/omabackup help | sed '$d'); then
   ok "README's CLI block matches omabackup help"
 else
   bad "README's CLI block has drifted from omabackup help"

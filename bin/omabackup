@@ -110,12 +110,17 @@ verb_known() {
 }
 
 # verb_load_mode VERB: the load field of the first row documenting VERB (the
-# three setup rows all say the same thing). Returns 1, printing nothing, when
-# no row documents it -- callers ask only after verb_known has said yes.
+# three setup rows all say the same thing). Returns 1, leaving VERB_LOAD_MODE
+# empty, when no row documents it -- callers ask only after verb_known has said
+# yes. The answer lands in a global rather than on stdout so that reading it
+# costs nothing: a command substitution here would fork a subshell on every
+# ordinary verb, once per run, for one word out of a table already in memory.
+VERB_LOAD_MODE=""
 verb_load_mode() {
   local i
+  VERB_LOAD_MODE=""
   for ((i = 0; i < ${#VERB_TABLE[@]}; i += VERB_FIELDS)); do
-    if [[ " ${VERB_TABLE[i]} " == *" $1 "* ]]; then printf '%s\n' "${VERB_TABLE[i+3]}"; return 0; fi
+    if [[ " ${VERB_TABLE[i]} " == *" $1 "* ]]; then VERB_LOAD_MODE=${VERB_TABLE[i+3]}; return 0; fi
   done
   return 1
 }
@@ -207,14 +212,18 @@ main() {
     # named in the arms above rather than derived here.
     *)
       verb_known "$verb" || usage_die "unknown verb '$verb'"
-      if [[ $(verb_load_mode "$verb") == plain ]]; then config_load "$verb"; fi ;;
+      verb_load_mode "$verb"
+      if [[ "$VERB_LOAD_MODE" == plain ]]; then config_load "$verb"; fi ;;
   esac
   case "$verb" in
     help|-h|--help) if [[ $JSON == 1 ]]; then jq -cn --arg u "$(usage)" '{ok:true, usage:$u}'; else usage; fi ;;
     version) if [[ $JSON == 1 ]]; then jq -cn --arg v "$VERSION" '{version:$v}'; else echo "$VERSION"; fi ;;
     # Every other verb the table documents, plus the one it deliberately does
     # not: cmd_<verb>, with the dashes that cannot be in a function name turned
-    # into underscores.
+    # into underscores. The guard below cannot fire today, since the case
+    # statement above already ended the process on a verb the table does not
+    # know; it is kept so that this case stays correct on its own, rather than
+    # only because of what the one before it happens to do.
     *)
       verb_known "$verb" || [[ $verb == notify-failure ]] || usage_die "unknown verb '$verb'"
       local fn="cmd_${verb//-/_}"
