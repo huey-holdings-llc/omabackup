@@ -234,6 +234,11 @@ needed attention, on the same report at the same moment. Both now come from
 one function, and the count means the same thing everywhere: every row the
 popup can put an Ignore or Allow button on, which is every row but `ERROR`.
 
+`tests/lint.sh` copies the shipped tree with `cp -Pp`, so a shipped symlink
+is copied as a symlink instead of being followed to whatever it points at.
+The validator step now sees the same tree a clone would, and it names the
+file it could not copy instead of only saying the assembly failed.
+
 ### Security
 
 `setup` refuses a remote URL that carries a password, whether it arrives
