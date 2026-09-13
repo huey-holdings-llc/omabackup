@@ -162,6 +162,12 @@ status object with `"state": "fault"` and the reason in `problems` before they
 exit, so the popup shows what broke. Both still exit 1, and no write verb is
 any more willing to touch a repo in that state.
 
+The drift scan and `verify` no longer install an EXIT trap each for their
+own scratch directory. An EXIT trap replaces the one before it rather than
+adding to it, so whichever ran second disarmed the first and would have left
+its directory in the state directory for good. Both register with one
+handler now, and a Ctrl-C or a unit stop cleans up after `verify` too.
+
 The popup's Commit button now commits every edit it counts. `status`
 counted every uncommitted change in the data repo outside the snapshot's own
 files, but the button staged only the four lists and `.gitignore`, so

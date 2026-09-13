@@ -89,24 +89,24 @@ cmd_verify() {
     return 1
   fi
 
-  # VERIFY_R is deliberately NOT `local`: an EXIT trap fires when the whole
-  # process exits, by which point cmd_verify's own call frame (and any local
-  # variable in it) is long gone, and referencing it under `set -u` would be
-  # an unbound-variable error. bin/omabackup runs exactly one verb per
-  # process, so a plain global here is exactly as scoped as the trap is, and
-  # EXIT (not RETURN) is required: RETURN is not scoped to this function
-  # either -- it also fires when restore_stage_configs (called below)
-  # returns, deleting the throwaway mid-comparison.
+  # The throwaway is removed on the way out by cleanup_add (lib/common.sh),
+  # which owns the one EXIT trap this process has. A bare `trap ... EXIT` here
+  # used to replace whatever was already installed, and the drift scan
+  # installs one of its own; registering instead of trapping also takes a copy
+  # of the path, so nothing here depends on a variable still being in scope
+  # when the process exits. Removal on EXIT, not RETURN: RETURN is not scoped
+  # to this function either, and it also fires when restore_stage_configs
+  # (called below) returns, deleting the throwaway mid-comparison.
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
   # Guarded, both of them: under `set -e` a failing mkdir or mktemp ends the
   # process with no line of its own, so a read-only or full $STATE_DIR made
   # `verify` look like a crash rather than a refusal it could explain.
   mkdir -m 700 -p "$STATE_DIR" \
     || die "cannot create $STATE_DIR; refusing to verify without a scratch directory"
-  VERIFY_R=$(mktemp -d "$STATE_DIR/verify.XXXXXX") \
+  local R
+  R=$(mktemp -d "$STATE_DIR/verify.XXXXXX") \
     || die "cannot create scratch under $STATE_DIR; refusing to verify"
-  trap 'rm -rf "${VERIFY_R:-}"' EXIT
-  local R="$VERIFY_R"
+  cleanup_add "$R"
 
   # Restore into the throwaway: reuse restore.sh's own configs stage (rsync
   # plus the modes.txt replay) rather than duplicating it, with $HOME
