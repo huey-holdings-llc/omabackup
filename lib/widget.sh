@@ -282,10 +282,20 @@ cmd_ignore() {
   # means "silence the directory, keep checking its children" (lib/lists.sh),
   # which on a collapsed ">2000 files" row would replace one row with
   # thousands.
-  # The `[` escape goes on the path half only: the `/**` suffix is the
-  # subtree form drift-ignore.txt documents, and it is meant to be a glob.
+  # THE SUBTREE FORM CANNOT CARRY THE ESCAPE, so a bracket is refused there
+  # and only there. Both readers of a `/**` entry strip the suffix and compare
+  # the base QUOTED (is_ignored_subtree and is_ignored, lib/lists.sh), so an
+  # escaped base is matched as literal text and never equals the directory it
+  # came from: the entry would be written, the reply would say ok, and the row
+  # would come back on every scan with nothing to catch it. Unquoting that
+  # comparison is not the fix either, because a `*` in an existing base would
+  # become a glob. The single-file form has no such problem: it is matched as
+  # a pattern, which is what the escape is for.
   if [[ "$DRIFT_TARGET_DIR" == 1 ]]; then
-    entry="$(widget_escape_glob "${rel%/}")/**"
+    case "$rel" in
+      *'['*) widget_reply_fail "a folder whose name contains [ cannot be ignored as a whole yet; ignore the files inside it one at a time"; return 1 ;;
+    esac
+    entry="${rel%/}/**"
   else
     entry=$(widget_escape_glob "$rel")
   fi
@@ -311,17 +321,38 @@ cmd_ignore() {
 # (optional or not) that does not resolve in $HOME at this moment. The entry
 # is compared whole, comments stripped, because an entry is a glob and
 # building a regex out of one is the kind of code that rots.
-widget_entry_vanished() {
-  local rel=$1
-  awk -v rel="$rel" '
+widget_allowlist_has() {
+  awk -v rel="$1" '
     { line=$0; sub(/[ \t]+#.*$/,"",line); sub(/[ \t]+$/,"",line) }
     line==rel || line=="?"rel { found=1; exit }
-    END { exit !found }' "$DATA_REPO/allowlist.txt" 2>/dev/null || return 1
+    END { exit !found }' "$DATA_REPO/allowlist.txt" 2>/dev/null
+}
+widget_entry_vanished() {
+  local rel=$1
+  widget_allowlist_has "$rel" || return 1
   # snapshot_entry_exists (lib/snapshot.sh) is the one matcher that knows an
   # entry may be a glob, may hold a space, and may be a literal path that
   # nullglob leaves standing.
   snapshot_entry_exists "$rel" && return 1
   return 0
+}
+
+# widget_entry_spelling REL: the allowlist's OWN spelling of REL. A path
+# holding a `[` has two: the filename a person types (`note[1].conf`) and the
+# entry Allow wrote for it (`note[[]1].conf`). Every comparison below this
+# point is whole-line text, so the two reached different lines and
+# `resolve-gone` typed by hand was refused on an entry that was plainly
+# there. Prefer what the file actually carries, and fall back to the argument
+# unchanged so the message about a path with no entry is still about the path
+# the user named.
+widget_entry_spelling() {
+  local rel=$1 esc
+  widget_allowlist_has "$rel" && { printf '%s' "$rel"; return 0; }
+  esc=$(widget_escape_glob "$rel")
+  if [[ "$esc" != "$rel" ]] && widget_allowlist_has "$esc"; then
+    printf '%s' "$esc"; return 0
+  fi
+  printf '%s' "$rel"
 }
 
 # cmd_resolve_gone PATH remove|optional: edit exactly the one matching
@@ -333,6 +364,10 @@ cmd_resolve_gone() {
   [[ -n "${2:-}" ]] && assert_argv_safe "$2"
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
   case "$verb" in remove|optional) ;; *) widget_reply_fail "usage: resolve-gone <path> remove|optional"; return 1 ;; esac
+  # Take the allowlist's own spelling before anything compares against it: the
+  # popup sends the entry as written and a person types the filename, and for
+  # a path holding a `[` those are two different strings for one line.
+  rel=$(widget_entry_spelling "$rel")
   # THE GATE HAS TWO HALVES, and it needs both. The mass-disappearance refusal
   # names this verb as the way out, and that run DIES before it writes a drift
   # report: the entries that caused the refusal are precisely the ones the last
@@ -360,10 +395,7 @@ cmd_resolve_gone() {
   # GONE row survives in yesterday's report after the entry behind it was
   # deleted by hand. The edit would then rewrite the file unchanged and reply
   # ok, and the popup would strike the row off for a decision nobody recorded.
-  if ! awk -v rel="$rel" '
-      { line=$0; sub(/[ \t]+#.*$/,"",line); sub(/[ \t]+$/,"",line) }
-      line==rel || line=="?"rel { found=1; exit }
-      END { exit !found }' "$DATA_REPO/allowlist.txt" 2>/dev/null; then
+  if ! widget_allowlist_has "$rel"; then
     widget_reply_fail "allowlist.txt has no entry for that path; nothing to resolve"
     return 1
   fi

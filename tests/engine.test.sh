@@ -2144,7 +2144,8 @@ if group 66 "guards that had no proving assertion"; then
   # shrink the backup.
   f66=$(env HOME="$FH" OMABACKUP_MIN_ALLOWLIST=99 "$CLI" snapshot --no-push --json 2>/dev/null)
   eq "an allowlist below the floor refuses the run" "$(jq -r .ok <<<"$f66")" "false"
-  has "the refusal names the floor" "$f66" "floor of 99"
+  has "the refusal names the floor and the override that forced it" "$f66" \
+    "floor of 99 set by OMABACKUP_MIN_ALLOWLIST"
 
   # snapshot_normalize: a rule like `d` is valid sed and empties the file.
   # Backing up 0 bytes while the live file has content is silent data loss.
@@ -5465,6 +5466,26 @@ if group 110 "a [ in a filename can be allowed and ignored, and matches only its
   eq "the ignored path is no longer drift" "$(grep -c 'other\[2\]' <<<"$d110" || true)" "0"
   eq "and the sibling still is" "$(grep -c 'note1\.conf' <<<"$d110" || true)" "1"
 
+  # THE SUBTREE FORM IS THE ONE THAT CANNOT CARRY THE ESCAPE. Both readers of
+  # a `/**` entry compare the base as literal text, so an escaped base never
+  # equals the directory it came from: the entry would be written, the reply
+  # would say ok, and the row would come back on every scan. Refused instead.
+  mkdir -p "$FH/.config/dir[9]"
+  printf 'd\n' > "$FH/.config/dir[9]/inner.conf"
+  { printf 'NEW        ~/.config/dir[9]/\n'
+    printf 'NEW        ~/.config/dir[9]/inner.conf\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  b110=$(obj ignore "$(tp110 '.config/dir[9]/')")
+  eq "ignore: a bracketed folder is refused as a whole" "$(jq -r .ok <<<"$b110")" "false"
+  has "and the refusal says what does work instead" "$(jq -r '.problems[0]' <<<"$b110")" \
+    "ignore the files inside it one at a time"
+  eq "and nothing was written for it" \
+    "$(grep -c 'dir\[' "$FR/drift-ignore.txt" || true)" "0"
+  eq "a file inside that folder is still ignorable" \
+    "$(obj ignore "$(tp110 '.config/dir[9]/inner.conf')" | jq -r .ok)" "true"
+  eq "written escaped, and it is not a subtree entry" \
+    "$(grep -cF '.config/dir[[]9]/inner.conf   #' "$FR/drift-ignore.txt")" "1"
+
   l110=$(obj lint)
   eq "lint accepts both escaped entries" "$(jq -r .ok <<<"$l110")" "true"
   eq "and complains about neither" \
@@ -5486,6 +5507,21 @@ if group 110 "a [ in a filename can be allowed and ignored, and matches only its
     "$(obj ignore "$(tp110 '.config/brk/quer?')" | jq -r .ok)" "false"
   eq "and neither was written" \
     "$(grep -cE '^\.config/brk/(star|quer)' "$FR/allowlist.txt" "$FR/drift-ignore.txt" | grep -cv ':0$' || true)" "0"
+
+  # RESOLVE-GONE TAKES EITHER SPELLING. The popup sends the entry as written
+  # and a person types the filename; for a bracketed path those are two
+  # different strings for one allowlist line, and every comparison in that
+  # verb is whole-line text.
+  rm -f "$FH/.config/brk/note[1].conf"
+  eq "resolve-gone: the filename a person types resolves the entry Allow wrote" \
+    "$(obj resolve-gone "$(tp110 '.config/brk/note[1].conf')" remove | jq -r .ok)" "true"
+  eq "and the entry is gone from the allowlist" \
+    "$(grep -cxF '.config/brk/note[[]1].conf' "$FR/allowlist.txt")" "0"
+  printf '.config/brk/note[[]1].conf\n' >> "$FR/allowlist.txt"
+  eq "resolve-gone: the entry's own spelling still resolves it too" \
+    "$(obj resolve-gone "$(tp110 '.config/brk/note[[]1].conf')" optional | jq -r .ok)" "true"
+  eq "and exactly that line carries the optional marker now" \
+    "$(grep -cxF '?.config/brk/note[[]1].conf' "$FR/allowlist.txt")" "1"
 fi
 
 if group 113 "manifests absorb tool-order jitter (nmcli returns its connections in a different order)"; then
