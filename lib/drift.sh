@@ -645,6 +645,7 @@ X11/xorg.conf.d fonts/conf.d"
     # used to read as a clean scan, which is how a hand-written
     # /etc/modprobe.d/*.conf goes unbacked while every monitor says fine.
     local unowned_err dropin_candidates=() dropin_bad=() dropin_still_unowned="" dropin_qqo_rc=0
+    local dropin_still_unowned_err="" dropin_recheck_rc=0
     unowned_err=$(LC_ALL=C pacman -Qqo "${dropin_files[@]}" 2>&1 >/dev/null); dropin_qqo_rc=$?
     unowned=$(sed -nE 's/^error: No package owns (.*)$/\1/p' <<<"$unowned_err")
     # See drift_etc_ownership_incomplete: the same rule section 5's ownership
@@ -666,21 +667,32 @@ X11/xorg.conf.d fonts/conf.d"
       if [ ${#dropin_candidates[@]} -gt 0 ]; then
         # `--`: same reason section 5's recheck uses it (a split fragment
         # that starts with `-` must be a filename argument, never a flag).
-        dropin_still_unowned=$(LC_ALL=C pacman -Qqo -- "${dropin_candidates[@]}" 2>&1 >/dev/null \
-          | sed -nE 's/^error: No package owns (.*)$/\1/p')
+        # This call asks pacman DIRECTLY about each surviving candidate
+        # (unlike the first pass above, whose answer for any one of them
+        # was only ever a side effect of splitting someone else's stderr
+        # line), so it is its own producer-contract check: a diagnostic
+        # beside a genuine "No package owns" line here must fail every
+        # candidate in THIS batch (Codex, PR 6 round 3), the same as the
+        # other two -Qqo calls.
+        dropin_still_unowned_err=$(LC_ALL=C pacman -Qqo -- "${dropin_candidates[@]}" 2>&1 >/dev/null); dropin_recheck_rc=$?
+        dropin_still_unowned=$(sed -nE 's/^error: No package owns (.*)$/\1/p' <<<"$dropin_still_unowned_err")
       fi
-      for f in "${dropin_candidates[@]}"; do
-        # `--`: same reason section 5's equivalent check takes it.
-        if grep -qxF -- "$f" <<<"$dropin_still_unowned"; then
-          real="/etc/${f#$ETC_DROPIN_ROOT/}"          # allowlist/ignore are written as /etc/...
-          echo "$real" | grep -qE "$etc_skip" && continue
-          grep -qxF -- "$real" <<<"$etc_known" && continue
-          is_ignored "$real" && continue
-          _drift_report NEW "$real"
-        else
-          dropin_bad+=("$f")
-        fi
-      done
+      if [ ${#dropin_candidates[@]} -gt 0 ] && drift_etc_ownership_incomplete "$dropin_still_unowned_err" "$dropin_recheck_rc"; then
+        dropin_bad+=("${dropin_candidates[@]}")
+      else
+        for f in "${dropin_candidates[@]}"; do
+          # `--`: same reason section 5's equivalent check takes it.
+          if grep -qxF -- "$f" <<<"$dropin_still_unowned"; then
+            real="/etc/${f#$ETC_DROPIN_ROOT/}"          # allowlist/ignore are written as /etc/...
+            echo "$real" | grep -qE "$etc_skip" && continue
+            grep -qxF -- "$real" <<<"$etc_known" && continue
+            is_ignored "$real" && continue
+            _drift_report NEW "$real"
+          else
+            dropin_bad+=("$f")
+          fi
+        done
+      fi
       for f in "${dropin_bad[@]}"; do
         drift_etc_unparseable_row "$f"; found=$((found+1))
       done

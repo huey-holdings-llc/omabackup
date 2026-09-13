@@ -5479,6 +5479,46 @@ PACMAN111MIXED
   [ "$n111mixed" -ge 1 ] \
     && ok "and the batch becomes ERROR rows instead of a mix" \
     || bad "and the batch becomes ERROR rows instead of a mix" "got $n111mixed ERROR rows: $out111mixed"
+
+  # The drop-in section's SECOND `pacman -Qqo` call (the recheck of
+  # survivors after the existence filter) asks pacman DIRECTLY about each
+  # candidate, unlike the first pass whose answer for any one of them was
+  # only ever a side effect of splitting someone else's stderr line -- so
+  # it needs the same incomplete-answer guard on its OWN mixed answer, not
+  # just inherited safety from the first pass (Codex, PR 6 round 3). The
+  # fake pacman below distinguishes the two calls by the leading "--" only
+  # the recheck sends.
+  good_dropin2="$T/etcroot/sysctl.d/good-dropin-2.conf"; printf 'x\n' > "$good_dropin2"
+  cat > "$T/fakebin/pacman" <<PACMAN111RECHECK
+#!/bin/sh
+case "\$1" in
+  -Qii) printf 'Name            : fakepkg\nBackup Files    :\n' ;;
+  -Qqo)
+    shift
+    if [ "\$1" = "--" ]; then
+      shift
+      echo "error: No package owns \$1" >&2
+      echo "error: could not lock database: File exists" >&2
+      exit 1
+    fi
+    for f in "\$@"; do
+      echo "error: No package owns \$f" >&2
+    done
+    exit 1
+    ;;
+esac
+exit 0
+PACMAN111RECHECK
+  chmod +x "$T/fakebin/pacman"
+  d111recheck() { env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_SKIP_ETC=0 OMABACKUP_ETC_ROOT="$T/etcroot" "$CLI" drift; }
+  out111recheck=$(d111recheck)
+  ! grep -qE "^(NEW|MODIFIED)[[:space:]]+.*good-dropin(-2)?\.conf\$" <<<"$out111recheck" \
+    && ok "the drop-in recheck's own mixed answer trusts no candidate" \
+    || bad "the drop-in recheck's mixed answer produced a normal row" "$out111recheck"
+  n111recheck=$(grep -c '^# ERROR' <<<"$out111recheck" || true)
+  [ "$n111recheck" -ge 1 ] \
+    && ok "and the recheck batch becomes ERROR rows instead of a mix" \
+    || bad "and the recheck batch becomes ERROR rows instead of a mix" "got $n111recheck ERROR rows: $out111recheck"
 fi
 
 group_close
