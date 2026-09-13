@@ -4516,6 +4516,13 @@ if group 58 "ERROR rows are faults, not paths to triage"; then
   eq "it is still a fault" "$(jq -r .state <<<"$s58")" "fault"
   has "with the failed check named" "$(jq -r '.problems[]' <<<"$s58")" "stock config tree not found"
   eq "and the row is still there to read" "$(jq -r '[.drift[] | select(.type=="ERROR")] | length' <<<"$s58")" "1"
+  # The snapshot's own drift_count comes from a different counter, and it
+  # counted ERROR rows while status did not (Codex, PR 13). A stock tree that
+  # is not there makes the live scan write an ERROR row of its own.
+  j58=$(env HOME="$FH" OMABACKUP_STOCK_DIR="$T/nowhere" "$CLI" snapshot --no-push --json 2>/dev/null)
+  eq "the live scan wrote an ERROR row" "$(grep -c '^# ERROR' "$FR/manifests/drift.txt" || true)" "1"
+  eq "snapshot --json counts drift the way status does, ERROR rows excluded" \
+    "$(jq -r .drift_count <<<"$j58")" "$(obj status | jq -r .drift_count)"
 fi
 
 if group 59 "the new-drift toast is normal urgency, and open --report shows the report"; then
@@ -4535,6 +4542,9 @@ if group 59 "the new-drift toast is normal urgency, and open --report shows the 
   printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/open.argv"\nexit 0\n' "$T" \
     > "$T/fakebin/omarchy-launch-floating-terminal-with-presentation"
   chmod +x "$T/fakebin/omarchy-launch-floating-terminal-with-presentation"
+  # The pager is faked too: CI's container has none, and the assertion is
+  # about the argv the launcher gets, not about less.
+  printf '#!/bin/sh\nexit 0\n' > "$T/fakebin/less"; chmod +x "$T/fakebin/less"
   : > "$T/open.argv"
   eq "open --report: accepted" \
     "$(env PATH="$T/fakebin:$PATH" HOME="$FH" "$CLI" open --report --json 2>/dev/null | jq -r .ok)" "true"

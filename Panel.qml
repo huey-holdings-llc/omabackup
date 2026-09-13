@@ -62,6 +62,8 @@ Panel {
   // A snapshot this panel started and has not yet seen land (see runSnapshot).
   property bool snapshotRunning: false
   property real snapshotPressedAt: 0
+  property real snapshotSeenRun: 0
+  property real snapshotSeenAttempt: 0
 
   readonly property string sysState: helperError ? "fault" : (st && st.state ? st.state : "unknown")
   readonly property var drift: st && st.drift ? st.drift : []
@@ -245,9 +247,16 @@ Panel {
   // the handled set on the press brought every row just dealt with straight
   // back, with nothing on screen to say a run was even going.
   function runSnapshot() {
-    if (root.snapshotRunning) return
+    // busy: Service.act drops a call while another is in flight (the button
+    // is disabled then, the s key is not), and a "Running…" over a run that
+    // was never asked for would sit until the backstop.
+    if (root.snapshotRunning || root.busy || !root.svc) return
     root.actionError = ""; root.actionNote = ""
     root.snapshotPressedAt = Math.floor(Date.now() / 1000)
+    // What status said at the press, so a record from the same wall second
+    // (a refusal seconds old, retried at once) cannot pass for this run's.
+    root.snapshotSeenRun = st && st.last_run ? st.last_run : 0
+    root.snapshotSeenAttempt = st && st.last_attempt_at ? st.last_attempt_at : 0
     root.snapshotRunning = true
     if (root.svc) root.svc.snapshotNow(function() { root.snapshotLanded() })
     snapshotPoll.restart()
@@ -267,8 +276,9 @@ Panel {
   onStChanged: {
     if (!root.snapshotRunning || !st) return
     var t = root.snapshotPressedAt
-    if ((st.last_run || 0) >= t) root.snapshotLanded()
-    else if (st.last_attempt_ok === false && (st.last_attempt_at || 0) >= t) root.snapshotLanded()
+    var run = st.last_run || 0, at = st.last_attempt_at || 0
+    if (run >= t && run !== root.snapshotSeenRun) root.snapshotLanded()
+    else if (st.last_attempt_ok === false && at >= t && at !== root.snapshotSeenAttempt) root.snapshotLanded()
   }
   function pushOrConfirm() {
     if (root.uncommitted.length > 0) { confirmOpen = !confirmOpen; return }

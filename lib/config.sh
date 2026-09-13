@@ -297,10 +297,27 @@ state_write_status() {
 # Never fatal, and never noisy: this runs on the way out of a run that has
 # already failed, and an unwritable state directory must not replace that
 # failure's message with a different one.
+# Every write to last-run.json goes through run_record_locked, a short flock
+# on a sidecar file: a run standing down on the repo lock puts the record it
+# cleared back only if the file still holds what it wrote, and without this
+# the holder could write its real verdict between that look and the mv, and
+# lose it (Codex, PR 13). Best effort, like everything here: a lock that
+# cannot be taken in two seconds is skipped, never a reason to fail a run.
+run_record_locked() {
+  if have flock; then
+    ( flock -w 2 8 2>/dev/null || true; "$@" ) 8>>"$STATE_DIR/.last-run.lock" 2>/dev/null || true
+  else
+    "$@" || true
+  fi
+}
 run_record() {
-  local ok=$1 reason=${2:-}
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
   mkdir -m 700 -p "$STATE_DIR" 2>/dev/null || return 0
+  run_record_locked run_record_write "$@"
+  return 0
+}
+run_record_write() {
+  local ok=$1 reason=${2:-}
   local tmp
   tmp=$(mktemp "$STATE_DIR/.last-run.XXXXXX" 2>/dev/null) || return 0
   if jq -cn --argjson ok "$ok" --arg r "$reason" --argjson at "$(date +%s)" \
@@ -334,6 +351,10 @@ run_record_start() { run_record null "the run has not finished"; }
 # file still holds what this run wrote (MINE): a run that did start may have
 # written its own verdict since, and that one stands.
 run_record_stand_down() {
+  run_record_locked run_record_stand_down_write "$@"
+  return 0
+}
+run_record_stand_down_write() {
   local mine=$1 saved=$2 cur tmp
   cur=$(cat "$STATE_DIR/last-run.json" 2>/dev/null || true)
   [[ -n "$mine" && "$cur" == "$mine" ]] || return 0
