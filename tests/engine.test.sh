@@ -18,6 +18,57 @@ trap 'rm -rf "$ROOT"' EXIT
 # suite (group 00's misuse/recursion assertions) refuses instead of forking
 # the whole suite again -- see lib/selftest.sh.
 export OMABACKUP_IN_SUITE=1
+
+# ---- the fake machine-fact tier ---------------------------------------------
+# Every fixture snapshot ran the real generators in lib/manifests.sh (pacman,
+# systemctl, npm, fprintd, dconf and the rest), about four seconds a run on a
+# laptop across some 180 runs: most of this suite's twelve minutes. No group
+# asserts on what they print, so here they print something fixed, from stubs
+# first on PATH; every generator finds its command through PATH. A group that
+# needs the real tools calls real_manifests right after mk_fixture, and
+# OMABACKUP_TEST_REAL_MANIFESTS=1 (self-test --real) puts every group on them.
+# /var/log/pacman.log, /etc/os-release and uname are still read for real.
+REAL_PATH=$PATH
+FAKE_TOOLS="$ROOT/fakebin-manifests"; mkdir -p "$FAKE_TOOLS"
+fake_tool() { printf '#!/bin/sh\n%s\n' "$2" > "$FAKE_TOOLS/$1"; chmod +x "$FAKE_TOOLS/$1"; }
+# Output that is not a placeholder (is_placeholder, lib/manifests.sh), or the
+# carry-forward guard would keep the last copy instead. pacman answers -Qii and
+# -Qqo in the wording group 81 pins, and lists enough packages for restore.
+fake_tool pacman 'case "$1" in
+  -Qqen|-Slq) i=1; while [ $i -le 120 ]; do echo "fakepkg$i"; i=$((i+1)); done ;;
+  -Qqem) echo fakeaur ;;
+  -Q) shift; for p in "$@"; do echo "$p 1.0-1"; done ;;
+  -Qii) printf "Name            : fakepkg\nBackup Files    :\n/etc/fstab [modified]\n" ;;
+  -Qqo) shift; for f in "$@"; do echo "error: No package owns $f" >&2; done; exit 1 ;;
+esac
+exit 0'
+# Only the listing the generators ask for. Every other verb fails the way the
+# real one does against a unit that is not installed, so nothing here can
+# start, enable or report a timer; groups that drive timers bring their own.
+fake_tool systemctl 'for a in "$@"; do
+  [ "$a" = list-unit-files ] && { echo "fake-unit.service enabled enabled"; exit 0; }
+done
+echo "fake systemctl: $*" >&2; exit 1'
+fake_tool dconf 'printf "[org/fake]\nkey=1\n"'
+fake_tool lpstat 'case "$1" in -p) echo "printer fake is idle.";; -v) echo "device for fake: ipp://fake";; esac'
+fake_tool timedatectl 'echo Etc/UTC'
+fake_tool localectl 'echo "System Locale: LANG=C.UTF-8"'
+# The generator drops the first line, the header the real tool prints.
+fake_tool fprintd-list 'printf "found 1 devices\nfake-finger\n"'
+fake_tool nmcli 'echo "fakenet:802-11-wireless"'
+fake_tool code 'echo fake.extension'
+fake_tool uv 'echo "faketool v1.0"'
+# The generator drops the first line (npm's own prefix) and takes basenames.
+fake_tool npm 'printf "/usr/lib\n/usr/lib/node_modules/fakepkg\n"'
+# Only the listing. `restore --plugins --apply` runs `omarchy plugin add`, and
+# a stub that said yes to that would report an install that never happened.
+fake_tool omarchy '[ "$1 $2" = "plugin list" ] && { echo "[{\"id\":\"fake\"}]"; exit 0; }
+echo "fake omarchy: $*" >&2; exit 1'
+# real_manifests: this group needs the real tools. Call it after mk_fixture,
+# which puts every fixture back on the stubs.
+real_manifests() { export PATH="$REAL_PATH"; }
+if [[ "${OMABACKUP_TEST_REAL_MANIFESTS:-0}" != 1 ]]; then export PATH="$FAKE_TOOLS:$REAL_PATH"; fi
+
 STOCK_SRC="$HERE/fixtures/stock"
 MANIFEST_VERSION=$(jq -r .version "$HERE/../manifest.json")
 
@@ -81,6 +132,11 @@ mk_fixture() {
   export OMABACKUP_CONFIG="$T/cfg/config.json" OMABACKUP_STATE_DIR="$T/state" OMABACKUP_STOCK_DIR="$STOCK"
   export OMABACKUP_NET=0 OMABACKUP_NOTIFY=0 OMABACKUP_SKIP_ETC=1 OMABACKUP_SKIP_TIMERS=1
   export OMABACKUP_MIN_FILES=1 OMABACKUP_MIN_ALLOWLIST=1 OMABACKUP_LOCK_WAIT=2 OMABACKUP_MIN_RESTORE=1
+  # Nothing in a fixture is mid-rename; group 53 sets its own wait.
+  export OMABACKUP_SECOND_LOOK=0
+  # Back on the stubs, so a real_manifests group (or one that exported its own
+  # PATH) cannot leave the next group on something else.
+  if [[ "${OMABACKUP_TEST_REAL_MANIFESTS:-0}" == 1 ]]; then export PATH="$REAL_PATH"; else export PATH="$FAKE_TOOLS:$REAL_PATH"; fi
   jq -n --arg r "$FR" --arg u "$BARE" '{dataRepo:$r, remote:{url:$u, trusted:true}}' > "$OMABACKUP_CONFIG"
   chmod 600 "$OMABACKUP_CONFIG"
 }
@@ -102,9 +158,16 @@ commit_baseline() { ob snapshot --no-push >/dev/null; }
 
 # ---- groups -----------------------------------------------------------------
 declare -A GROUPS_RUN=()
+# Seconds per group, for the slowest-five footer. group() has no end hook, so
+# a group's time is closed when the next one starts, and at the footer.
+declare -A GROUP_SECS=()
+GROUP_CUR=""; GROUP_T0=0
+group_close() { [[ -n "$GROUP_CUR" ]] && GROUP_SECS[$GROUP_CUR]=$(( SECONDS - GROUP_T0 )); GROUP_CUR=""; }
 group() { # group NN NAME: run unless OMABACKUP_TEST_GROUP selects another
   local n=$1; shift
+  group_close
   [[ -n "${OMABACKUP_TEST_GROUP:-}" && "$OMABACKUP_TEST_GROUP" != "$n" ]] && return 1
+  GROUP_CUR=$n; GROUP_T0=$SECONDS
   printf '\n\033[1;34m== %s. %s\033[0m\n' "$n" "$*"
   # shellcheck disable=SC2034  # written per group run; a later task's summary step reads it
   GROUPS_RUN[$n]=1
@@ -265,7 +328,9 @@ fi
 if group 04 "idempotency"; then
   # Regression: drift.txt and versions.txt embedded a timestamp, so every run
   # committed and the backup history became noise.
-  mk_fixture g04; seed_home; commit_baseline
+  # Real tools: the one group that would catch a real generator that is not
+  # deterministic.
+  mk_fixture g04; real_manifests; seed_home; commit_baseline
   n1=$(git -C "$FR" rev-list --count HEAD)
   # Assert the run SUCCEEDED before counting: "no new commit" is trivially
   # true of a snapshot that refused to run at all.
@@ -947,7 +1012,7 @@ if group 43 "every manifest is generated BEFORE its carry-forward guard"; then
   # from being blanked, so the loop tested a file that did not exist yet: a
   # permanent false alarm on the one guard that stops rsync --delete eating
   # real data.
-  mk_fixture g43; seed_home; commit_baseline
+  mk_fixture g43; real_manifests; seed_home; commit_baseline
   # Same reason as group 04: "no warning in the output" is trivially true of a
   # run that produced no output because the verb refused.
   _run=$(ob snapshot --no-push); rc=$?
@@ -1022,7 +1087,9 @@ if group 45 "a PUBLIC repo aborts the run (HTTP 200 is the only proof of public)
   has "reason says public" "$(PATH="$T/fakebin:$PATH" OMABACKUP_NET=1 ob snapshot; true)" "public"
 fi
 if group 46 "hand-authored /etc drop-ins are reported"; then
-  mk_fixture g46; seed_home
+  # Real pacman prose, and before the `command -v pacman` below, which a stub
+  # would answer wrongly.
+  mk_fixture g46; real_manifests; seed_home
   if ! command -v pacman >/dev/null 2>&1; then
     echo "  (skipped: pacman not available on this machine)"
   else
@@ -2635,7 +2702,8 @@ if group 76 "restore refuses manifest lines that are not package or unit names";
   # systemd-user.txt was handed to `systemctl --user enable --now`
   # unvalidated, so an absolute path to a unit file in the just-restored tree
   # was enabled AND started.
-  mk_fixture g76; seed_home; commit_baseline
+  # restore --packages asks the real pacman what is installed and available.
+  mk_fixture g76; real_manifests; seed_home; commit_baseline
   if ! command -v pacman >/dev/null; then
     echo "  (pacman not installed: skipping the package half)"
   else
@@ -3660,7 +3728,7 @@ if group 91 "every find reader is NUL-delimited, so a newline cannot forge a row
   # as prose ("error: No package owns <path>"), which a newline splits just as
   # badly, so an unwritable name is reported as the scanner gap it is before
   # pacman is asked about it at all.
-  mk_fixture g91e; seed_home
+  mk_fixture g91e; real_manifests; seed_home
   if ! command -v pacman >/dev/null 2>&1; then
     echo "  (skipped: pacman not available on this machine)"
   else
@@ -4316,5 +4384,40 @@ FAKEGL
   rm -r "$FR/bulk"
 fi
 
+if group 53 "the vanish guard's second look: it rescues a file, and its wait is a suite-only knob"; then
+  # The allowlist guard looks twice before calling an entry missing or GONE,
+  # because an Omarchy migration moves a file aside and rewrites it, and a run
+  # can catch the path mid-rename. Nothing proved the second look rescued
+  # anything, and its fixed five seconds cost this suite a minute or two.
+  mk_fixture g53; seed_home
+  printf '?.config/flicker.conf\n' >> "$FR/allowlist.txt"; git -C "$FR" commit -qam "an optional entry"
+  commit_baseline
+  gone53() { grep -c '^GONE .*flicker\.conf' "$FR/manifests/drift.txt" || true; }
+  eq "an optional entry that stays away is GONE" "$(gone53)" "1"
+
+  # Back one second in, looked at again four seconds in: rescued.
+  ( sleep 1; printf 'back\n' > "$FH/.config/flicker.conf" ) &
+  env HOME="$FH" OMABACKUP_SECOND_LOOK=4 "$CLI" snapshot --no-push >/dev/null 2>&1
+  wait
+  eq "a file back before the second look is not GONE" "$(gone53)" "0"
+
+  # With no wait, the second look comes before the file does.
+  rm "$FH/.config/flicker.conf"
+  ( sleep 3; printf 'back\n' > "$FH/.config/flicker.conf" ) &
+  env HOME="$FH" OMABACKUP_SECOND_LOOK=0 "$CLI" snapshot --no-push >/dev/null 2>&1
+  eq "the knob shortens the wait inside the suite" "$(gone53)" "1"
+  wait
+
+  # A wait of zero on the daily timer would turn every migration into a GONE
+  # row, so outside the suite the knob is dropped and named, like MIN_FILES.
+  s53=$(env -u OMABACKUP_IN_SUITE HOME="$FH" OMABACKUP_SECOND_LOOK=0 "$CLI" status --json 2>/dev/null)
+  has "outside the suite the knob is ignored and named" "$(jq -r '.problems[]' <<<"$s53")" "OMABACKUP_SECOND_LOOK"
+fi
+
+group_close
+if (( ${#GROUP_SECS[@]} > 1 )); then
+  echo; echo "slowest groups (seconds):"
+  for g in "${!GROUP_SECS[@]}"; do printf '%s %s\n' "${GROUP_SECS[$g]}" "$g"; done | sort -rn | head -5 | sed 's/^/  /'
+fi
 echo; echo "passed=$pass failed=$fail"
 [[ $fail == 0 ]]

@@ -177,7 +177,11 @@ snapshot_assert_allowlist() {
   # genuine one. The same rationale covers optional entries, which would
   # otherwise record a GONE that nags at every login.
   if [[ ${#missing[@]} -gt 0 || ${#GONE[@]} -gt 0 ]]; then
-    sleep 5
+    # OMABACKUP_SECOND_LOOK is a suite-only hook (lib/config.sh drops it
+    # anywhere else): a fixture has nothing mid-rename to wait for.
+    local look_wait=${OMABACKUP_SECOND_LOOK:-5}
+    case "$look_wait" in ''|*[!0-9]*) look_wait=5 ;; esac
+    sleep "$look_wait"
     still=()
     for entry in ${missing[@]+"${missing[@]}"}; do
       snapshot_entry_exists "$entry" || still+=("$entry")

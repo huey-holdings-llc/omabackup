@@ -58,8 +58,11 @@ first.
 
 * **Dev loop**: `scripts/dev-install.sh --enable`, then `omarchy-restart-shell`
   for QML changes. `bash tests/engine.test.sh` and `bash tests/lint.sh` must
-  both pass. CI runs the lint script and the skip-tolerant subset of the
-  tests in an Arch container.
+  both pass. CI runs the lint script and the whole suite in an Arch
+  container. Fixture snapshots use stub machine-fact tools (pacman,
+  systemctl and the rest print something fixed), which keeps a run to a few
+  minutes; `OMABACKUP_TEST_REAL_MANIFESTS=1` puts every group on the real
+  ones, and `omabackup self-test --real` does that for you.
 * **Tests first** for CLI changes. The harness is plain bash (`check`, `eq`,
   `fails`, `has`); each group builds a throwaway fixture (home directory,
   stock-config stand-in, data repo, bare remote) and drives `bin/omabackup`

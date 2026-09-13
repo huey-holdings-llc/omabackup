@@ -35,8 +35,10 @@ STOCK_DIR="${OMABACKUP_STOCK_DIR:-${OMARCHY_PATH:-/usr/share/omarchy}}"
 # and nothing said so: OMABACKUP_MIN_FILES=1 disables the hollow-snapshot
 # floor that stops a collapsed staging tree overwriting a good backup, and
 # OMABACKUP_NET=0 makes the visibility probe skip the public-repo check
-# entirely. Outside the suite they are unset here and named in a health
-# problem below, so the widget reads fault rather than a quietly weaker guard.
+# entirely, and OMABACKUP_SECOND_LOOK=0 takes away the wait that keeps a file
+# an Omarchy migration has moved aside for a moment from reading as GONE.
+# Outside the suite they are unset here and named in a health problem below,
+# so the widget reads fault rather than a quietly weaker guard.
 #
 # The path redirections (OMABACKUP_CONFIG, OMABACKUP_STATE_DIR,
 # OMABACKUP_STOCK_DIR, OMABACKUP_ETC_ROOT) and OMABACKUP_SKIP_TIMERS,
@@ -51,7 +53,8 @@ if [[ "${OMABACKUP_IN_SUITE:-0}" == 1 ]]; then
 fi
 if [[ "$_ob_in_suite" != 1 ]]; then
   for _ob_hook in OMABACKUP_MIN_FILES OMABACKUP_MIN_ALLOWLIST OMABACKUP_MIN_RESTORE \
-                  OMABACKUP_NET OMABACKUP_SKIP_ETC OMABACKUP_SKIP_DROPINS; do
+                  OMABACKUP_NET OMABACKUP_SKIP_ETC OMABACKUP_SKIP_DROPINS \
+                  OMABACKUP_SECOND_LOOK; do
     [[ -n "${!_ob_hook:-}" ]] || continue
     OMABACKUP_OVERRIDES_IGNORED+="${OMABACKUP_OVERRIDES_IGNORED:+ }$_ob_hook"
     unset "$_ob_hook"
