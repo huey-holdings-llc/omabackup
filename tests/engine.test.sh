@@ -191,12 +191,20 @@ if group 00 "baseline: version, help, config validation"; then
   # uses a verb that still requires config unconditionally.
   eq "missing config refused with setup hint" "$(OMABACKUP_CONFIG=/nonexistent ob drift; true)" "$(printf '\033[1;31m[FAIL]\033[0m no config at /nonexistent. Run: omabackup setup')"
 
-  # self-test: an unknown flag is a usage error (exit 2), same as every other
-  # verb, and self-test refuses to run recursively from inside a suite that
-  # is already running (this suite exports OMABACKUP_IN_SUITE=1 at its own
-  # top) rather than forking the whole suite again.
-  fails "self-test: unknown flag is refused" env HOME="$FH" "$CLI" self-test --help
-  [[ $(env HOME="$FH" "$CLI" self-test --help >/dev/null 2>&1; echo $?) == 2 ]] \
+  # self-test: --help is answered by the dispatcher, before any lib/ parser
+  # sees the flag, so it prints the verb's own usage line and exits 0 (it used
+  # to reach cmd_self_test and come back as "unknown flag"). An unknown flag
+  # is still a usage error (exit 2), same as every other verb, and self-test
+  # refuses to run recursively from inside a suite that is already running
+  # (this suite exports OMABACKUP_IN_SUITE=1 at its own top) rather than
+  # forking the whole suite again.
+  check "self-test: --help is answered, not refused" env HOME="$FH" "$CLI" self-test --help
+  [[ $(env HOME="$FH" "$CLI" self-test --help >/dev/null 2>&1; echo $?) == 0 ]] \
+    && ok "self-test: --help exits 0" || bad "self-test: --help exit code"
+  has "self-test: --help prints the verb's own usage line" \
+    "$(env HOME="$FH" "$CLI" self-test --help 2>&1)" "self-test"
+  fails "self-test: unknown flag is refused" env HOME="$FH" "$CLI" self-test --bogus
+  [[ $(env HOME="$FH" "$CLI" self-test --bogus >/dev/null 2>&1; echo $?) == 2 ]] \
     && ok "self-test: unknown flag exits 2" || bad "self-test: unknown flag exit code"
   eq "self-test: refuses to run from inside a running suite" "$(obj self-test | jq -r .ok)" "false"
   has "the refusal names the guard" "$(obj self-test)" "recursively"
@@ -5018,6 +5026,200 @@ if group 104 "an inconclusive probe keeps the date of the last conclusive answer
   s104=$(obj status)
   eq "a malformed timestamp is no age either" "$(jq -r .push_unverifiable_days <<<"$s104")" "null"
   eq "and status still answers" "$(jq -r .push_reason <<<"$s104")" "probe-403"
+fi
+
+if group 105 "setup check is a doctor: three line shapes, and a missing tool names its own package"; then
+  # The human branch used to be `jq to_entries` over the same object --json
+  # prints, so a nested object (tools, units, remote) arrived as raw JSON and
+  # the only package it ever named was gitleaks. A doctor that cannot say
+  # which package to install is a refusal with no way out.
+  mk_fixture g105; seed_home
+  # A PATH holding everything the CLI needs, so one tool can be taken out of
+  # it at a time and nothing else goes missing with it (group 66 builds the
+  # same kind of PATH for its no-gitleaks proof). jq is deliberately not one
+  # of the tools taken out: bin/omabackup refuses before any verb runs
+  # without it, so there is no doctor line to read.
+  D105="$T/allbin"; mkdir -p "$D105"
+  for b105 in bash sh env jq git rsync flock date cat grep sed awk find mktemp stat chmod \
+              mv rm cp ln cut sort tr head tail wc cksum paste readlink dirname basename \
+              touch mkdir sleep comm uniq xargs diff cmp; do
+    p105=$(command -v "$b105" 2>/dev/null) || continue
+    ln -sf "$p105" "$D105/$b105"
+  done
+  # gum, gitleaks and systemctl only have to EXIST for the doctor's probe, and
+  # none of the three is installed everywhere this suite runs.
+  for b105 in gum gitleaks systemctl; do printf '#!/bin/sh\nexit 0\n' > "$D105/$b105"; chmod +x "$D105/$b105"; done
+  # A PATH with one binary left out. Built by copying the links rather than by
+  # deleting from a shared directory, so the groups below cannot race or leak.
+  mk_path105() {
+    local omit=$1
+    local d="$T/path-$omit" f
+    mkdir -p "$d"
+    for f in "$D105"/*; do
+      [[ "$(basename "$f")" == "$omit" ]] || cp -P "$f" "$d/"
+    done
+    printf '%s' "$d"
+  }
+
+  base105=$(env HOME="$FH" PATH="$D105" "$CLI" setup check 2>/dev/null)
+  bad105=$(grep -cvE '^(ok    |warn  |FAIL  )' <<<"$base105" || true)
+  eq "every line is an ok, a warn or a FAIL line" "$bad105" "0"
+  eq "no nested object reaches the human output as raw JSON" \
+    "$(grep -c '[{}]' <<<"$base105" || true)" "0"
+  has "and the checks that pass say so" "$base105" "^ok    git$"
+  # The README tells anyone recovering a diverged remote to read their data
+  # repo path off this report, so the PASSING line has to carry it: the path
+  # used to appear only on the branch a healthy machine never takes.
+  has "the data repo line carries the path even when it is fine" "$base105" "^ok    data repo ($FR)$"
+
+  # Severity is the exit code, said out loud: FAIL is exactly the set of
+  # checks that refuse (the four required tools and the marker), warn is
+  # everything else that is wrong. So a FAIL line means exit 1, and exit 0
+  # means there was no FAIL line.
+  for row105 in git:git:FAIL:1 rsync:rsync:FAIL:1 flock:util-linux:FAIL:1 \
+                gum:gum:warn:0 gitleaks:gitleaks:warn:0; do
+    IFS=: read -r t105 pkg105 sev105 rc105 <<<"$row105"
+    d105=$(mk_path105 "$t105")
+    o105=$(env HOME="$FH" PATH="$d105" "$CLI" setup check 2>/dev/null); orc105=$?
+    l105=$(grep -E "^$sev105  $t105:" <<<"$o105" || true)
+    [[ -n "$l105" ]] && ok "a missing $t105 is one $sev105 line" || bad "a missing $t105 is not one $sev105 line" "$o105"
+    has "and the $t105 line names its own package" "$l105" "pacman -S $pkg105"
+    eq "and a missing $t105 exits $rc105" "$orc105" "$rc105"
+  done
+
+  # The two timer checks are rendered from the same two values --json reports.
+  # They used to be gated on OMABACKUP_SKIP_TIMERS, which the suite exports, so
+  # the human report silently dropped two checks --json was still answering.
+  has "a timer that is not armed is a warn line" "$base105" "^warn  snapshot timer:"
+  has "and it names the systemctl line that arms it" "$base105" \
+    "systemctl --user enable --now omabackup-snapshot.timer"
+  has "the self-test timer too" "$base105" "^warn  self-test timer:"
+  # ...and an armed one says ok. OMABACKUP_SKIP_TIMERS=0 lets the probe run,
+  # against the stub systemctl in $D105, which answers yes to is-enabled.
+  on105=$(env HOME="$FH" PATH="$D105" OMABACKUP_SKIP_TIMERS=0 "$CLI" setup check 2>/dev/null)
+  has "an armed snapshot timer says ok" "$on105" "^ok    snapshot timer$"
+  has "an armed self-test timer says ok" "$on105" "^ok    self-test timer$"
+
+  # The --json shape is the widget's and it is additive only: the keys that
+  # were there before are still there, still with the same types.
+  j105=$(env HOME="$FH" PATH="$D105" "$CLI" setup check --json 2>/dev/null)
+  eq "setup check --json still prints exactly one object" "$(jq -sc 'length' <<<"$j105" 2>/dev/null || echo 0)" "1"
+  eq "and its shape is unchanged" \
+    "$(jq -r '[(.ok|type), (.tools.git|type), (.config|type), (.dataRepo|type), (.marker|type), (.units.snapshot|type), (.remote.kind|type)] | join(",")' <<<"$j105")" \
+    "boolean,boolean,boolean,boolean,boolean,boolean,string"
+fi
+
+if group 106 "every verb answers --help, --remove says how to confirm, and divergence is explained"; then
+  mk_fixture g106; seed_home
+
+  # --help is intercepted by the dispatcher, so no lib/ verb parser ever sees
+  # it: restore, lint, snapshot, self-test, setup and open used to call it an
+  # unknown flag, and drift, status and health quietly ran the whole verb.
+  for v106 in setup snapshot drift status allow ignore resolve-gone push lint \
+              restore verify health timer self-test open version; do
+    h106=$(env HOME="$FH" "$CLI" "$v106" --help 2>&1); rc106=$?
+    eq "$v106 --help exits 0" "$rc106" "0"
+    has "$v106 --help names the verb" "$h106" "$v106"
+    has "$v106 --help is the usage text, not a run" "$h106" "Exit 0 ran, 1 refused or unhealthy, 2 usage."
+  done
+  eq "-h is the same door" \
+    "$(env HOME="$FH" "$CLI" restore -h 2>&1)" "$(env HOME="$FH" "$CLI" restore --help 2>&1)"
+  eq "--help under --json is still one JSON object" \
+    "$(env HOME="$FH" "$CLI" restore --help --json 2>/dev/null | jq -sc 'length')" "1"
+  has "and the object carries the verb's usage" \
+    "$(env HOME="$FH" "$CLI" restore --help --json 2>/dev/null | jq -r .usage)" "restore"
+  # An unknown verb is still an unknown verb, --help or no --help. The verb
+  # is DATA: looked up with a case pattern it was glob text, so a bare "*"
+  # matched every row in the table and answered with the whole usage, exit 0.
+  eq "a verb that does not exist is still usage (exit 2)" \
+    "$(env HOME="$FH" "$CLI" bogus --help >/dev/null 2>&1; echo $?)" "2"
+  eq "and a verb that is a glob is not read as one (exit 2)" \
+    "$(env HOME="$FH" "$CLI" '*' --help >/dev/null 2>&1; echo $?)" "2"
+
+  # setup --remove with nothing that can ask: the answer is no, and the
+  # message has to say how to mean yes. It used to say only "cancelled".
+  d106="$T/nogum"; mkdir -p "$d106"
+  for b106 in bash sh env jq git rsync flock date cat grep sed awk find mktemp stat chmod \
+              mv rm cp ln cut sort tr head tail wc cksum paste readlink dirname basename \
+              touch mkdir sleep comm uniq xargs diff cmp; do
+    p106=$(command -v "$b106" 2>/dev/null) || continue
+    ln -sf "$p106" "$d106/$b106"
+  done
+  [[ -e "$d106/gum" ]] && bad "the no-gum PATH still carries gum" || ok "the no-gum PATH carries no gum"
+  r106=$(env HOME="$FH" PATH="$d106" "$CLI" setup --remove </dev/null 2>&1); rrc106=$?
+  eq "setup --remove with no terminal and no gum refuses (exit 1)" "$rrc106" "1"
+  has "and the refusal says how to mean yes" "$r106" "--yes"
+  [[ -f "$OMABACKUP_CONFIG" ]] && ok "the refused removal removed nothing" || bad "the config went anyway"
+
+  # Divergence, in words a non-developer can act on. The problem used to be
+  # "remote has diverged -- pull --rebase needed", a git incantation with no
+  # explanation and no recovery for the conflict case; the README carries
+  # both now, under a row this text names.
+  mk_fixture g106b; seed_home; commit_baseline
+  git -C "$FR" push -q -u origin main
+  git clone -q -b main "$BARE" "$T/other"
+  git -C "$T/other" config user.email t@t; git -C "$T/other" config user.name t
+  git -C "$T/other" commit -q --allow-empty -m "from the other machine"
+  git -C "$T/other" push -q origin main
+  printf '\nexport EDITOR=vim\n' >> "$FH/.bashrc"
+  env HOME="$FH" OMABACKUP_NET=1 "$CLI" snapshot --json >/dev/null 2>&1
+  p106b=$(env HOME="$FH" OMABACKUP_NET=1 "$CLI" status --json 2>/dev/null | jq -r '.problems[]')
+  has "the divergence problem still fires" "$p106b" "diverged"
+  has "and points at the README row that carries the recovery" "$p106b" "Remote has diverged"
+  eq "and no longer hands a git incantation to a non-developer" \
+    "$(grep -c -- 'pull --rebase' <<<"$p106b" || true)" "0"
+  # Read from the suite because the message above is a POINTER: it names a
+  # README row instead of carrying the command, so a row that gets renamed or
+  # deleted leaves the user nowhere, and only an assertion that reads the file
+  # catches that. The 20-line window is the row's own length (it holds a
+  # fenced command block), narrow enough that a match cannot come from the
+  # next row down.
+  grep -q '^\* \*\*Remote has diverged\*\*' "$HERE/../README.md" \
+    && ok "the README row it names exists" || bad "README has no 'Remote has diverged' troubleshooting row"
+  grep -A20 '^\* \*\*Remote has diverged\*\*' "$HERE/../README.md" | grep -q -- 'pull --rebase' \
+    && ok "and the row carries the command" || bad "the README row does not carry the pull --rebase command"
+  grep -A20 '^\* \*\*Remote has diverged\*\*' "$HERE/../README.md" | grep -q -- 'rebase --continue' \
+    && ok "and what to do when it conflicts" || bad "the README row does not say what to do on a conflict"
+fi
+
+if group 107 "the human dry run names what every restore stage would do, not just --configs"; then
+  # restore_list_would was called for --configs alone. --packages, --plugins
+  # and --services filled RESTORE_WOULD and printed it under --json only, so
+  # the human dry run of the three stages that install and enable things said
+  # nothing at all about what they would install or enable.
+  mk_fixture g107; seed_home; commit_baseline
+  # Past the stage's 100-entry truncation floor, and none of them installed:
+  # the suite's pacman stub answers -Qqen with fakepkg1..120.
+  seq -f 'known-native-%03g' 1 100 > "$FR/manifests/pacman-native.txt"
+  printf 'known-aur-one\n' > "$FR/manifests/pacman-aur.txt"
+  printf 'ok-one.service\n' > "$FR/manifests/systemd-user.txt"
+  : > "$FR/manifests/systemd-user-off.txt"
+  # id, url, rev: the plugin stage adds anything the TSV names that is not
+  # already under ~/.config/omarchy/plugins, and the fixture home has none.
+  printf 'known-plugin\thttps://example.invalid/known-plugin\t\n' > "$FR/manifests/omarchy-plugins.tsv"
+  git -C "$FR" add -A && git -C "$FR" commit -qm "manifests with one package, one plugin and one unit"
+
+  h107=$(ob restore --packages --plugins --services)
+  has "the package stage says how many it would install" "$h107" "\[dry\] --packages"
+  has "and names one of them" "$h107" "known-native-001"
+  has "and says how many it left out of the listing" "$h107" "more (add --json to list every one)"
+  has "the plugin stage says how many it would add" "$h107" "\[dry\] --plugins would add 1 plugin"
+  has "and names the plugin" "$h107" "plugin:known-plugin"
+  has "the service stage says how many it would enable" "$h107" "\[dry\] --services"
+  has "and names the unit" "$h107" "ok-one.service"
+  eq "the dry run still changes nothing" \
+    "$(git -C "$FR" status --porcelain | grep -c . || true)" "0"
+  # --json is unchanged: the same paths, in the same array.
+  j107=$(obj restore --packages --plugins --services)
+  eq "and --json still lists every one, the AUR package the human listing truncated included" \
+    "$(jq -r '[.would_write[] | select(. == "package:known-native-001" or . == "aur:known-aur-one" or . == "plugin:known-plugin" or . == "service:ok-one.service")] | length' <<<"$j107")" "4"
+
+  # A stage with nothing to do still says so. Silence reads as "this stage did
+  # not run", and the three stages used to disagree about it.
+  : > "$FR/manifests/systemd-user.txt"
+  git -C "$FR" commit -qam "no units left to enable"
+  eq "a stage with nothing to do prints its zero" \
+    "$(ob restore --services | grep -c '\[dry\] --services would enable 0 unit' || true)" "1"
 fi
 
 group_close

@@ -602,10 +602,89 @@ setup_check() {
   if [[ $JSON == 1 ]]; then
     printf '%s\n' "$j"
   else
-    jq -r 'to_entries[] | "\(.key): \(.value)"' <<<"$j"
-    [[ $have_gitleaks == true ]] || echo "gitleaks missing: snapshots commit but never push (pacman -S gitleaks)"
+    # One line per check, and every line an answer. The human branch used to
+    # be `jq to_entries` over the object above, so tools, units and remote
+    # arrived as raw JSON, and the only package it ever named was gitleaks:
+    # a doctor that cannot say which package to install is a refusal with no
+    # way out. Each check names its own package, never the whole set.
+    #
+    # fail vs warn is not decoration. FAIL is exactly the set of checks that
+    # set ok=false above (the four required tools and the marker), so a FAIL
+    # line means this verb exits 1, and exiting 0 means there was no FAIL
+    # line. Everything else that is wrong but does not refuse is a warn.
+    setup_check_line "$have_git"      fail "git"      "not installed" "pacman -S git"
+    setup_check_line "$have_rsync"    fail "rsync"    "not installed" "pacman -S rsync"
+    setup_check_line "$have_jq"       fail "jq"       "not installed" "pacman -S jq"
+    setup_check_line "$have_flock"    fail "flock"    "not installed" "pacman -S util-linux"
+    setup_check_line "$have_gum"      warn "gum"      "not installed, so setup takes its defaults instead of asking" "pacman -S gum"
+    setup_check_line "$have_gitleaks" warn "gitleaks" "not installed, so snapshots commit locally and never push" "pacman -S gitleaks"
+    setup_check_line "$have_systemd"  warn "systemd"  "systemctl not found, so nothing can back up on a timer" "pacman -S systemd"
+    setup_check_line "$cfg" warn "config" "OmaBackup is not set up on this machine yet" "omabackup setup"
+    # Everything below reads the config, so it is only asked once there is one.
+    if [[ $cfg == true ]]; then
+      # The path is in the NAME, so the passing line carries it too: the
+      # README tells anyone recovering a diverged remote to read their data
+      # repo path off this report, and on a healthy machine the path only
+      # ever appeared on the branch that was not taken.
+      setup_check_line "$repo" warn "data repo ($DATA_REPO)" \
+        "that directory is not a git repository" "omabackup setup --data-repo $DATA_REPO"
+      setup_check_line "$marker" fail "data repo marker" \
+        "$DATA_REPO/.omabackup is missing, so nothing will treat that directory as OmaBackup's" \
+        "omabackup setup --data-repo $DATA_REPO"
+      # Rendered from units_s/units_t, the same two values --json reports, and
+      # not gated on OMABACKUP_SKIP_TIMERS: the gate belongs on the PROBE (it
+      # keeps the suite off systemctl, above), and putting it here as well
+      # meant the human report silently dropped two checks that --json was
+      # still answering.
+      setup_check_line "$units_s" warn "snapshot timer" "not enabled, so nothing backs up on its own" \
+        "systemctl --user enable --now omabackup-snapshot.timer"
+      setup_check_line "$units_t" warn "self-test timer" "not enabled, so nothing proves the pipeline still works" \
+        "systemctl --user enable --now omabackup-selftest.timer"
+      # A repo with no remote is a supported state, not a fault: the backup
+      # is real, it just stays on this machine. A GitHub remote is decided by
+      # the visibility probe rather than by the trust flag, so only a
+      # non-GitHub remote nobody has trusted holds pushes back.
+      local rdisp; rdisp=$(remote_url_display "$url")
+      if [[ -z "$url" ]]; then
+        setup_check_line true warn "remote (none configured, so backups stay on this machine)"
+      elif [[ "$kind" == github ]]; then
+        setup_check_line true warn "remote ($rdisp, GitHub: the visibility probe decides each push)"
+      elif [[ "$trusted" == true ]]; then
+        setup_check_line true warn "remote ($rdisp, trusted)"
+      else
+        setup_check_line false warn "remote" \
+          "$rdisp is not a GitHub remote and nothing has trusted it, so pushes are held back" \
+          "omabackup setup --trust-remote"
+      fi
+    fi
   fi
   [[ $ok == true ]]
+}
+
+# setup_check_line GOOD LEVEL NAME [PROBLEM] [FIX]: one doctor line, in one of
+# three shapes:
+#   ok    <name>
+#   warn  <name>: <what is wrong>. Fix: <command>
+#   FAIL  <name>: <what is wrong>. Fix: <command>
+# LEVEL is what a GOOD of false prints, and the caller above keeps fail for
+# exactly the checks that decide the exit code. Nothing here ever prints a
+# nested object; the object is what --json is for.
+setup_check_line() {
+  local good=$1 level=$2 name=$3 problem=${4:-} fix=${5:-}
+  if [[ "$good" == true ]]; then
+    printf 'ok    %s\n' "$name"
+    return 0
+  fi
+  # A line that is not ok has to say what is wrong and what to do about it.
+  # Without this a caller that forgot one of them printed "name: . Fix: ",
+  # which is worse than printing nothing.
+  [[ -n "$problem" && -n "$fix" ]] \
+    || die "setup check: the '$name' check has no problem text or no fix command"
+  case "$level" in
+    fail) printf 'FAIL  %s: %s. Fix: %s\n' "$name" "$problem" "$fix" ;;
+    warn) printf 'warn  %s: %s. Fix: %s\n' "$name" "$problem" "$fix" ;;
+    *)    die "setup check: unknown line level '$level'" ;;
+  esac
 }
 
 # setup_remove [--yes]: undo steps 6, 7 and 8 of the wizard. Deliberately
@@ -617,7 +696,12 @@ setup_check() {
 setup_remove() {
   local yes=0
   [[ "${1:-}" == --yes ]] && yes=1
-  confirm "Remove OmaBackup timers, CLI link, the ~/.bashrc login check and config? The data repo stays." "$yes" || die "cancelled"
+  # "cancelled" on its own was the whole message, and most of the people who
+  # saw it had cancelled nothing: confirm() answers no whenever there is no
+  # terminal or no gum to ask with (a script, a unit, a machine without gum),
+  # which is exactly the case where the reader needs telling how to mean yes.
+  confirm "Remove OmaBackup timers, CLI link, the ~/.bashrc login check and config? The data repo stays." "$yes" \
+    || die "cancelled. With no terminal or no gum to ask with the answer is always no, so rerun with --yes to remove without being asked"
   if [[ "${OMABACKUP_SKIP_TIMERS:-0}" != 1 ]]; then
     systemctl --user disable --now omabackup-snapshot.timer omabackup-selftest.timer 2>/dev/null || true
   fi

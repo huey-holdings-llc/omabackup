@@ -19,8 +19,9 @@ source with that in mind, and if you know better, open an issue or a pull
 request. See [CONTRIBUTING.md](CONTRIBUTING.md) for the principles the
 project follows and a help-wanted list: other git hosts' visibility checks,
 restore proven on real fresh hardware, drift categories for tools not yet in
-the seed lists, popup accessibility, a second set of eyes on
-`share/gitleaks.toml`.
+the seed lists, popup accessibility beyond the button names (keyboard focus
+order, and someone who actually uses a screen reader trying it), a second set
+of eyes on `share/gitleaks.toml`.
 
 This is a part-time project. Issues and pull requests are handled as time
 allows, not on a schedule. If you need something sooner, fork it and make it
@@ -243,9 +244,21 @@ packages, and prompts you the way those tools normally do. Nothing else in
 OmaBackup ever uses `sudo`; the dry run (no `--apply`) only prints what it
 would install.
 
-`omabackup setup check` reports each tool in the first two tables as present
-or missing. It names the package for `gitleaks` alone, since that is the one
-Omarchy does not ship; for the rest the Package column above is the answer.
+`omabackup setup check` is the doctor: one line per check, in one of three
+shapes.
+
+| Shape | Means |
+|---|---|
+| `ok    <check>` | nothing to do |
+| `warn  <check>: <what is wrong>. Fix: <command>` | something is wrong and OmaBackup still runs |
+| `FAIL  <check>: <what is wrong>. Fix: <command>` | something is wrong that stops it |
+
+A `FAIL` line is what makes the verb exit 1, so an exit of 0 means there was
+no `FAIL` line. It covers the tools in the first two tables, the config, the
+data repo (with its path) and its marker, the two timers and the remote, and
+every line that is not `ok` carries the command that fixes it, its own
+`pacman -S <package>` included. `setup check --json` prints the same answers
+as one object for the widget.
 
 ## Install
 
@@ -400,7 +413,7 @@ config disagree (editing the config alone changes nothing until you rerun
 omabackup <verb> [args] [--json]
 
   setup [--data-repo DIR] [--remote URL] [--create-private] [--import DIR]
-        [--trust-remote] [--no-timers] [--yes]     first-run wizard
+        [--trust-remote] [--no-timers] [--yes]      first-run wizard
   setup check                                       doctor
   setup --remove [--yes]                            remove units, symlink, config
   snapshot [--dry-run] [--no-push]                  the daily pipeline
@@ -418,6 +431,10 @@ omabackup <verb> [args] [--json]
   open [--report|--remote]                          a terminal in the data repo, the drift report, or its page on GitHub
   version
 ```
+
+Every verb also accepts `--help` (or `-h`) as its first argument and answers
+with its own lines from the block above, so you never have to read the whole
+list to remember one verb's flags.
 
 Every verb accepts `--json`, which prints exactly one JSON object, even on
 failure. One caveat: `jq` is what builds that object, so on a machine without
@@ -567,6 +584,26 @@ actually broken.
   repo private, or point `remote.url` at a different one.
 * **gitleaks missing**: snapshots still commit locally, they just never
   push; `setup check` prints the exact `pacman -S gitleaks` to fix it.
+* **Remote has diverged**: the remote has commits this machine does not, so
+  nothing can be pushed. Backups keep committing locally, so nothing is lost
+  in the meantime, but they are not off this machine until this is sorted out.
+  It usually means another machine pushed a snapshot of its own, or you
+  edited a list in the repo's web interface. Replay your local commits on top
+  of the remote's:
+
+  ```bash
+  git -C ~/.local/share/omabackup/data pull --rebase
+  omabackup push
+  ```
+
+  (Use your own data repo path if it is somewhere else; `omabackup setup
+  check` prints it on the `data repo` line.) If the rebase stops on a
+  conflict, git names the files.
+  Edit each one so it reads the way you want, `git add` it, then run
+  `git rebase --continue`, repeating until the rebase finishes, and then
+  `omabackup push`. To back out and think about it later, `git rebase --abort`
+  leaves everything exactly as it was; the next snapshot commits locally as
+  usual.
 * **"a name the report cannot represent"**: a file whose name holds a TAB or a
   newline cannot be written as a drift row, so the scan reports the directory
   it is in and marks the state a fault rather than writing a row that names a

@@ -34,6 +34,9 @@ Column {
       anchors.verticalCenter: parent.verticalCenter
       iconText: root.expanded ? "󰅀" : "󰅂"
       tooltipText: root.expanded ? "Collapse" : "Show the files in this folder"
+      // The folder this row is about, so a screen reader hears which of the
+      // folders on screen each button belongs to and not just its verb.
+      pathLabel: root.path
       foreground: root.dimColor
       fontFamily: root.fontFamily
       onClicked: root.expanded = !root.expanded
@@ -61,6 +64,7 @@ Column {
       spacing: Style.spacing.xxs
       AccessibleActionButton {
         enabled: !root.busy
+        pathLabel: root.path
         iconText: "󰐕"
         tooltipText: "Allowlist " + root.path + " so every file in it, now and later, is backed up (" + root.entries.length + " here today)"
         foreground: root.foreground
@@ -69,6 +73,7 @@ Column {
       }
       AccessibleActionButton {
         enabled: !root.busy
+        pathLabel: root.path
         iconText: "󰈉"
         tooltipText: "Never back up anything under " + root.path + ", now or later (records a dated " + root.path + "** decision)"
         foreground: root.foreground

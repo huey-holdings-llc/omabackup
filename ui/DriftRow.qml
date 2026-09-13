@@ -107,6 +107,9 @@ Column {
       AccessibleActionButton {
         visible: root.canAllow
         enabled: !root.busy
+        // The row's own path, so a screen reader announces which file this
+        // button is about and not just the verb it performs.
+        pathLabel: root.entry.path || ""
         iconText: "󰐕"
         tooltipText: root.isDir
           ? "Back up this folder and everything under it, now and later"
@@ -118,6 +121,7 @@ Column {
       AccessibleActionButton {
         visible: root.canIgnore
         enabled: !root.busy
+        pathLabel: root.entry.path || ""
         iconText: "󰈉"
         tooltipText: root.isDir
           ? "Never back up anything under this folder (records a dated decision)"
@@ -129,6 +133,7 @@ Column {
       AccessibleActionButton {
         visible: root.isGone
         enabled: !root.busy
+        pathLabel: root.entry.path || ""
         iconText: "󰆴"
         tooltipText: "Remove its allowlist entry (path is gone for good)"
         foreground: root.foreground
@@ -138,6 +143,7 @@ Column {
       AccessibleActionButton {
         visible: root.isGone && !root.alreadyOptional
         enabled: !root.busy
+        pathLabel: root.entry.path || ""
         iconText: "󰘥"
         tooltipText: "Mark optional (may come back; a missing path stops warning)"
         foreground: root.foreground
