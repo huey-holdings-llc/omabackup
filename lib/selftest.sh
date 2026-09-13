@@ -24,5 +24,8 @@ cmd_self_test() {
   [[ "${OMABACKUP_IN_SUITE:-0}" != 1 ]] \
     || die "self-test: already running inside a test suite; refusing to run recursively"
   [[ -f "$PLUGIN_DIR/tests/engine.test.sh" ]] || die "tests/engine.test.sh not found in $PLUGIN_DIR"
-  OMABACKUP_REAL_REPO=$real OMABACKUP_TEST_TMP="$STATE_DIR/selftest" bash "$PLUGIN_DIR/tests/engine.test.sh"
+  # --real also puts every group on the real machine-fact tools rather than
+  # the suite's stubs: slower, and the one run that proves they still parse.
+  OMABACKUP_REAL_REPO=$real OMABACKUP_TEST_REAL_MANIFESTS=$real OMABACKUP_TEST_TMP="$STATE_DIR/selftest" \
+    bash "$PLUGIN_DIR/tests/engine.test.sh"
 }

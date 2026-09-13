@@ -7,6 +7,16 @@ Keep a Changelog 1.1.0 and the project uses Semantic Versioning.
 
 ### Changed
 
+`omabackup self-test` takes a few minutes instead of twelve. Its fixture
+snapshots ran the real machine-fact tools (pacman, systemctl, npm, fprintd
+and the rest) around 180 times; they now run stubs that print something
+fixed, and the handful of groups that need the real tools still use them.
+`self-test --real` puts every group on the real tools. The allowlist
+guard's second-look wait (five seconds, so a file an Omarchy migration has
+moved aside for a moment is not reported GONE) is now a suite-only knob,
+`OMABACKUP_SECOND_LOOK`: outside a test run it is ignored and `status`
+names it, like the other guard overrides.
+
 The `.gitignore` top-up on an adopted or upgraded data repo now happens in
 the snapshot, under the repo lock, and commits what it appended in a commit
 of its own, so the first `status` after an upgrade reports a clean repo
