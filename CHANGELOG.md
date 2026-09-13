@@ -23,6 +23,46 @@ had to win. `lint --json` keeps its records under a new `findings` key, with
 the same contents as before, and its `problems` now holds the same findings,
 one sentence each. The human output of `lint` is unchanged.
 
+`omabackup setup check` is a doctor rather than a dump of the JSON object
+`--json` prints. It reports one line per check, either `ok    <check>` or
+`FAIL  <check>: <what is wrong>. Fix: <command>`, and the tools, units and
+remote no longer arrive as raw JSON in the middle of it. Every failing line
+carries the command that fixes it: its own `pacman -S <package>` for a missing
+tool (it used to name a package for `gitleaks` and nothing else),
+`systemctl --user enable --now` for a timer that is not armed,
+`omabackup setup` for a config or a marker that is not there. The `--json`
+shape and the exit code are unchanged.
+
+Every verb answers `--help` (or `-h`) with its own lines from
+`omabackup help`, and exits 0. `restore`, `lint`, `snapshot`, `self-test`,
+`setup` and `open` used to call it an unknown flag and exit 2, and `drift`,
+`status` and `health` ran the whole verb instead. The dispatcher answers it
+before any verb's own parser sees it, from the one table `omabackup help` is
+now printed from, so the two can never disagree.
+
+`setup --remove` with no terminal and no gum to ask with says so and names
+`--yes`. The answer in that case has always been no, and the message was
+"cancelled", which reads like something the reader did.
+
+A remote that has diverged is explained in words instead of handed a git
+command. The warning, the desktop notification and the `problems[]` entry the
+popup shows all say that the remote has commits this machine does not, that
+backups keep committing locally, and that the way back is the README's
+Troubleshooting entry "Remote has diverged". That entry is new, and it carries
+the `pull --rebase`, what to do when the rebase stops on a conflict, and how
+to back out.
+
+The popup's triage buttons announce the path they act on. A screen reader used
+to hear thirty identical "Add to allowlist" buttons with nothing to say which
+file each one was for; the name is now "<verb>, <path>", on the folder rows
+too.
+
+`omabackup restore` without `--apply` names what every stage would do, not
+only `--configs`. `--packages`, `--plugins` and `--services` counted their
+work and then listed it under `--json` alone, so the human dry run of the
+three stages that install and enable things said nothing about what they
+would install or enable.
+
 `omabackup self-test` takes a few minutes instead of twelve. Its fixture
 snapshots ran the real machine-fact tools (pacman, systemctl, npm, fprintd
 and the rest) around 180 times; they now run stubs that print something
