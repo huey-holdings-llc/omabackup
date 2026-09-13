@@ -187,19 +187,82 @@ remote_display_label() {
 # (re-probing would put the widget's refresh on the wire), so it is persisted:
 # health reads it back, and reads it as false unless the recorded URL is still
 # the URL origin points at. Atomic rename, for the same reason status.json is.
+#
+# `at` is the time of the LAST PROBE and is rewritten every run. That is the
+# right meaning for "is this answer fresh", and the wrong one for "how long
+# has this been going on": a machine that cannot reach a verdict at all still
+# writes a fresh `at` every day. So the file also carries the answer's
+# history. `conclusive_at` is when the probe last actually settled the
+# question (200 or 404, or any other reason that is an answer ABOUT THE
+# REMOTE: see remote_reason_class), and it is carried forward untouched while
+# the answers stay inconclusive.
+# `inconclusive_since` dates the current streak for a machine that has never
+# had a conclusive answer, so a first-run 403 behind a shared address still
+# has a date to count from. Both are carried forward only when the recorded
+# URL is still the URL origin points at, the same rule health reads the
+# verdict by: a date about one remote says nothing about another.
 remote_verdict_write() {
   local url; url=$(remote_origin_url)
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
   mkdir -m 700 -p "$STATE_DIR" || return 0
+  local verdict="$STATE_DIR/push-verdict.json" now
+  now=$(date +%s)
+  local prev_url="" prev_conc="" prev_since=""
+  if [[ -r "$verdict" ]]; then
+    prev_url=$(jq -r '.url // ""' "$verdict" 2>/dev/null || true)
+    if [[ -n "$url" && "$prev_url" == "$url" ]]; then
+      prev_conc=$(jq -r '.conclusive_at // empty' "$verdict" 2>/dev/null || true)
+      prev_since=$(jq -r '.inconclusive_since // empty' "$verdict" 2>/dev/null || true)
+    fi
+  fi
+  # A 0.7.0 verdict has neither field, and a hand-edited one can have anything
+  # in them. Whole seconds or nothing at all: an unusable value is dropped
+  # rather than carried, and health then reports no age instead of a wrong one.
+  case "$prev_conc" in ''|*[!0-9]*) prev_conc="" ;; esac
+  case "$prev_since" in ''|*[!0-9]*) prev_since="" ;; esac
+  local conc since
+  case "$(remote_reason_class "$2")" in
+    conclusive)   conc=$now;       since="" ;;
+    inconclusive) conc=$prev_conc; since=${prev_since:-$now} ;;
+    *)            conc=$prev_conc; since=$prev_since ;;
+  esac
   local tmp
   tmp=$(mktemp "$STATE_DIR/.push-verdict.XXXXXX") || return 0
-  if jq -cn --argjson v "$1" --arg r "$2" --arg u "$url" --argjson at "$(date +%s)" \
-       '{verifiable:$v, reason:$r, url:$u, at:$at}' > "$tmp" && chmod 600 "$tmp"; then
-    mv -f "$tmp" "$STATE_DIR/push-verdict.json"
+  if jq -cn --argjson v "$1" --arg r "$2" --arg u "$url" --argjson at "$now" \
+       --arg conc "$conc" --arg since "$since" \
+       '{verifiable:$v, reason:$r, url:$u, at:$at}
+        + (if $conc  == "" then {} else {conclusive_at:      ($conc|tonumber)}  end)
+        + (if $since == "" then {} else {inconclusive_since: ($since|tonumber)} end)' \
+       > "$tmp" && chmod 600 "$tmp"; then
+    mv -f "$tmp" "$verdict"
   else
     rm -f "$tmp"
   fi
   return 0
+}
+
+# remote_reason_class REASON: what this reason says about the REMOTE, which is
+# the only question conclusive_at is dating.
+#
+#   conclusive    the question is settled: private, trusted, no-remote,
+#                 remote-unverified, net-disabled, pushurl-differs. The clock
+#                 restarts.
+#   inconclusive  the probe shrugged (probe-<code>). The clock keeps running,
+#                 and starts if it was not running.
+#   silent        the answer is about THIS MACHINE, not the remote:
+#                 gitleaks-missing (no scanner, so the gate shuts before the
+#                 remote is even reached) and the unknown fallback. Neither
+#                 date moves. Treating these as conclusive restarted the clock
+#                 on every run of a machine whose scanner had been uninstalled
+#                 for a month, which is exactly the streak this is meant to
+#                 measure; treating them as inconclusive would have started a
+#                 streak nothing had probed.
+remote_reason_class() {
+  case "$1" in
+    probe-*)                 printf 'inconclusive' ;;
+    gitleaks-missing|unknown|'') printf 'silent' ;;
+    *)                       printf 'conclusive' ;;
+  esac
 }
 
 # remote_probe: sets PUSH_VERIFIABLE (true|false) and PUSH_REASON. GitHub only

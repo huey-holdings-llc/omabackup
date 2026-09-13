@@ -202,7 +202,8 @@ because lint takes the same lock.
 - runs every verb as an argv array; never builds a shell string.
 
 The status object (**field list updated 2026-09-06 to record what 0.7.0
-actually emits**; the rest of this section is the original design):
+actually emits, and again 2026-09-13 for the two push-age fields**; the rest
+of this section is the original design):
 
 ```
 state              "ok" | "attention" | "fault"
@@ -216,6 +217,9 @@ remote             "configured" | "missing" | "none"
 remote_label       what the popup names the backup target, or ""
 remote_linkable    true when `open --remote` has a page it can open
 push_verifiable, push_reason
+push_unverifiable_days   whole days the probe has been unable to answer, or
+                         null when it has an answer (never 0 for "no answer")
+push_unverifiable_since  the day that started, "YYYY-MM-DD", or ""
 uncommitted[]      repo files the timer will not commit
 timers_checked, timer_enabled, timer_active, timer_next,
 selftest_enabled, selftest_active
@@ -238,6 +242,22 @@ What the late fields are for, since none of them was in the original list:
   `remote_linkable` is true only for a validated GitHub `owner/repo`, which
   is the only remote whose web page this tool can name; it gates the click
   and matches exactly what `open --remote` will accept.
+- `push_unverifiable_days` and `push_unverifiable_since` (2026-09-13) are how
+  long the push gate has been unable to get an answer, and the day that
+  started. `push_reason` alone could not say: `at` in the recorded verdict is
+  the time of the last probe and is rewritten every run, so a machine behind
+  a shared or CGNAT address could sit on `probe-403` for weeks with nothing
+  measuring it. The verdict file now also carries `conclusive_at` (when the
+  probe last settled the question, carried forward untouched across
+  inconclusive answers) and `inconclusive_since` (for a machine that has
+  never had a conclusive answer), and these two fields are derived from
+  whichever applies. `days` is JSON null, never 0 and never absent, whenever
+  the gate does have an answer, so the widget can tell "went unverifiable
+  today" from "has an answer"; past `staleDays` the age is a `problems[]`
+  entry, and for `probe-403` alone that entry also explains that the API's
+  rate limit counts per address. A verdict a stale check has already
+  discarded is not dated from, and neither is a pre-0.8.0 verdict that
+  carries neither timestamp.
 - `upstream_readable` is false when the ahead count could not be read at all,
   so the widget can tell "nothing waiting" from "nobody knows".
 - `optional` on a drift item is true when the allowlist entry behind a GONE

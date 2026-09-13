@@ -210,6 +210,21 @@ the command line, as it always has. Two new `status.json` fields,
 `remote_label` and `remote_linkable`, carry it, and neither ever holds a
 raw URL, because that is the one shape that can carry a password.
 
+An inconclusive push probe now has a date on it. The GitHub visibility check
+is rate limited per IP address, so a shared or carrier-grade NAT address can
+answer 403 for days at a stretch; the recorded verdict used to rewrite its
+only timestamp on every run, so nothing knew how long that had been going on
+and the popup went on saying "up to date". The verdict file keeps
+`conclusive_at`, the moment the probe last actually settled the question,
+carried forward untouched while the answers stay inconclusive, and
+`status.json` gains `push_unverifiable_days` and `push_unverifiable_since`
+from it. The popup's Pushed row reads "unverifiable since" and that date,
+alongside the count of commits waiting, and past `staleDays` the age becomes
+a problem of its own naming the reason. For `probe-403` the problem also says
+why that one can last: the rate limit counts per address. A verdict written
+by an older version has neither field and is read without complaint, and no
+date is claimed until the next probe records one.
+
 ## [0.7.0] - 2026-09-06
 
 If you have been running 0.2.0, this is the release where the plugin stops

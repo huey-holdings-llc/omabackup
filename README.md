@@ -521,6 +521,22 @@ is older than `staleDays`, and an old yes is not a yes). A remote that turns
 out to be public is not in this list because it is not a reason push is off:
 an HTTP 200 refuses the whole run.
 
+`probe-403` is the one that can last. The GitHub API counts its
+unauthenticated rate limit per IP address, not per repository, so if you
+share an address with a lot of other people (a carrier-grade NAT, a campus
+or office network, a VPN exit) the API can answer 403 for hours or days at a
+time through no fault of yours. Nothing is broken and nothing is lost: the
+snapshot still runs and still commits, and the commits wait locally until a
+probe gets a real answer. What changes is that the popup stops saying "up to
+date" about a push it cannot vouch for. The Pushed row reads "unverifiable
+since" and the date the last conclusive answer was given, and once that date
+is further back than `staleDays` it becomes an alert-triangle problem
+naming the reason and the number of days. `status --json` carries the same
+two facts as `push_unverifiable_days` (an integer, or `null` when the gate
+does have an answer) and `push_unverifiable_since` (the date, or an empty
+string). If it never clears, the way out is a remote the probe does not need:
+a non-GitHub host you mark trusted with `omabackup setup --trust-remote`.
+
 `setup check` answers a narrower question, "is this install wired up", so it
 shows the tools, the marker, the units and the remote's kind and trust flag,
 and it does not run the probe or report `pushurl-differs`. For why a push
