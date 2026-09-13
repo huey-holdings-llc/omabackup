@@ -166,6 +166,15 @@ to. Choosing between the modern and the pre-8.19 spelling of a scan means
 asking `gitleaks ... --help`; the answer is now kept for the rest of the
 process, so a second caller in the same process cannot re-fork it.
 
+The CLI's verb table drives dispatch as well as help. Each row now carries what
+the verb needs from the config before it runs, so a verb is described in one
+place rather than three, and the copy of `omabackup help` in the README is
+checked against the real thing by `tests/lint.sh`. Alongside it a handful of
+internals moved to the file that owns them, and one config write that setup did
+in two places became one helper. Nothing a user or the popup can see changes:
+same help text, same refusals, same `status.json`, same exit codes, same
+config file.
+
 ### Fixed
 
 A data repo the engine cannot read is recorded, not just refused. `status`
