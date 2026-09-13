@@ -4853,6 +4853,113 @@ if group 103 "status on a data repo it cannot read records the fault, instead of
     "no .omabackup marker"
 fi
 
+if group 104 "an inconclusive probe keeps the date of the last conclusive answer"; then
+  # A 403 from the GitHub API proves nothing about visibility, so the run
+  # commits and does not push. `at` was rewritten every run, so a machine
+  # behind a shared or CGNAT address could sit on probe-403 for weeks with
+  # nothing recording how long it had been that way: the popup said "up to
+  # date" and the only hint was a reason code. The verdict now carries
+  # conclusive_at, carried forward untouched across inconclusive answers.
+  mk_fixture g104; seed_home; commit_baseline
+  jq '.remote.trusted=false' "$OMABACKUP_CONFIG" > "$T/c104" && mv "$T/c104" "$OMABACKUP_CONFIG" \
+    && chmod 600 "$OMABACKUP_CONFIG"
+  git -C "$FR" remote set-url origin "https://github.com/o/r"
+  mkdir -p "$T/fakebin"
+  # nm-online is stubbed for the same reason group 72 stubs it: remote_probe
+  # waits on it, and a real one blocks for NET_WAIT seconds when offline.
+  printf '#!/bin/sh\nexit 0\n' > "$T/fakebin/nm-online"; chmod +x "$T/fakebin/nm-online"
+  V104="$OMABACKUP_STATE_DIR/push-verdict.json"
+  # run104 CODE: one real snapshot whose probe gets CODE back from the API.
+  run104() {
+    fake_curl "$1"
+    printf '# %s\n' "$1 $SECONDS" >> "$FH/.bashrc"   # something to commit, so each run is a real one
+    env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_NET=1 NET_WAIT=1 \
+      "$CLI" snapshot --no-push --json >/dev/null 2>&1 || true
+  }
+
+  run104 404
+  eq "a 404 is a conclusive answer" "$(jq -r .reason "$V104")" "private"
+  c104=$(jq -r '.conclusive_at // ""' "$V104")
+  [[ "$c104" =~ ^[0-9]+$ ]] && ok "...and the verdict records when it was given" \
+    || bad "a conclusive verdict records when it was given" "conclusive_at='$c104'"
+  eq "a conclusive verdict has no unverifiable age" \
+    "$(obj status | jq -r '.push_unverifiable_days')" "null"
+  eq "...and no date for the popup to show" \
+    "$(obj status | jq -r '.push_unverifiable_since')" ""
+
+  run104 403
+  eq "a 403 proves nothing and is recorded as such" "$(jq -r .reason "$V104")" "probe-403"
+  eq "...and the last conclusive answer's date is carried forward" \
+    "$(jq -r '.conclusive_at // ""' "$V104")" "$c104"
+  eq "...and at is still the time of the last probe, never behind it" \
+    "$(jq -r 'if .at >= .conclusive_at then "at or after" else "before" end' "$V104")" "at or after"
+  run104 403
+  eq "a second inconclusive run keeps it still" "$(jq -r '.conclusive_at // ""' "$V104")" "$c104"
+  s104=$(obj status)
+  eq "status counts the days since that answer" "$(jq -r .push_unverifiable_days <<<"$s104")" "0"
+  eq "...and names the day it went unverifiable" \
+    "$(jq -r .push_unverifiable_since <<<"$s104")" "$(date -d "@$c104" +%F)"
+  eq "...and says nothing about it yet, inside staleDays" \
+    "$(jq -r '[.problems[] | select(startswith("push has been unverifiable"))] | length' <<<"$s104")" "0"
+
+  # Past staleDays the age is a problem in its own right, with the reason and
+  # the explanation a user behind a shared address needs.
+  b104=$(( $(date +%s) - 9 * 86400 ))
+  jq --argjson t "$b104" '.conclusive_at=$t' "$V104" > "$T/v104" && mv "$T/v104" "$V104"
+  s104=$(obj status)
+  eq "the days are counted from the last conclusive answer" \
+    "$(jq -r .push_unverifiable_days <<<"$s104")" "9"
+  eq "the ISO date follows it" \
+    "$(jq -r .push_unverifiable_since <<<"$s104")" "$(date -d "@$b104" +%F)"
+  has "a problem says how long, and which reason" "$(jq -r '.problems[]' <<<"$s104")" \
+    "push has been unverifiable for 9 days (probe-403)"
+  has "...and why a 403 can last" "$(jq -r '.problems[]' <<<"$s104")" \
+    "rate limited per address"
+
+  # A conclusive answer ends the streak: the date resets to now, and the age
+  # goes back to null rather than to zero.
+  run104 404
+  n104=$(jq -r '.conclusive_at // ""' "$V104")
+  [[ "$n104" =~ ^[0-9]+$ && "$n104" -gt "$b104" && $(( $(date +%s) - n104 )) -le 300 ]] \
+    && ok "a conclusive answer resets the date to now" \
+    || bad "a conclusive answer resets the date to now" "conclusive_at='$n104'"
+  s104=$(obj status)
+  eq "and the unverifiable age is null again" "$(jq -r .push_unverifiable_days <<<"$s104")" "null"
+  eq "and the problem is gone" \
+    "$(jq -r '[.problems[] | select(startswith("push has been unverifiable"))] | length' <<<"$s104")" "0"
+
+  # Never conclusive at all: the first answer this machine ever got was a 403.
+  # There is no conclusive_at to carry, so the streak is dated from the first
+  # inconclusive probe instead, and that date is carried forward the same way.
+  mk_fixture g104b; seed_home
+  jq '.remote.trusted=false' "$OMABACKUP_CONFIG" > "$T/c104b" && mv "$T/c104b" "$OMABACKUP_CONFIG" \
+    && chmod 600 "$OMABACKUP_CONFIG"
+  git -C "$FR" remote set-url origin "https://github.com/o/r"
+  mkdir -p "$T/fakebin"
+  printf '#!/bin/sh\nexit 0\n' > "$T/fakebin/nm-online"; chmod +x "$T/fakebin/nm-online"
+  V104="$OMABACKUP_STATE_DIR/push-verdict.json"
+  run104 403
+  eq "a first-ever 403 records no conclusive answer" "$(jq -r '.conclusive_at // "absent"' "$V104")" "absent"
+  f104=$(jq -r '.inconclusive_since // ""' "$V104")
+  [[ "$f104" =~ ^[0-9]+$ ]] && ok "...but it does record when the streak began" \
+    || bad "a first-ever 403 records when the streak began" "inconclusive_since='$f104'"
+  run104 403
+  eq "and the second 403 carries that date forward" "$(jq -r '.inconclusive_since // ""' "$V104")" "$f104"
+  eq "status dates the streak from it" \
+    "$(obj status | jq -r .push_unverifiable_since)" "$(date -d "@$f104" +%F)"
+
+  # An upgrade from 0.7.0: a verdict file with neither field, and a malformed
+  # one. Neither may error, and neither may invent an age.
+  jq 'del(.conclusive_at, .inconclusive_since)' "$V104" > "$T/v104b" && mv "$T/v104b" "$V104"
+  s104=$(obj status)
+  eq "a pre-0.8.0 verdict still reads" "$(jq -r .push_reason <<<"$s104")" "probe-403"
+  eq "...and claims no age it cannot know" "$(jq -r .push_unverifiable_days <<<"$s104")" "null"
+  jq '.conclusive_at="yesterday"' "$V104" > "$T/v104c" && mv "$T/v104c" "$V104"
+  s104=$(obj status)
+  eq "a malformed timestamp is no age either" "$(jq -r .push_unverifiable_days <<<"$s104")" "null"
+  eq "and status still answers" "$(jq -r .push_reason <<<"$s104")" "probe-403"
+fi
+
 group_close
 if (( ${#GROUP_SECS[@]} > 1 )); then
   echo; echo "slowest groups (seconds):"

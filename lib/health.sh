@@ -50,7 +50,8 @@ health_not_configured_json() {
       drift_scan_complete:false, drift_count:0, drift_truncated:false, drift:[],
       unpushed:0, diverged:false, upstream_readable:false, remote:"none",
       remote_label:"", remote_linkable:false,
-      push_verifiable:false, push_reason:"unprobed", uncommitted:[],
+      push_verifiable:false, push_reason:"unprobed",
+      push_unverifiable_days:null, push_unverifiable_since:"", uncommitted:[],
       uncommitted_count:0, uncommitted_truncated:false, uncommitted_sig:"",
       last_attempt_at:0, last_attempt_ok:null,
       timers_checked:false, timer_enabled:false, timer_active:false, timer_next:"",
@@ -348,6 +349,10 @@ health_collect() {
   # same answer to the same question: how long may this tool go on believing
   # something it has not checked.
   H_PUSH_VERIFIABLE=false; H_PUSH_REASON="unprobed"
+  # How long the probe has been unable to answer, and the day that started.
+  # JSON null, never 0 and never absent: 0 is a real answer ("it went
+  # unverifiable today") and the widget has to be able to tell the two apart.
+  H_PUSH_UNVERIFIABLE_DAYS=null; H_PUSH_UNVERIFIABLE_SINCE=""
   local verdict="$STATE_DIR/push-verdict.json" v_url v_ok v_reason v_at cur_url
   if [[ -r "$verdict" ]]; then
     cur_url=$(remote_origin_url)
@@ -368,8 +373,42 @@ health_collect() {
         v_reason=$(jq -r '.reason // ""' "$verdict" 2>/dev/null || true)
         H_PUSH_VERIFIABLE=$v_ok
         [[ -z "$v_reason" ]] || H_PUSH_REASON=$v_reason
+        # An inconclusive verdict has a length, and until now nothing measured
+        # it: a 403 behind a shared or CGNAT address is indistinguishable from
+        # a 403 that will clear in an hour, and the popup said "up to date"
+        # through both. Counted from the last conclusive answer, or from the
+        # start of the streak on a machine that has never had one. A verdict
+        # this check has already collapsed to "stale" is not counted from at
+        # all: it has stopped being an answer, and dating a streak from a
+        # verdict that does not count would put two different complaints about
+        # the same silence on one status line.
+        case "$H_PUSH_REASON" in
+          probe-*)
+            local v_conc v_since v_from
+            v_conc=$(jq -r '.conclusive_at // empty' "$verdict" 2>/dev/null || true)
+            case "$v_conc" in ''|*[!0-9]*) v_conc="" ;; esac
+            v_since=$(jq -r '.inconclusive_since // empty' "$verdict" 2>/dev/null || true)
+            case "$v_since" in ''|*[!0-9]*) v_since="" ;; esac
+            v_from=${v_conc:-$v_since}
+            # A 0.7.0 verdict carries neither, and a clock that has gone
+            # backwards gives a date in the future. Report no age rather than
+            # a made-up one: the reason code alone is what this tool knew
+            # before, and it is still there.
+            if [[ -n "$v_from" && "$v_from" -le "$now" ]]; then
+              H_PUSH_UNVERIFIABLE_DAYS=$(( (now - v_from) / 86400 ))
+              H_PUSH_UNVERIFIABLE_SINCE=$(date -d "@$v_from" +%F 2>/dev/null || true)
+            fi
+            ;;
+        esac
       fi
     fi
+  fi
+  # Past staleDays, the same limit everything else here ages out on, the
+  # length is a fault in its own right. The reason code is named because it is
+  # the thing to act on, and the sentence says what a user cannot guess: the
+  # API's rate limit counts per address, not per repository.
+  if [[ "$H_PUSH_UNVERIFIABLE_DAYS" != null && "$H_PUSH_UNVERIFIABLE_DAYS" -gt "$CFG_STALE_DAYS" ]]; then
+    H_PROBLEMS+=("push has been unverifiable for $H_PUSH_UNVERIFIABLE_DAYS days ($H_PUSH_REASON); the GitHub API is rate limited per address, so a shared or CGNAT address can answer 403 for a long time")
   fi
 
   # The wording deferred above. Nothing has ever been pushed to this remote,
@@ -500,6 +539,8 @@ health_status_json() {
     --argjson remote_linkable "$H_REMOTE_LINKABLE" \
     --argjson push_verifiable "$H_PUSH_VERIFIABLE" \
     --arg push_reason "$H_PUSH_REASON" \
+    --argjson push_unverifiable_days "$H_PUSH_UNVERIFIABLE_DAYS" \
+    --arg push_unverifiable_since "$H_PUSH_UNVERIFIABLE_SINCE" \
     --argjson uncommitted_count "$H_UNCOMMITTED_COUNT" \
     --argjson uncommitted_truncated "$H_UNCOMMITTED_TRUNCATED" \
     --arg uncommitted_sig "$H_UNCOMMITTED_SIG" \
@@ -520,6 +561,8 @@ health_status_json() {
       unpushed:$unpushed, diverged:$diverged, upstream_readable:$upstream_readable,
       remote:$remote, remote_label:$remote_label, remote_linkable:$remote_linkable,
       push_verifiable:$push_verifiable, push_reason:$push_reason,
+      push_unverifiable_days:$push_unverifiable_days,
+      push_unverifiable_since:$push_unverifiable_since,
       uncommitted:$uncommitted, uncommitted_count:$uncommitted_count,
       uncommitted_truncated:$uncommitted_truncated, uncommitted_sig:$uncommitted_sig,
       timers_checked:$timers_checked, timer_enabled:$timer_enabled, timer_active:$timer_active,
