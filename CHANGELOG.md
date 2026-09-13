@@ -124,13 +124,16 @@ ever consumes. The check now happens where the value is used: in `setup`,
 after the data repo is seeded, right before it writes the unit files, with
 the same refusal as before for a value systemd cannot parse; `setup
 --no-timers` writes no unit and so skips the check entirely, same as it
-always skipped writing the timer it would have checked. `setup check`
-reports it as a doctor line (`ok`, or `warn` when `systemd-analyze` itself
-is missing, or `FAIL` naming the fix) instead. A machine with no
-`systemd-analyze` no longer shows a fault in the popup for it either; the
-doctor is where that gap is reported now. `status` still catches the cheap,
-unconditional part of the same guard, the backslash, newline and percent
-sign a value must never carry, which forks nothing.
+always skipped writing the timer it would have checked. A machine with no
+`systemd-analyze` at all now refuses the same way, naming `pacman -S
+systemd` and `setup --no-timers` as the way out, rather than warning and
+writing an unvalidated unit file anyway: neither value can be proved valid
+without it, so `setup` no longer shows a fault in the popup for a bad timer
+setting it already wrote. `setup check` reports the same thing as a doctor
+line (`ok`, or `FAIL` naming the fix, whether the value itself is bad or
+`systemd-analyze` is missing to check it with). `status` still catches the
+cheap, unconditional part of the same guard, the backslash, newline and
+percent sign a value must never carry, which forks nothing.
 
 Content scanning remembers which `gitleaks` subcommand family it is talking
 to. Choosing between the modern and the pre-8.19 spelling of a scan means

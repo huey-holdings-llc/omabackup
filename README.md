@@ -409,9 +409,12 @@ refused instead, because a misspelled `maxMissingPct` is a threshold you
 believe is set and is not. `timer.calendar` and `timer.jitter` are checked with
 `systemd-analyze calendar` and `systemd-analyze timespan` in `omabackup setup`,
 right before they reach a unit file, and `omabackup setup check` reports the
-same check as a doctor line; `status` reports it separately when the installed
-snapshot timer and the config disagree (editing the config alone changes
-nothing until you rerun `omabackup setup`).
+same check as a doctor line. A machine with no `systemd-analyze` at all
+refuses the same way, since neither value can be proved valid without it;
+`setup --no-timers` is the way to finish setup on one. `status` reports it
+separately when the installed snapshot timer and the config disagree
+(editing the config alone changes nothing until you rerun `omabackup
+setup`).
 
 ### CLI
 
@@ -697,13 +700,14 @@ actually broken.
   shipped negation you had deliberately deleted (`!id_*.pub` is the only one)
   is re-added, which ignores less rather than more. Delete a re-added line
   again if you meant it, and commit that.
-* **"timer.calendar: systemd-analyze not found..." (a `setup check` warn
-  line)**: `timer.calendar` and `timer.jitter` are normally checked against
-  systemd's own grammar in `setup`, right before they reach a unit file.
-  Without `systemd-analyze` only the unconditional character-class check
-  runs, which is a floor and not a substitute, so `setup check` reports the
-  gap rather than assuming the value is fine. Install `systemd` tooling, or
-  leave the timer settings at their defaults.
+* **"timer.calendar: systemd-analyze not found..." (a `setup check` FAIL
+  line, and `setup` itself refuses)**: `timer.calendar` and `timer.jitter`
+  are checked against systemd's own grammar in `setup`, right before they
+  reach a unit file. Without `systemd-analyze` neither value can be proved
+  valid, so `setup` refuses to write an unvalidated unit file and `setup
+  check` reports the same gap as a FAIL, rather than assuming the value is
+  fine. Install `systemd` tooling, or run `omabackup setup --no-timers` to
+  finish setup without a timer.
 
 ## Development
 

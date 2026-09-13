@@ -3391,12 +3391,14 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
   has "and names the fix" "$(jq -r '.problems[]' <<<"$m85")" "omabackup setup"
   eq "the mismatch is a fault, not a footnote" "$(jq -r .state <<<"$m85")" "fault"
 
-  # ...and a machine with no systemd-analyze says so as a warn line from the
+  # ...and a machine with no systemd-analyze says so as a FAIL line from the
   # doctor, not as a status-time fault: status itself no longer forks
-  # systemd-analyze at all, so it has nothing to say about it either way. A
-  # PATH of symlinks to everything in /usr/bin except systemd-analyze:
-  # `command -v` has to find nothing at all, so shadowing it with a stub
-  # would not do.
+  # systemd-analyze at all, so it has nothing to say about it either way.
+  # `setup` fails closed the same way: neither value can be proved valid
+  # without systemd-analyze, so setup_units now refuses to write a unit file
+  # it cannot validate, rather than warning and writing one anyway. A PATH of
+  # symlinks to everything in /usr/bin except systemd-analyze: `command -v`
+  # has to find nothing at all, so shadowing it with a stub would not do.
   nsa85="$T/nosdbin"; mkdir -p "$nsa85"
   cp -as /usr/bin/. "$nsa85"/ 2>/dev/null || true
   rm -f "$nsa85/systemd-analyze"
@@ -3404,13 +3406,19 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
     jq '.timer={calendar:"daily", jitter:"30m"}' "$OMABACKUP_CONFIG" > "$T/c" && mv "$T/c" "$OMABACKUP_CONFIG"
     eq "status says nothing about validation either way, with or without systemd-analyze" \
       "$(env HOME="$FH" PATH="$nsa85" "$CLI" status --json 2>/dev/null | jq -r '[.problems[] | select(contains("not validated"))] | length')" "0"
-    chk85=$(env HOME="$FH" PATH="$nsa85" "$CLI" setup check 2>/dev/null)
-    has "the doctor warns rather than assumes the calendar is fine" "$chk85" \
-      "^warn  timer.calendar: systemd-analyze not found"
+    chk85=$(env HOME="$FH" PATH="$nsa85" "$CLI" setup check 2>/dev/null); chkrc85=$?
+    has "the doctor FAILs rather than assumes the calendar is fine" "$chk85" \
+      "^FAIL  timer.calendar: systemd-analyze not found"
     has "and names installing it as the fix" "$chk85" "pacman -S systemd"
-    has "the jitter check warns the same way" "$chk85" "^warn  timer.jitter: systemd-analyze not found"
-    eq "setup still succeeds without systemd-analyze (a floor, not a wall)" \
-      "$(env HOME="$FH" PATH="$nsa85" "$CLI" setup --data-repo "$FR" --yes --json 2>/dev/null | jq -r .ok)" "true"
+    has "and names --no-timers as the other way out" "$chk85" "setup --no-timers"
+    has "the jitter check fails the same way" "$chk85" "^FAIL  timer.jitter: systemd-analyze not found"
+    eq "a doctor that cannot validate the timer exits 1, not 0" "$chkrc85" "1"
+    su85=$(env HOME="$FH" PATH="$nsa85" "$CLI" setup --data-repo "$FR" --yes --json 2>/dev/null)
+    eq "setup refuses without systemd-analyze (a wall, not a floor)" "$(jq -r .ok <<<"$su85")" "false"
+    has "and the refusal names the missing tool" "$(jq -r .error <<<"$su85")" "systemd-analyze"
+    has "and names --no-timers as the way out" "$(jq -r .error <<<"$su85")" "--no-timers"
+    eq "the previously-installed unit is untouched by the refused rerun" \
+      "$(grep '^OnCalendar=' "$FH/.config/systemd/user/omabackup-snapshot.timer")" "OnCalendar=Mon *-*-* 04:00:00"
     # The loss event in full: the backslash value on the machine that has no
     # systemd-analyze to catch it. The character class is the only thing
     # standing between that value and awk, and it runs regardless of
@@ -3419,12 +3427,16 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
       "$(OMABACKUP_CONFIG=$T/bs.json env HOME="$FH" PATH="$nsa85" "$CLI" status --json 2>/dev/null | jq -r .ok)" "false"
     eq "the unit never gets written with an injected directive" \
       "$(grep -c 'ExecStart=/bin/sh' "$FH/.config/systemd/user/omabackup-snapshot.timer" || true)" "0"
+    # --no-timers is the documented way out, and it really does not touch
+    # setup_units at all, so it succeeds where a timers setup just refused.
+    eq "--no-timers finishes setup with no systemd-analyze at all" \
+      "$(env HOME="$FH" PATH="$nsa85" "$CLI" setup --data-repo "$FR" --no-timers --yes --json 2>/dev/null | jq -r .ok)" "true"
   else
     # A skip says what it skipped and how much. A silent one does not add
-    # seven passes, it takes seven assertions out of the total, and a suite
-    # that reports 7 fewer than the last run with nothing said about why
-    # reads as a count nobody can check.
-    echo "  (could not build a systemd-analyze-free PATH: 7 assertions skipped)"
+    # eleven passes, it takes eleven assertions out of the total, and a
+    # suite that reports 11 fewer than the last run with nothing said about
+    # why reads as a count nobody can check.
+    echo "  (could not build a systemd-analyze-free PATH: 11 assertions skipped)"
   fi
 fi
 
@@ -5605,6 +5617,31 @@ EOF
   has "a bad timer.calendar is a FAIL line" "$chk112" \
     "^FAIL  timer.calendar: not a systemd OnCalendar expression"
   has "and it names the fix" "$chk112" "edit timer.calendar in $T/badcal.json"
+
+  # Fail closed: with systemd-analyze not merely returning failure but
+  # entirely absent from PATH, setup refuses before it writes (or
+  # overwrites) any unit file, rather than warning and writing one it never
+  # actually validated. A PATH of symlinks to everything already on PATH
+  # except systemd-analyze: `command -v` has to find nothing at all, so
+  # shadowing it with a stub (like SDA112 above) would not prove the point.
+  NSA112="$T/nosdbin112"; mkdir -p "$NSA112"
+  cp -as /usr/bin/. "$NSA112"/ 2>/dev/null || true
+  rm -f "$NSA112/systemd-analyze"
+  if [[ -x "$NSA112/jq" && ! -e "$NSA112/systemd-analyze" ]]; then
+    before112=$(grep '^OnCalendar=' "$FH/.config/systemd/user/omabackup-snapshot.timer" 2>/dev/null || true)
+    su112=$(env HOME="$FH" PATH="$NSA112" "$CLI" setup --data-repo "$FR" --yes --json 2>/dev/null)
+    eq "setup with systemd-analyze absent from PATH refuses" "$(jq -r .ok <<<"$su112")" "false"
+    has "and names the missing tool" "$(jq -r .error <<<"$su112")" "systemd-analyze"
+    has "and names --no-timers as the way out" "$(jq -r .error <<<"$su112")" "--no-timers"
+    eq "the unit already on disk is untouched by the refused write" \
+      "$(grep '^OnCalendar=' "$FH/.config/systemd/user/omabackup-snapshot.timer" 2>/dev/null || true)" "$before112"
+    chkna112=$(env HOME="$FH" PATH="$NSA112" "$CLI" setup check 2>/dev/null); chkna112rc=$?
+    has "and setup check prints FAIL for it, not warn" "$chkna112" \
+      "^FAIL  timer.calendar: systemd-analyze not found"
+    eq "so setup check exits 1 too" "$chkna112rc" "1"
+  else
+    echo "  (could not build a systemd-analyze-free PATH: 5 assertions skipped)"
+  fi
 
   # The gitleaks half: a snapshot's two scans (staging tree, then the staged
   # commit) each choose between the modern and legacy subcommand once, and
