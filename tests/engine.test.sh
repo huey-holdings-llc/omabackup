@@ -4414,6 +4414,53 @@ if group 53 "the vanish guard's second look: it rescues a file, and its wait is 
   has "outside the suite the knob is ignored and named" "$(jq -r '.problems[]' <<<"$s53")" "OMABACKUP_SECOND_LOOK"
 fi
 
+if group 54 "/etc reference copies are never wider than their source"; then
+  # install -Dm644 staged every readable /etc file 0644, so a 0600 or 0640 one
+  # the user can read landed world-readable in the repo's working tree, and
+  # modes.txt recorded the widened mode as if it were the real one.
+  mk_fixture g54; seed_home
+  E54="$T/etcroot/app"; mkdir -p "$E54"
+  printf 'tight\n' > "$E54/tight.conf"; chmod 600 "$E54/tight.conf"
+  printf 'group\n' > "$E54/group.conf"; chmod 640 "$E54/group.conf"
+  printf '#!/bin/sh\n' > "$E54/hook.sh"; chmod 755 "$E54/hook.sh"
+  printf 'target\n' > "$E54/target.conf"; chmod 600 "$E54/target.conf"; ln -s target.conf "$E54/link.conf"
+  printf '/etc/app/tight.conf\n/etc/app/group.conf\n/etc/app/hook.sh\n/etc/app/link.conf\n' >> "$FR/etc-allowlist.txt"
+  git -C "$FR" commit -qam "four /etc reference copies"
+  check "the snapshot runs" env HOME="$FH" OMABACKUP_ETC_ROOT="$T/etcroot" "$CLI" snapshot --no-push
+  eq "a 0600 source stays 0600" "$(stat -c %a "$FR/etc/app/tight.conf" 2>/dev/null)" "600"
+  eq "a 0640 source stays 0640" "$(stat -c %a "$FR/etc/app/group.conf" 2>/dev/null)" "640"
+  eq "a symlink takes its target's mode, not the link's" "$(stat -c %a "$FR/etc/app/link.conf" 2>/dev/null)" "600"
+  eq "an executable source is not executable in the repo" "$(stat -c %a "$FR/etc/app/hook.sh" 2>/dev/null)" "644"
+  eq "and git records it as a plain file" "$(git -C "$FR" ls-files -s etc/app/hook.sh | cut -d' ' -f1)" "100644"
+  modes_has "600 etc/app/tight.conf" && ok "modes.txt records the real mode" || bad "modes.txt widened the mode"
+fi
+
+if group 55 "a gitleaks false positive is recorded once, in the data repo's .gitleaksignore"; then
+  # The two secret scans named one finding two ways: the staged scan by its
+  # repo path, the staging-tree scan by an absolute path under .staging. A
+  # fingerprint copied from one refusal satisfied that gate and not the other,
+  # and the line that satisfied the other carried this machine's own path.
+  if ! command -v gitleaks >/dev/null; then
+    echo "  (gitleaks not installed: skipping)"
+  else
+    mk_fixture g55; seed_home; commit_baseline
+    key55="sk-ant-api03-$(rand_body 90)AA"
+    printf 'export EXAMPLE_TOKEN=%s\n' "$key55" >> "$FH/.bashrc"
+    r55=$(ob snapshot --no-push); rc55=$?
+    [[ $rc55 -ne 0 ]] && ok "a credential-shaped line refuses the snapshot" || bad "the snapshot went through"
+    # Without -v gitleaks says only "leaks found: 1", so the refusal named no
+    # file, no rule and no fingerprint for the user to record.
+    has "the refusal names the fingerprint to record" "$r55" "home/.bashrc:anthropic-api-key:3"
+    eq "and never prints the value" "$(grep -c -- "$key55" <<<"$r55" || true)" "0"
+    printf 'home/.bashrc:anthropic-api-key:3\n' > "$FR/.gitleaksignore"
+    git -C "$FR" add .gitleaksignore && git -C "$FR" commit -qm "a recorded false positive"
+    check "one repo-relative fingerprint lets it through both scans" env HOME="$FH" "$CLI" snapshot --no-push
+    eq "and the line is in the snapshot" "$(git -C "$FR" show HEAD:home/.bashrc | grep -c EXAMPLE_TOKEN)" "1"
+    printf 'export OTHER_TOKEN=sk-ant-api03-%sAA # gitleaks:allow\n' "$(rand_body 90)" >> "$FH/.bashrc"
+    check "an inline gitleaks:allow does the same" env HOME="$FH" "$CLI" snapshot --no-push
+  fi
+fi
+
 group_close
 if (( ${#GROUP_SECS[@]} > 1 )); then
   echo; echo "slowest groups (seconds):"

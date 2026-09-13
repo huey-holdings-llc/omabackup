@@ -354,7 +354,10 @@ manifests/           generated facts about the machine, plus drift.txt
 A repo set up before 0.7.0 also holds a `.gitleaks.toml` that an older setup
 copied in. Nothing reads it: the content scan always runs with the plugin's
 own `share/gitleaks.toml`, so a rule added to the repo copy never took effect
-in either direction. The copy is inert, and deleting it changes nothing.
+in either direction. The copy is inert, and deleting it changes nothing. A
+`.gitleaksignore` in the repo is the one exception, on purpose: the scan
+reads it, one fingerprint per finding you have decided is not a secret (see
+Troubleshooting), so it can excuse a finding but never switch off a rule.
 Whichever you choose, commit it: the file is tracked, no verb commits it for
 you, and either an edit or a deletion left in the working tree is an
 uncommitted edit `status` reports at every login. To be rid of it:
@@ -587,8 +590,21 @@ actually broken.
   moment it happens rather than waiting for the backup to go stale, and it
   clears itself on the next run that finishes. The commonest cause is the
   secret scan finding a credential-shaped string in a file you back up: fix
-  the file, or decide the finding is not a secret and record that decision,
-  then run `omabackup snapshot` again.
+  the file, or decide the finding is not a secret and record that decision
+  (the next entry says how), then run `omabackup snapshot` again.
+* **"gitleaks exited 1 scanning the staging tree"** (or **"on the staged
+  commit"**), **"no snapshot was committed"**: the content scan found
+  something shaped like a credential. If it is one, take it out of the file,
+  or stop backing that file up. If it is not (an example key in a note, a
+  test fixture, a hash that happens to look like a token), there are three
+  ways to say so. Reword the line so it no longer matches. Put
+  `gitleaks:allow` in a comment on the same line. Or add the finding's
+  fingerprint, `<path in the repo>:<rule>:<line>` (for example
+  `home/.bashrc:anthropic-api-key:3`), as a line in the data repo's
+  `.gitleaksignore`, and commit it: the popup's Commit button or
+  `omabackup push --confirm` will. A fingerprint names a line number, so it
+  stops matching when the line moves, and the next edit gets looked at
+  again.
 * **"added N ignore pattern(s) this version ships"**: an upgrade found
   patterns in `share/data.gitignore` that your data repo's `.gitignore` did
   not have, and the snapshot appended them under a dated comment and

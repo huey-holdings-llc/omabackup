@@ -56,3 +56,9 @@ hand-edited list or an unlucky filename to reach.
 Omarchy's shell, git itself, and gitleaks are separate projects; issues in
 them should go upstream, though a report here that helps route the problem
 is still welcome.
+
+A fingerprint in the data repo's `.gitleaksignore`, or a `gitleaks:allow`
+comment on a line, tells the content scan that one finding is not a secret.
+The rules file stays pinned to the plugin, so the repo cannot turn a rule
+off; it can only record a decision about one finding, tied to a path, a rule
+and a line. That is the user's recorded judgement, not a way round the gate.
