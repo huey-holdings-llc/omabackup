@@ -522,23 +522,42 @@ drift_scan() {
     # marker reads as a whole path on its own, so nothing here is trusted
     # until it exists AND some package still claims it (one batched -Qqo
     # call, the same ownership question section 5b asks over its own list).
-    local etc_candidates=() etc_bad=() etc_unowned=""
+    # `--` ends option parsing before the array: a fragment that happens to
+    # start with `-` is a filename argument, never a flag that could corrupt
+    # every other candidate answered in the same call.
+    local etc_candidates=() etc_bad=() etc_unowned="" etc_unowned_err=""
     while IFS= read -r f; do
       [ -z "$f" ] && continue
       echo "$f" | grep -qE "$etc_skip" && continue
       if [ -e "$f" ]; then etc_candidates+=("$f"); else etc_bad+=("$f"); fi
     done <<<"$etc_live"
     if [ ${#etc_candidates[@]} -gt 0 ]; then
-      etc_unowned=$(LC_ALL=C pacman -Qqo "${etc_candidates[@]}" 2>&1 >/dev/null \
-        | sed -nE 's/^error: No package owns (.*)$/\1/p')
+      etc_unowned_err=$(LC_ALL=C pacman -Qqo -- "${etc_candidates[@]}" 2>&1 >/dev/null)
+      etc_unowned=$(sed -nE 's/^error: No package owns (.*)$/\1/p' <<<"$etc_unowned_err")
     fi
-    for f in "${etc_candidates[@]}"; do
-      if grep -qxF "$f" <<<"$etc_unowned"; then
-        etc_bad+=("$f")
-      else
-        grep -qxF "$f" <<<"$etc_known" || _drift_report NEW "$f"
-      fi
-    done
+    # This branch infers "owned" from ABSENCE in that stderr, so a validation
+    # call that failed for an unrelated reason (a locked database, a
+    # reworded message, pacman dying outright) would otherwise read as
+    # "every candidate here is owned" and every one of them would reach a
+    # normal row -- the exact fail-open this scan exists to prevent. Same
+    # producer contract as the drop-in ownership check below: stderr that
+    # produced nothing this parser recognises is a failed query, not a
+    # clean answer, so nothing from this batch is trusted.
+    if [ -n "$etc_unowned_err" ] && [ -z "$etc_unowned" ]; then
+      echo "# ERROR: cannot parse pacman ownership output; modified /etc files NOT checked"
+      found=$((found+1))
+    else
+      for f in "${etc_candidates[@]}"; do
+        # `--`: same reason the pacman calls above take it. A candidate
+        # starting with `-` is grep's pattern argument here, not stdin, so
+        # without it grep reads the candidate itself as an option string.
+        if grep -qxF -- "$f" <<<"$etc_unowned"; then
+          etc_bad+=("$f")
+        else
+          grep -qxF -- "$f" <<<"$etc_known" || _drift_report NEW "$f"
+        fi
+      done
+    fi
     for f in "${etc_bad[@]}"; do
       drift_etc_unparseable_row "$f"; found=$((found+1))
     done
@@ -616,14 +635,17 @@ X11/xorg.conf.d fonts/conf.d"
         if [ -e "$f" ]; then dropin_candidates+=("$f"); else dropin_bad+=("$f"); fi
       done <<<"$unowned"
       if [ ${#dropin_candidates[@]} -gt 0 ]; then
-        dropin_still_unowned=$(LC_ALL=C pacman -Qqo "${dropin_candidates[@]}" 2>&1 >/dev/null \
+        # `--`: same reason section 5's recheck uses it (a split fragment
+        # that starts with `-` must be a filename argument, never a flag).
+        dropin_still_unowned=$(LC_ALL=C pacman -Qqo -- "${dropin_candidates[@]}" 2>&1 >/dev/null \
           | sed -nE 's/^error: No package owns (.*)$/\1/p')
       fi
       for f in "${dropin_candidates[@]}"; do
-        if grep -qxF "$f" <<<"$dropin_still_unowned"; then
+        # `--`: same reason section 5's equivalent check takes it.
+        if grep -qxF -- "$f" <<<"$dropin_still_unowned"; then
           real="/etc/${f#$ETC_DROPIN_ROOT/}"          # allowlist/ignore are written as /etc/...
           echo "$real" | grep -qE "$etc_skip" && continue
-          grep -qxF "$real" <<<"$etc_known" && continue
+          grep -qxF -- "$real" <<<"$etc_known" && continue
           is_ignored "$real" && continue
           _drift_report NEW "$real"
         else
