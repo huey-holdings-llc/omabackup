@@ -14,10 +14,12 @@ that answers every triage verb and every `problems` list in one shape
 instead of three; a push probe that remembers how long it has been stuck
 instead of losing the date on every retry; and an allowlist floor that
 follows the list you actually committed instead of accusing you of losing
-files. Underneath it all is the refactor the codebase itself was owed: one
-setup phase table, one verb list, one place `Panel.qml` reads service state
-from, instead of three apiece. Every change here went through a test that
-goes red without it, and a second-model review where it earned one.
+files. Underneath it all is the refactor the codebase itself was owed: the
+verb table now describes each verb in one place and drives dispatch as well
+as help, a handful of internals moved to the file that owns them, and one
+helper writes the config setup merges. Every change here went through a
+test that goes red without it, and a second-model review where it earned
+one.
 
 ### Changed
 
