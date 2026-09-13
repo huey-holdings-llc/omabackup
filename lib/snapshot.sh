@@ -252,7 +252,14 @@ snapshot_assert_allowlist() {
   # floor is still 1, because "accept the list" cannot mean accepting no list
   # at all, and every other guard (the file floor, the vanish check, both
   # secret gates) is untouched.
-  if [[ "${SNAP_ACCEPT_ALLOWLIST:-0}" == 1 ]]; then
+  #
+  # A FLOOR THE ENVIRONMENT FORCED IS THE ONE THING THE FLAG DOES NOT LIFT.
+  # OMABACKUP_MIN_ALLOWLIST exists so the suite can pin a floor for a test,
+  # and a pin the thing under test can pull out is not pinning anything; it
+  # is also the only source whose refusal offers no way out, and that claim
+  # has to stay true. Outside the suite the variable is unset before this file
+  # is ever reached (lib/config.sh), so this is a suite-only distinction.
+  if [[ "${SNAP_ACCEPT_ALLOWLIST:-0}" == 1 && "${MIN_ALLOWLIST_SOURCE:-}" != override ]]; then
     MIN_ALLOWLIST=$(( entry_count >= 1 ? entry_count : 1 ))
     MIN_ALLOWLIST_SOURCE=accept
   fi
@@ -263,10 +270,11 @@ snapshot_assert_allowlist() {
       accept)
         die "allowlist has no entries; --accept-allowlist takes the list as it stands, and there is nothing in it to take" ;;
       override)
-        # No hint here: neither the config key nor the flag can lift a floor
-        # the environment forced, and sending a user somewhere that will not
-        # change the answer is the kind of message this refusal is being
-        # rewritten to stop giving.
+        # No hint here, and the branch above is what keeps that honest:
+        # neither the config key nor --accept-allowlist lifts a floor the
+        # environment forced, so there is nowhere to send the reader. Offering
+        # a way out that does not work is the kind of message this refusal is
+        # being rewritten to stop giving.
         die "allowlist has ${entry_count:-0} entries, below the floor of ${MIN_ALLOWLIST:-20} set by OMABACKUP_MIN_ALLOWLIST (a suite-only override)" ;;
       *)
         die "allowlist has ${entry_count:-0} entries, below the bootstrap floor of ${MIN_ALLOWLIST:-20} (minAllowlist). If you trimmed the list on purpose, set minAllowlist in $CONFIG_FILE to the number you now have" ;;

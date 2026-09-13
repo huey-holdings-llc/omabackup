@@ -5386,12 +5386,25 @@ if group 108 "the allowlist floor follows the last committed list, and minAllowl
   # history it changes no answer, and a key that silently does nothing is
   # exactly what the config reader exists to speak up about.
   jq '.minAllowlist=5' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
-  m108=$(ob snapshot --no-push)
-  eq "minAllowlist does not lift a floor derived from history" \
-    "$(obj snapshot --no-push | jq -r .ok)" "false"
+  # One run, read three ways: ob captures stdout and stderr together, and the
+  # exit code says what the JSON object would have.
+  m108=$(ob snapshot --no-push); rc108=$?
+  eq "minAllowlist does not lift a floor derived from history" "$rc108" "1"
+  has "the refusal is still the floor's" "$m108" "so the floor is 11"
   has "and the tool says the key is doing nothing here" "$m108" \
     "minAllowlist is only read before the first snapshot"
   has "naming the flag that does work" "$m108" "snapshot --accept-allowlist"
+  # ...but only to a caller who asked about the floor. health is the login
+  # check, documented as silent when all is well, and it used to carry this
+  # line at every new shell for a config that is merely out of date.
+  eq "health says nothing about it: it is the silent-when-ok login check" \
+    "$(env HOME="$FH" "$CLI" health 2>&1 >/dev/null | grep -c 'minAllowlist' || true)" "0"
+  eq "drift says nothing about it either" \
+    "$(env HOME="$FH" "$CLI" drift 2>&1 >/dev/null | grep -c 'minAllowlist' || true)" "0"
+  eq "status does say so: it is the verb that reports the floor" \
+    "$(env HOME="$FH" "$CLI" status 2>&1 >/dev/null | grep -c 'minAllowlist is only read' || true)" "1"
+  eq "and so does setup check, the doctor" \
+    "$(env HOME="$FH" "$CLI" setup check 2>&1 >/dev/null | grep -c 'minAllowlist is only read' || true)" "1"
   jq 'del(.minAllowlist)' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
 
   # A SHORT LIST IS WHERE ROUNDING DECIDES THE GUARD. `prev * 9 / 10`

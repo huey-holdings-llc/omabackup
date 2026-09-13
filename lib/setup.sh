@@ -607,7 +607,10 @@ setup_check() {
   local have_sysd_analyze=false cal_ok=null jit_ok=null
   if config_exists; then
     cfg=true
-    config_load
+    # "setup-check" so config_load says whether minAllowlist is doing anything
+    # on this repo: this verb is the doctor, and a key that no longer applies
+    # is exactly the kind of thing it exists to point at.
+    config_load setup-check
     [[ -d "$DATA_REPO/.git" ]] && repo=true
     if [[ -f "$DATA_REPO/.omabackup" ]]; then marker=true; else ok=false; fi
     if have systemd-analyze; then

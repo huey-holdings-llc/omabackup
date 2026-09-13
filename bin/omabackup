@@ -134,7 +134,7 @@ main() {
     # never run in that case; a not-configured object/hint is emitted below.
     status)
       if config_exists; then
-        config_load
+        config_load status
       else
         # status.json is the widget's only view of the world -- write it here
         # too, or a stale "healthy" file from a previous config survives a
@@ -178,7 +178,10 @@ main() {
         local nv; nv=$( (config_load >/dev/null 2>&1 && printf '%s' "${CFG_NOTIFY:-true}") || true )
         if [[ "$nv" == false ]]; then CFG_NOTIFY=false; fi
       fi ;;
-    snapshot|drift|allow|ignore|resolve-gone|push|lint|restore|verify|timer|self-test|open) config_load ;;
+    # The verb is passed through: config_load validates the same way for all
+    # of them and uses it only to decide whether a notice about the allowlist
+    # floor is worth printing to a caller who did not ask about the floor.
+    snapshot|drift|allow|ignore|resolve-gone|push|lint|restore|verify|timer|self-test|open) config_load "$verb" ;;
     *) usage_die "unknown verb '$verb'" ;;
   esac
   case "$verb" in
