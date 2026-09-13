@@ -6001,7 +6001,7 @@ EOF
   # `snapshot` runs both scans (staging tree, then staged commit) in one
   # process, so the memo set by the first is read by the second. The
   # widget's push --confirm path is not covered here -- it runs
-  # secrets_scan_staged in a subshell (lib/widget.sh:537), so any memo it
+  # secrets_scan_staged in a subshell (lib/widget.sh:534), so any memo it
   # sets dies with that subshell and cannot be read back by a caller outside
   # it. That is fine for this process's own probe count (still one fork,
   # since nothing else in that subshell asks again), but it means the memo

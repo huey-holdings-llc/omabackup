@@ -151,6 +151,81 @@ drift_line_split() {
   return 0
 }
 
+# ------------------------------------------------ does the report name a path?
+# The three functions below are the gate the widget's write verbs put every
+# clicked path through. They read manifests/drift.txt and split it with
+# drift_line_split above, which is why they live here rather than beside their
+# callers in lib/widget.sh: the gate and the row the user clicked have to
+# recover the same path from the same line, and that agreement is a property of
+# the report format, not of the buttons.
+
+# DRIFT_TARGET_DIR: 1 when the row (or folder) the gate below matched names a
+# DIRECTORY, 0 when it names a single file. Set by drift_names_target, read by
+# cmd_ignore (lib/widget.sh). The trailing slash used to carry this, and it
+# cannot any more: the popup sends the path exactly as the JSON gives it, and
+# the JSON strips the slash. Without this, ignoring a collapsed ">2000 files"
+# row wrote a bare entry, which by drift-ignore's own documented semantics
+# means "look inside", so the next scan enumerated the whole tree the row
+# existed to collapse.
+DRIFT_TARGET_DIR=0
+
+# drift_has WANT TYPES: does the current drift report name this exact path
+# under one of the pipe-separated TYPES? The line is split by
+# drift_line_split, the same function that builds the JSON the
+# popup renders: this gate and the row the user clicked must recover the same
+# path from the same line, or a crafted filename lets one click widen the
+# allowlist to a directory the scan never reported.
+#
+# The comparison is made on both sides with one trailing slash stripped, which
+# is exactly what drift_items_json does before the path reaches the widget
+# ("a directory's trailing / is report display flourish"). It used to compare
+# the slashless argument the popup sends against the slashed report line, so
+# EVERY whole-directory row -- a new ~/.config/<app>/, a new dot-directory, a
+# tree collapsed for being over the scan cap, which is most of what a real
+# machine reports -- refused both buttons with "the drift report does not name
+# that path; refresh and retry", and refreshing never helped.
+drift_has() {
+  local want=$1 types=$2 line
+  local w=${want%/}
+  while IFS= read -r line; do
+    drift_line_split "$line" || continue
+    [[ "${DRIFT_PATH%/}" == "$w" ]] || continue
+    # THE REPORT'S OWN SLASH IS THE ONLY AUTHORITY. Taking the argument's as
+    # well meant `allow '~/.config/foo.conf/'` matched a FILE row and then
+    # wrote a subtree ignore for a path that is not a directory; before Wave C
+    # that spelling was refused, and it goes back to being refused.
+    case "$want" in */) [[ "$DRIFT_PATH" == */ ]] || continue ;; esac
+    case "$DRIFT_PATH" in */) DRIFT_TARGET_DIR=1 ;; esac
+    return 0
+  done < <(grep -E "^($types)" "$DATA_REPO/manifests/drift.txt" 2>/dev/null)
+  return 1
+}
+
+# drift_has_under WANT TYPES: a "~/dir/" target is legitimate when at least
+# one drifting path lies UNDER it. Depth 1 ("~/.config/") is always refused:
+# one click must never be able to silence an entire report.
+drift_has_under() {
+  local want=$1 types=$2 line
+  case "${want#\~/}" in */*/*) ;; *) return 1 ;; esac    # "seg/" is depth 1
+  while IFS= read -r line; do
+    drift_line_split "$line" || continue
+    # Same normalisation as drift_has: a collapsed child row ("~/a/b/c/")
+    # lies under "~/a/b/" whether or not its own slash survived the report.
+    case "${DRIFT_PATH%/}" in "$want"?*) DRIFT_TARGET_DIR=1; return 0 ;; esac
+  done < <(grep -E "^($types)" "$DATA_REPO/manifests/drift.txt" 2>/dev/null)
+  return 1
+}
+
+# drift_names_target TILDE TYPES: shared gate for allow/ignore targets --
+# an exact drift line, or a folder prefix with drifting children.
+drift_names_target() {
+  local tilde=$1 types=$2
+  DRIFT_TARGET_DIR=0
+  drift_has "$tilde" "$types" && return 0
+  case "$tilde" in */) drift_has_under "$tilde" "$types" && return 0 ;; esac
+  return 1
+}
+
 # drift_scan: print the report to stdout, ending with the "# drift-scan-complete"
 # sentinel. The daily pipeline (snapshot, Task 9) refuses to commit without that
 # line, so a scan that dies partway through can no longer be mistaken for a
@@ -774,7 +849,7 @@ drift_items_json() {
     fi
     # `dir` is the fact the trailing slash carried before this function
     # stripped it, published rather than thrown away. The write verbs recover
-    # it the same way (DRIFT_TARGET_DIR, lib/widget.sh) to decide whether an
+    # it the same way (DRIFT_TARGET_DIR, above) to decide whether an
     # ignore is a subtree; the popup needs it for a different reason, because
     # "Add to allowlist (back this up)" is the wrong sentence about a folder
     # whose whole future contents the click is deciding for.
