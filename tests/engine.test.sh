@@ -6138,6 +6138,36 @@ EOF
     "$(grep -c -- '--staged' "$GLLOG114g" || true)" "1"
 fi
 
+if group 115 "a drift scan that cannot make its scratch still says so, and still prints one JSON object"; then
+  # `rep=$(drift_scan)` lost the `local` that used to mask the assignment's
+  # status, so under set -e a scan returning 1 (an unwritable or full
+  # $STATE_DIR) killed the process at that line: the "# ERROR drift: cannot
+  # create a scratch directory" row it had just produced was sitting in $rep
+  # and never printed, and --json printed no object at all, against
+  # AGENTS.md invariant 4 (whole-release review, ARCH-I1). 0.7.0 printed
+  # both.
+  mk_fixture g115; seed_home; commit_baseline
+  # Same lever group 109 uses for the vanish guard: a state directory that
+  # takes no new files.
+  chmod 500 "$OMABACKUP_STATE_DIR"
+  d115=$(env HOME="$FH" "$CLI" drift 2>/dev/null); rc115=$?
+  j115=$(env HOME="$FH" "$CLI" drift --json 2>/dev/null); rc115j=$?
+  chmod 700 "$OMABACKUP_STATE_DIR"
+  eq "drift exits 1 when it cannot make its scratch" "$rc115" "1"
+  has "and prints the ERROR row it produced, instead of nothing" "$d115" \
+    "^# ERROR drift: cannot create a scratch directory under"
+  eq "drift --json exits 1 too" "$rc115j" "1"
+  eq "and still prints exactly one JSON object" \
+    "$(jq -sc 'length' <<<"$j115" 2>/dev/null || echo 0)" "1"
+  eq "which says the scan did not complete" "$(jq -r .complete <<<"$j115")" "false"
+  # The scan works again once the directory does, so the assertions above are
+  # about the unwritable state and not about a fixture that was broken all
+  # along.
+  eq "and a scan runs again once the directory takes files" \
+    "$(obj drift | jq -r .complete)" "true"
+fi
+
+
 group_close
 if (( ${#GROUP_SECS[@]} > 1 )); then
   echo; echo "slowest groups (seconds):"
