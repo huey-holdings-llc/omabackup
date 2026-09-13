@@ -103,6 +103,19 @@ widget's refresh) no longer write to the data repo at all; they used to run
 this sync outside the lock. `setup --import` holds the repo lock while it
 writes the marker and runs the sync.
 
+Manifests whose order carries no meaning are now sorted: group membership,
+network connection names, enabled and disabled systemd units, and the
+global npm, uv and VS Code extension lists. Several of the tools behind
+these files return their own listing in whatever order they feel like, and
+on a real machine that order can change between two runs a few seconds
+apart for reasons that say nothing about the machine itself (a connection
+re-registered, a systemd unit enumerated in a different slot), which used
+to commit a snapshot with nothing actually different in it. The first
+snapshot after upgrading rewrites these files once, since a previously
+unsorted copy is still real content and gets replaced by its sorted
+equivalent; every run after that is back to committing only on a real
+change.
+
 ### Fixed
 
 A data repo the engine cannot read is recorded, not just refused. `status`
