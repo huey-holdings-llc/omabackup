@@ -5149,6 +5149,34 @@ if group 106 "every verb answers --help, --remove says how to confirm, and diver
     && ok "and what to do when it conflicts" || bad "the README row does not say what to do on a conflict"
 fi
 
+if group 107 "the human dry run names what every restore stage would do, not just --configs"; then
+  # restore_list_would was called for --configs alone. --packages, --plugins
+  # and --services filled RESTORE_WOULD and printed it under --json only, so
+  # the human dry run of the three stages that install and enable things said
+  # nothing at all about what they would install or enable.
+  mk_fixture g107; seed_home; commit_baseline
+  # Past the stage's 100-entry truncation floor, and none of them installed:
+  # the suite's pacman stub answers -Qqen with fakepkg1..120.
+  seq -f 'known-native-%03g' 1 100 > "$FR/manifests/pacman-native.txt"
+  printf 'known-aur-one\n' > "$FR/manifests/pacman-aur.txt"
+  printf 'ok-one.service\n' > "$FR/manifests/systemd-user.txt"
+  : > "$FR/manifests/systemd-user-off.txt"
+  git -C "$FR" add -A && git -C "$FR" commit -qm "manifests with one package and one unit"
+
+  h107=$(ob restore --packages --services)
+  has "the package stage says how many it would install" "$h107" "\[dry\] --packages"
+  has "and names one of them" "$h107" "known-native-001"
+  has "and says how many it left out of the listing" "$h107" "more (add --json to list every one)"
+  has "the service stage says how many it would enable" "$h107" "\[dry\] --services"
+  has "and names the unit" "$h107" "ok-one.service"
+  eq "the dry run still changes nothing" \
+    "$(git -C "$FR" status --porcelain | grep -c . || true)" "0"
+  # --json is unchanged: the same paths, in the same array.
+  j107=$(obj restore --packages --services)
+  eq "and --json still lists every one, the AUR package the human listing truncated included" \
+    "$(jq -r '[.would_write[] | select(. == "package:known-native-001" or . == "aur:known-aur-one" or . == "service:ok-one.service")] | length' <<<"$j107")" "3"
+fi
+
 group_close
 if (( ${#GROUP_SECS[@]} > 1 )); then
   echo; echo "slowest groups (seconds):"

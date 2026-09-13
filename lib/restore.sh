@@ -83,6 +83,9 @@ restore_mode_target() {
 # lib/config.sh now refuses to honour from the outside.
 restore_stage_configs() {
   local apply=$1 min_restore="${2:-${OMABACKUP_MIN_RESTORE:-50}}"
+  # Where RESTORE_WOULD stood before this stage, so the dry-run listing below
+  # names what THIS stage would do and not what an earlier one already showed.
+  local would_start=${#RESTORE_WOULD[@]}
 
   # This stage copies from the WORKING TREE, not from HEAD. When snapshot_sync
   # has run but the commit after it has not (the staged secret gate refused,
@@ -245,25 +248,30 @@ restore_stage_configs() {
     log "Done. Run 'omarchy restart shell' or log out for shell.json to take effect."
   else
     log "[dry] --configs would restore ${have_n:-0} file(s)/link(s) into \$HOME"
-    restore_list_would
+    restore_list_would "$would_start"
   fi
 }
 
-# restore_list_would: name the first RESTORE_WOULD paths in the human dry run.
-# A count on its own is not a preview: the whole point of a dry run is seeing
-# WHICH files it would touch, and those paths were emitted under --json only.
-# The array holds JSON strings (jstr), so one jq call decodes the lot rather
-# than one fork per line.
+# restore_list_would [START]: name the RESTORE_WOULD entries this stage added,
+# in the human dry run. A count on its own is not a preview: the whole point of
+# a dry run is seeing WHICH things it would touch, and those entries were
+# emitted under --json only. START is the array length as the stage found it,
+# so each stage lists its own additions rather than reprinting the ones before
+# it; it was called for --configs alone, and --packages, --plugins and
+# --services (the three stages that install and enable things) printed nothing
+# at all. The array holds JSON strings (jstr), so one jq call decodes the lot
+# rather than one fork per line.
 RESTORE_WOULD_SHOWN=20
 restore_list_would() {
-  [[ ${#RESTORE_WOULD[@]} -gt 0 ]] || return 0
+  local start=${1:-0} total=${#RESTORE_WOULD[@]}
+  [[ "$total" -gt "$start" ]] || return 0
   [[ "${JSON:-0}" == 1 ]] && return 0
-  local p
+  local stop=$(( start + RESTORE_WOULD_SHOWN )) p
   while IFS= read -r p; do
     [[ -n "$p" ]] && printf '      %s\n' "$p"
-  done < <(jq -r ".[0:${RESTORE_WOULD_SHOWN}][]" <<<"[$(jjoin "${RESTORE_WOULD[@]}")]" 2>/dev/null)
-  local extra=$(( ${#RESTORE_WOULD[@]} - RESTORE_WOULD_SHOWN ))
-  [[ "$extra" -gt 0 ]] && printf '      ... and %s more (omabackup restore --configs --json lists them all)\n' "$extra"
+  done < <(jq -r ".[${start}:${stop}][]" <<<"[$(jjoin "${RESTORE_WOULD[@]}")]" 2>/dev/null)
+  local extra=$(( total - stop ))
+  [[ "$extra" -gt 0 ]] && printf '      ... and %s more (add --json to list every one)\n' "$extra"
   return 0
 }
 
@@ -310,6 +318,7 @@ restore_stage_etc() {
 # packages nobody asked for).
 restore_stage_packages() {
   local apply=$1 M="$DATA_REPO/manifests"
+  local would_start=${#RESTORE_WOULD[@]}
   if [[ ! -f "$M/pacman-native.txt" ]]; then
     restore_warn "no pacman-native.txt manifest -- skipping package restore"
     restore_skip "manifests/pacman-native.txt" "manifest missing"
@@ -361,6 +370,8 @@ restore_stage_packages() {
     if [[ -n "$missing_aur" ]]; then
       while IFS= read -r p; do [[ -n "$p" ]] && RESTORE_WOULD+=("$(jstr "aur:$p")"); done <<<"$missing_aur"
     fi
+    log "[dry] --packages would install $(( ${#RESTORE_WOULD[@]} - would_start )) package(s)"
+    restore_list_would "$would_start"
     return 0
   fi
 
@@ -403,6 +414,7 @@ restore_stage_packages() {
 # restore_stage_plugins APPLY: re-clone omarchy shell plugins from the TSV.
 restore_stage_plugins() {
   local apply=$1 M="$DATA_REPO/manifests/omarchy-plugins.tsv"
+  local would_start=${#RESTORE_WOULD[@]}
   if [[ ! -f "$M" ]]; then
     restore_warn "no omarchy-plugins.tsv manifest -- skipping plugin restore"
     restore_skip "manifests/omarchy-plugins.tsv" "manifest missing"
@@ -442,6 +454,13 @@ restore_stage_plugins() {
       restore_warn "  failed: $id"
     fi
   done < "$M"
+  # Guarded on the count rather than on $apply: the dry-run branch above is
+  # the only thing that fills RESTORE_WOULD here, so an --apply run adds
+  # nothing and says nothing.
+  if [[ ${#RESTORE_WOULD[@]} -gt "$would_start" ]]; then
+    log "[dry] --plugins would add $(( ${#RESTORE_WOULD[@]} - would_start )) plugin(s)"
+    restore_list_would "$would_start"
+  fi
   log "Enable/placement comes from the restored shell.json."
 }
 
@@ -453,6 +472,7 @@ restore_stage_plugins() {
 # calling systemctl, for the test suite.
 restore_stage_services() {
   local apply=$1 M="$DATA_REPO/manifests"
+  local would_start=${#RESTORE_WOULD[@]}
   if [[ ! -f "$M/systemd-user.txt" ]]; then
     restore_warn "no systemd-user.txt manifest -- skipping service restore"
     restore_skip "manifests/systemd-user.txt" "manifest missing"
@@ -494,6 +514,12 @@ restore_stage_services() {
       restore_warn "  could not enable $u"
     fi
   done < <(awk '{print $1}' "$M/systemd-user.txt" 2>/dev/null)
+  # Count, not $apply: this stage also fills RESTORE_WOULD on an --apply run
+  # that OMABACKUP_SKIP_TIMERS has kept away from systemctl.
+  if [[ ${#RESTORE_WOULD[@]} -gt "$would_start" ]]; then
+    log "[dry] --services would enable $(( ${#RESTORE_WOULD[@]} - would_start )) unit(s)"
+    restore_list_would "$would_start"
+  fi
   restore_note "system units are not enabled automatically; syncthing.service is never enabled automatically either"
 }
 
