@@ -46,6 +46,22 @@ elif [[ "$cl_ver" == "$m_ver" ]]; then
 else
   bad "CHANGELOG top release $cl_ver != manifest version $m_ver"
 fi
+# Keep a Changelog 1.1.0 asks for a comparison link at the foot for every
+# release heading, plus one for Unreleased. The top heading found above is
+# the one a reader just landed on; if it has no matching [x.y.z]: https://...
+# line, "compare with the last release" is a dead end for exactly the
+# version someone is reading about.
+if grep -qE '^\[Unreleased\]: https://' CHANGELOG.md; then
+  ok "CHANGELOG has an [Unreleased] comparison link"
+else
+  bad "CHANGELOG is missing the [Unreleased] comparison link"
+fi
+cl_ver_re=$(printf '%s' "$cl_ver" | sed 's/\./\\./g')
+if grep -qE "^\\[$cl_ver_re\\]: https://" CHANGELOG.md; then
+  ok "CHANGELOG has a [$cl_ver] comparison link matching the top heading"
+else
+  bad "CHANGELOG is missing a [$cl_ver] comparison link matching the top heading"
+fi
 # THE SHIPPED TREE ONLY, for both checks below.
 #
 # They used to walk the whole working directory, which includes tests/tmp: the

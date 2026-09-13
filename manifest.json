@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.huey-holdings-llc.omabackup",
   "name": "OmaBackup",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "author": "Corey Tyhurst",
   "license": "MIT",
   "description": "Backs up your Omarchy config to a private git repo every day and tells you what it is not backing up.",
