@@ -127,8 +127,10 @@ committing, when you already had an uncommitted edit to `.gitignore` or
 something staged; the run says which, and the popup's Commit button or
 `push --confirm` is the way out, as before. `setup --import` does the same
 when it adopts a repo. The read-only verbs (`status`, `drift`, `lint`, the
-widget's refresh) no longer write to the data repo at all; they used to run
-this sync outside the lock. `setup --import` holds the repo lock while it
+widget's refresh) no longer write any file into the data repo; they used to
+run this sync outside the lock. They still assert the repo's own mode, so
+the repo root and `.git` are `chmod`ed back to 0700 if something has
+loosened them. `setup --import` holds the repo lock while it
 writes the marker and runs the sync.
 
 Manifests whose order carries no meaning are now sorted: group membership,
