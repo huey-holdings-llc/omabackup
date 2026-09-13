@@ -191,12 +191,20 @@ if group 00 "baseline: version, help, config validation"; then
   # uses a verb that still requires config unconditionally.
   eq "missing config refused with setup hint" "$(OMABACKUP_CONFIG=/nonexistent ob drift; true)" "$(printf '\033[1;31m[FAIL]\033[0m no config at /nonexistent. Run: omabackup setup')"
 
-  # self-test: an unknown flag is a usage error (exit 2), same as every other
-  # verb, and self-test refuses to run recursively from inside a suite that
-  # is already running (this suite exports OMABACKUP_IN_SUITE=1 at its own
-  # top) rather than forking the whole suite again.
-  fails "self-test: unknown flag is refused" env HOME="$FH" "$CLI" self-test --help
-  [[ $(env HOME="$FH" "$CLI" self-test --help >/dev/null 2>&1; echo $?) == 2 ]] \
+  # self-test: --help is answered by the dispatcher, before any lib/ parser
+  # sees the flag, so it prints the verb's own usage line and exits 0 (it used
+  # to reach cmd_self_test and come back as "unknown flag"). An unknown flag
+  # is still a usage error (exit 2), same as every other verb, and self-test
+  # refuses to run recursively from inside a suite that is already running
+  # (this suite exports OMABACKUP_IN_SUITE=1 at its own top) rather than
+  # forking the whole suite again.
+  check "self-test: --help is answered, not refused" env HOME="$FH" "$CLI" self-test --help
+  [[ $(env HOME="$FH" "$CLI" self-test --help >/dev/null 2>&1; echo $?) == 0 ]] \
+    && ok "self-test: --help exits 0" || bad "self-test: --help exit code"
+  has "self-test: --help prints the verb's own usage line" \
+    "$(env HOME="$FH" "$CLI" self-test --help 2>&1)" "self-test"
+  fails "self-test: unknown flag is refused" env HOME="$FH" "$CLI" self-test --bogus
+  [[ $(env HOME="$FH" "$CLI" self-test --bogus >/dev/null 2>&1; echo $?) == 2 ]] \
     && ok "self-test: unknown flag exits 2" || bad "self-test: unknown flag exit code"
   eq "self-test: refuses to run from inside a running suite" "$(obj self-test | jq -r .ok)" "false"
   has "the refusal names the guard" "$(obj self-test)" "recursively"
@@ -5078,8 +5086,28 @@ if group 105 "setup check is a doctor: one line per check, and a missing tool na
     "boolean,boolean,boolean,boolean,boolean,boolean,string"
 fi
 
-if group 106 "setup --remove says how to confirm, and a diverged remote is explained in words"; then
+if group 106 "every verb answers --help, --remove says how to confirm, and divergence is explained"; then
   mk_fixture g106; seed_home
+
+  # --help is intercepted by the dispatcher, so no lib/ verb parser ever sees
+  # it: restore, lint, snapshot, self-test, setup and open used to call it an
+  # unknown flag, and drift, status and health quietly ran the whole verb.
+  for v106 in setup snapshot drift status allow ignore resolve-gone push lint \
+              restore verify health timer self-test open version; do
+    h106=$(env HOME="$FH" "$CLI" "$v106" --help 2>&1); rc106=$?
+    eq "$v106 --help exits 0" "$rc106" "0"
+    has "$v106 --help names the verb" "$h106" "$v106"
+    has "$v106 --help is the usage text, not a run" "$h106" "Exit 0 ran, 1 refused or unhealthy, 2 usage."
+  done
+  eq "-h is the same door" \
+    "$(env HOME="$FH" "$CLI" restore -h 2>&1)" "$(env HOME="$FH" "$CLI" restore --help 2>&1)"
+  eq "--help under --json is still one JSON object" \
+    "$(env HOME="$FH" "$CLI" restore --help --json 2>/dev/null | jq -sc 'length')" "1"
+  has "and the object carries the verb's usage" \
+    "$(env HOME="$FH" "$CLI" restore --help --json 2>/dev/null | jq -r .usage)" "restore"
+  # An unknown verb is still an unknown verb, --help or no --help.
+  eq "a verb that does not exist is still usage (exit 2)" \
+    "$(env HOME="$FH" "$CLI" bogus --help >/dev/null 2>&1; echo $?)" "2"
 
   # setup --remove with nothing that can ask: the answer is no, and the
   # message has to say how to mean yes. It used to say only "cancelled".

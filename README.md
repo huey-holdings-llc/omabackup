@@ -403,7 +403,7 @@ config disagree (editing the config alone changes nothing until you rerun
 omabackup <verb> [args] [--json]
 
   setup [--data-repo DIR] [--remote URL] [--create-private] [--import DIR]
-        [--trust-remote] [--no-timers] [--yes]     first-run wizard
+        [--trust-remote] [--no-timers] [--yes]      first-run wizard
   setup check                                       doctor
   setup --remove [--yes]                            remove units, symlink, config
   snapshot [--dry-run] [--no-push]                  the daily pipeline
@@ -421,6 +421,10 @@ omabackup <verb> [args] [--json]
   open [--report|--remote]                          a terminal in the data repo, the drift report, or its page on GitHub
   version
 ```
+
+Every verb also accepts `--help` (or `-h`) as its first argument and answers
+with its own lines from the block above, so you never have to read the whole
+list to remember one verb's flags.
 
 Every verb accepts `--json`, which prints exactly one JSON object, even on
 failure. One caveat: `jq` is what builds that object, so on a machine without

@@ -26,35 +26,104 @@ for f in "$PLUGIN_DIR"/lib/*.sh; do
   . "$f"
 done
 
-usage() {
-  cat <<'EOF'
-omabackup <verb> [args] [--json]
+# VERB_TABLE: the one place each verb's name, its argument line and its
+# one-line summary live. usage() renders the whole table and `omabackup <verb>
+# --help` renders that verb's rows alone, so the two can never drift apart.
+# Three fields per row, in this order:
+#   names    the verbs this row documents, space separated (one row covers two)
+#   sig      the signature as printed; a newline starts a continuation line
+#   summary  the description, or "" for a row whose signature says it all
+# The two case statements below still list their verbs by hand; a later
+# structural change points them here too. notify-failure is deliberately
+# absent, as it was from the old text: it is the units' OnFailure= hook, not
+# something a person types.
+VERB_TABLE=(
+  "setup" "setup [--data-repo DIR] [--remote URL] [--create-private] [--import DIR]
+[--trust-remote] [--no-timers] [--yes]" "first-run wizard"
+  "setup" "setup check" "doctor"
+  "setup" "setup --remove [--yes]" "remove units, symlink, config"
+  "snapshot" "snapshot [--dry-run] [--no-push]" "the daily pipeline"
+  "drift" "drift" "report unbacked config"
+  "status" "status" "health (writes status.json)"
+  "allow ignore" "allow PATH | ignore PATH [REASON]" "triage a drift entry"
+  "resolve-gone" "resolve-gone PATH remove|optional" "fix a vanished entry"
+  "push" "push [--confirm [SIG]]" "push commits (repo edits need --confirm)"
+  "lint" "lint [--no-walk]" "list hygiene"
+  "restore" "restore --configs|--etc|--packages|--plugins|--services|--all [--apply]" ""
+  "verify" "verify" "restore fidelity check"
+  "health" "health" "login check (silent when ok)"
+  "timer" "timer pause|resume|status|run" ""
+  "self-test" "self-test [--real]" ""
+  "open" "open [--report|--remote]" "a terminal in the data repo, the drift report, or its page on GitHub"
+  "version" "version" ""
+)
+VERB_FOOTER="Every verb accepts --json. Exit 0 ran, 1 refused or unhealthy, 2 usage."
 
-  setup [--data-repo DIR] [--remote URL] [--create-private] [--import DIR]
-        [--trust-remote] [--no-timers] [--yes]     first-run wizard
-  setup check                                       doctor
-  setup --remove [--yes]                            remove units, symlink, config
-  snapshot [--dry-run] [--no-push]                  the daily pipeline
-  drift                                             report unbacked config
-  status                                            health (writes status.json)
-  allow PATH | ignore PATH [REASON]                 triage a drift entry
-  resolve-gone PATH remove|optional                 fix a vanished entry
-  push [--confirm [SIG]]                            push commits (repo edits need --confirm)
-  lint [--no-walk]                                  list hygiene
-  restore --configs|--etc|--packages|--plugins|--services|--all [--apply]
-  verify                                            restore fidelity check
-  health                                            login check (silent when ok)
-  timer pause|resume|status|run
-  self-test [--real]
-  open [--report|--remote]                          a terminal in the data repo, the drift report, or its page on GitHub
-  version
-Every verb accepts --json. Exit 0 ran, 1 refused or unhealthy, 2 usage.
-EOF
+# verb_row SIG SUMMARY: render one table row. The signature's first line is
+# indented two and its continuation lines eight, under the verb name; the
+# summary hangs off the last line at one fixed column.
+verb_row() {
+  local sig=$1 sum=$2 pre i
+  local -a rows=()
+  mapfile -t rows <<<"$sig"
+  local last=$(( ${#rows[@]} - 1 ))
+  for i in "${!rows[@]}"; do
+    if [[ $i -eq 0 ]]; then pre="  ${rows[i]}"; else pre="        ${rows[i]}"; fi
+    if [[ $i -eq $last && -n "$sum" ]]; then
+      printf '%-51s %s\n' "$pre" "$sum"
+    else
+      printf '%s\n' "$pre"
+    fi
+  done
+}
+
+# verb_rows [VERB]: every row, or only the rows that document VERB.
+verb_rows() {
+  local want=${1:-} i
+  for ((i = 0; i < ${#VERB_TABLE[@]}; i += 3)); do
+    if [[ -n "$want" ]]; then
+      case " ${VERB_TABLE[i]} " in *" $want "*) ;; *) continue ;; esac
+    fi
+    verb_row "${VERB_TABLE[i+1]}" "${VERB_TABLE[i+2]}"
+  done
+}
+
+# verb_known VERB: 0 when the table documents this verb.
+verb_known() {
+  local i
+  for ((i = 0; i < ${#VERB_TABLE[@]}; i += 3)); do
+    case " ${VERB_TABLE[i]} " in *" $1 "*) return 0 ;; esac
+  done
+  return 1
+}
+
+usage() {
+  printf 'omabackup <verb> [args] [--json]\n\n'
+  verb_rows
+  printf '%s\n' "$VERB_FOOTER"
+}
+
+# verb_help VERB: that verb's rows, plus the footer every verb shares. What
+# `omabackup <verb> --help` prints.
+verb_help() {
+  local t
+  t=$(verb_rows "$1"; printf '%s\n' "$VERB_FOOTER")
+  if [[ $JSON == 1 ]]; then jq -cn --arg u "$t" '{ok:true, usage:$u}'; else printf '%s\n' "$t"; fi
 }
 
 main() {
   local verb=${ARGS[0]:-help}
   [[ ${#ARGS[@]} -gt 0 ]] && ARGS=("${ARGS[@]:1}")
+  # --help (or -h) right after the verb is answered here, before config_load
+  # and before any lib/ parser can see it. restore, lint, snapshot, self-test,
+  # setup and open used to call it an unknown flag, and drift, status and
+  # health ran the whole verb instead of explaining themselves. The FIRST
+  # argument only: `omabackup ignore PATH --help` still records the reason a
+  # user typed rather than printing help at them.
+  if [[ ${#ARGS[@]} -gt 0 && ( "${ARGS[0]}" == --help || "${ARGS[0]}" == -h ) ]] && verb_known "$verb"; then
+    verb_help "$verb"
+    return 0
+  fi
   case "$verb" in
     help|-h|--help|version|setup) ;;
     # status and health must still report SOMETHING with no config at all --
