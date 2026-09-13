@@ -317,6 +317,34 @@ config_write() {
   jq . <<<"$1" > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$CONFIG_FILE"
 }
 
+# config_merge_write PATCH_JSON: write the config with PATCH_JSON applied on
+# top, defaults underneath, whether or not a config exists yet.
+#
+# Both of setup's repo paths (setup_data_repo and setup_import) had the same
+# five-line if/else, and getting either half wrong is quiet: a rerun that
+# replaces instead of merging loses remote.trusted, shellNag, timer.* and
+# setupPhase, and a first run that merges into a file that is not there writes
+# nothing but the patch.
+#
+# THE TWO OPERATORS ARE DIFFERENT ON PURPOSE. `$d * .` is a DEEP merge, so a
+# config carrying only timer.calendar keeps the shipped timer.jitter beside it.
+# The patch goes on with a SHALLOW `+`, so a patch naming an object replaces
+# that object outright. Every caller today patches one scalar; the operator is
+# the one setup_remote would need if it ever came through here, which is why
+# it stays the way it is rather than deepening to match the line before it.
+#
+# It is the WRITE side only. The bare `jq '.key=...' "$CONFIG_FILE"` patches
+# elsewhere in setup.sh are deliberately not folded in: they never apply
+# CONFIG_DEFAULTS, and routing them here would materialise every default into
+# the file the first time one of them ran.
+config_merge_write() {
+  if config_exists; then
+    config_write "$(jq -c --argjson d "$CONFIG_DEFAULTS" --argjson p "$1" '$d * . + $p' "$CONFIG_FILE")"
+  else
+    config_write "$(jq -cn --argjson d "$CONFIG_DEFAULTS" --argjson p "$1" '$d + $p')"
+  fi
+}
+
 # state_write_status JSON: atomic rename so the widget's FileView never sees a torn file.
 #
 # WARN AND SKIP on every step. This runs AFTER the verb has done its work and
@@ -526,6 +554,86 @@ data_repo_require() {
     || die "data repo marker has no usable format field: $DATA_REPO/.omabackup. The marker is committed, so restore it with: git -C $DATA_REPO checkout -- .omabackup"
   [[ "$fmt" -le 1 ]] || die "data repo format $fmt is newer than this version understands; upgrade omabackup"
   data_repo_assert_mode
+}
+
+# repo_assert_clean: the guards from the engine's snapshot header, verbatim in
+# intent. Stale index.lock self-heals only when fuser proves nobody holds it.
+#
+# It is called with the repo flock already held, and only there -- deleting an
+# abandoned index.lock is safe because being the sole instance is what proves
+# it abandoned (see the comment at the snapshot's take_lock).
+repo_assert_clean() {
+  [[ -d "$DATA_REPO/.git" ]] || die "$DATA_REPO is not a git repository"
+  if [[ -f "$DATA_REPO/.git/index.lock" ]] && [[ -z "$(find "$DATA_REPO/.git/index.lock" -mmin -5 2>/dev/null)" ]]; then
+    have fuser || die "stale .git/index.lock present but fuser is unavailable; refusing to guess. Remove it by hand if no git is running."
+    if fuser -s "$DATA_REPO/.git/index.lock" 2>/dev/null; then
+      die "another git process is using .git/index.lock; not touching it"
+    fi
+    warn "clearing an abandoned .git/index.lock (previous run was killed?)"
+    rm -f "$DATA_REPO/.git/index.lock"
+  fi
+  if [[ -f "$DATA_REPO/.git/MERGE_HEAD" || -f "$DATA_REPO/.git/REBASE_HEAD" || -d "$DATA_REPO/.git/rebase-merge" || -d "$DATA_REPO/.git/rebase-apply" ]]; then
+    die "repo is mid-merge/rebase; resolve it first, then re-run"
+  fi
+  git -C "$DATA_REPO" symbolic-ref --short -q HEAD >/dev/null || die "detached HEAD; check out main in $DATA_REPO first"
+}
+repo_branch() { git -C "$DATA_REPO" symbolic-ref --short -q HEAD; }
+
+# repo_own_edits: every edit in the data repo that is not the snapshot's own
+# output, one NUL-terminated path each, unsorted. This is THE list: `status`
+# counts it as uncommitted and the Commit button (cmd_push) commits it. They
+# used to be two lists, status counting everything outside the snapshot's
+# paths and the button staging five named files, and an edit in the first and
+# not the second was a count nothing on screen could clear. Two files read it
+# for that reason, which is why it sits beside the other repo questions here
+# rather than inside either of them.
+#
+# --untracked-files=all names an untracked directory file by file, which is
+# what a confirm dialog has to show. In -z porcelain a rename or copy carries
+# its source as a second record, whichever column says R or C; both paths are
+# the edit. A path under the snapshot's own turf (the source of a `git mv` out
+# of home/) is dropped: the button must never stage the snapshot's output.
+repo_own_edits() {
+  local rec p src=0
+  while IFS= read -r -d '' rec; do
+    if (( src )); then
+      src=0; p=$rec
+    else
+      p=${rec:3}
+      [[ "${rec:0:2}" == *[RC]* ]] && src=1
+    fi
+    case "$p" in home/*|etc/*|manifests/*|modes.txt|'') continue ;; esac
+    printf '%s\0' "$p"
+  done < <(git -C "$DATA_REPO" status --porcelain -z --untracked-files=all \
+             -- . ':!home' ':!etc' ':!manifests' ':!modes.txt' 2>/dev/null)
+}
+
+# own_edits_sig PATH...: the signature of one sorted list of own edits.
+# status.json carries it and the popup hands it back with --confirm, so the
+# button commits the list the person saw or nothing. It is computed from the
+# list already in hand, never from a second git call: a file saved between
+# two calls would be in the signature and not on screen.
+own_edits_sig() {
+  if (( $# )); then printf '%s\0' "$@"; fi | cksum | cut -d' ' -f1
+}
+
+# git_ident_args: fill GIT_IDENT_ARGS with the `-c user.*` a commit needs on a
+# machine that has no git identity at all, and leave it EMPTY on a machine
+# that has one -- the user's own name and address must never be overridden.
+# A fresh Omarchy install has no ~/.gitconfig, so without this every commit
+# this tool makes dies with "Author identity unknown". One helper because
+# every commit path needs it: the snapshot, both setup paths and the widget's
+# push button, which had it in one place only.
+#   git_ident_args
+#   git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit ...
+# shellcheck disable=SC2034  # GIT_IDENT_ARGS: filled here, read by the commit sites in snapshot/setup/widget
+GIT_IDENT_ARGS=()
+git_ident_args() {
+  GIT_IDENT_ARGS=()
+  local email
+  email=$(git -C "$DATA_REPO" config user.email 2>/dev/null || true)
+  # shellcheck disable=SC2034  # read by the commit sites in lib/snapshot.sh, lib/setup.sh and lib/widget.sh
+  [[ -n "$email" ]] || GIT_IDENT_ARGS=(-c user.name=OmaBackup -c user.email=omabackup@localhost)
 }
 
 # data_repo_gitignore_sync: bring an EXISTING repo's .gitignore up to the set

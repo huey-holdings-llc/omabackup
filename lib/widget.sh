@@ -65,15 +65,6 @@ rel_from_tilde() {
   printf '%s' "$p"
 }
 
-# DRIFT_TARGET_DIR: 1 when the row (or folder) the gate below matched names a
-# DIRECTORY, 0 when it names a single file. Set by drift_names_target, read by
-# cmd_ignore. The trailing slash used to carry this, and it cannot any more:
-# the popup sends the path exactly as the JSON gives it, and the JSON strips
-# the slash. Without this, ignoring a collapsed ">2000 files" row wrote a bare
-# entry, which by drift-ignore's own documented semantics means "look inside",
-# so the next scan enumerated the whole tree the row existed to collapse.
-DRIFT_TARGET_DIR=0
-
 # widget_no_glob_chars PATH: 0 when PATH holds none of the glob characters an
 # allowlist or drift-ignore entry is MATCHED with AND cannot be spelled as a
 # literal.
@@ -109,63 +100,6 @@ widget_no_glob_chars() {
 widget_escape_glob() {
   local p=$1
   printf '%s' "${p//\[/[[]}"
-}
-
-# drift_has WANT TYPES: does the current drift report name this exact path
-# under one of the pipe-separated TYPES? The line is split by
-# drift_line_split (lib/drift.sh), the same function that builds the JSON the
-# popup renders: this gate and the row the user clicked must recover the same
-# path from the same line, or a crafted filename lets one click widen the
-# allowlist to a directory the scan never reported.
-#
-# The comparison is made on both sides with one trailing slash stripped, which
-# is exactly what drift_items_json does before the path reaches the widget
-# ("a directory's trailing / is report display flourish"). It used to compare
-# the slashless argument the popup sends against the slashed report line, so
-# EVERY whole-directory row -- a new ~/.config/<app>/, a new dot-directory, a
-# tree collapsed for being over the scan cap, which is most of what a real
-# machine reports -- refused both buttons with "the drift report does not name
-# that path; refresh and retry", and refreshing never helped.
-drift_has() {
-  local want=$1 types=$2 line
-  local w=${want%/}
-  while IFS= read -r line; do
-    drift_line_split "$line" || continue
-    [[ "${DRIFT_PATH%/}" == "$w" ]] || continue
-    # THE REPORT'S OWN SLASH IS THE ONLY AUTHORITY. Taking the argument's as
-    # well meant `allow '~/.config/foo.conf/'` matched a FILE row and then
-    # wrote a subtree ignore for a path that is not a directory; before Wave C
-    # that spelling was refused, and it goes back to being refused.
-    case "$want" in */) [[ "$DRIFT_PATH" == */ ]] || continue ;; esac
-    case "$DRIFT_PATH" in */) DRIFT_TARGET_DIR=1 ;; esac
-    return 0
-  done < <(grep -E "^($types)" "$DATA_REPO/manifests/drift.txt" 2>/dev/null)
-  return 1
-}
-
-# drift_has_under WANT TYPES: a "~/dir/" target is legitimate when at least
-# one drifting path lies UNDER it. Depth 1 ("~/.config/") is always refused:
-# one click must never be able to silence an entire report.
-drift_has_under() {
-  local want=$1 types=$2 line
-  case "${want#\~/}" in */*/*) ;; *) return 1 ;; esac    # "seg/" is depth 1
-  while IFS= read -r line; do
-    drift_line_split "$line" || continue
-    # Same normalisation as drift_has: a collapsed child row ("~/a/b/c/")
-    # lies under "~/a/b/" whether or not its own slash survived the report.
-    case "${DRIFT_PATH%/}" in "$want"?*) DRIFT_TARGET_DIR=1; return 0 ;; esac
-  done < <(grep -E "^($types)" "$DATA_REPO/manifests/drift.txt" 2>/dev/null)
-  return 1
-}
-
-# drift_names_target TILDE TYPES: shared gate for allow/ignore targets --
-# an exact drift line, or a folder prefix with drifting children.
-drift_names_target() {
-  local tilde=$1 types=$2
-  DRIFT_TARGET_DIR=0
-  drift_has "$tilde" "$types" && return 0
-  case "$tilde" in */) drift_has_under "$tilde" "$types" && return 0 ;; esac
-  return 1
 }
 
 # edited_with_lint_gate FILE EDITOR: back FILE up, run EDITOR (a shell
@@ -245,7 +179,7 @@ cmd_allow() {
     else
       msg="the drift report does not name that path (or the folder is too broad); refresh and retry"
     fi
-    widget_reply_fail "$msg" || return 1
+    widget_reply_fail "$msg"; return 1
   fi
   rel=${rel%/}
   local entry; entry=$(widget_escape_glob "$rel")
@@ -456,7 +390,7 @@ push_nothing_ahead() {
 # and require --confirm, then stage EXACTLY those paths, literally (never -A,
 # never a glob), and commit them.
 #
-# The set is repo_own_edits (lib/health.sh), the same list status counts as
+# The set is repo_own_edits (lib/config.sh), the same list status counts as
 # uncommitted. It used to be five named list files while status counted
 # everything, so an edit outside the five was an "N uncommitted" the button
 # ran against and never moved. Every file status reports as an uncommitted

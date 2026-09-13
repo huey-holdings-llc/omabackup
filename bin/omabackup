@@ -26,37 +26,46 @@ for f in "$PLUGIN_DIR"/lib/*.sh; do
   . "$f"
 done
 
-# VERB_TABLE: the one place each verb's name, its argument line and its
-# one-line summary live. usage() renders the whole table and `omabackup <verb>
-# --help` renders that verb's rows alone, so the two can never drift apart.
-# Three fields per row, in this order:
+# VERB_TABLE: the one place each verb's name, its argument line, its one-line
+# summary and its config-load mode live. usage() renders the whole table,
+# `omabackup <verb> --help` renders that verb's rows alone, and the two case
+# statements in main() read the load mode from here, so none of them can drift
+# apart. Four fields per row, in this order:
 #   names    the verbs this row documents, space separated (one row covers two)
 #   sig      the signature as printed; a newline starts a continuation line
 #   summary  the description, or "" for a row whose signature says it all
-# The two case statements below still list their verbs by hand; a later
-# structural change points them here too. notify-failure is deliberately
-# absent, as it was from the old text: it is the units' OnFailure= hook, not
-# something a person types.
+#   load     what the verb needs from the config before it runs:
+#              none     it runs without one (setup writes it; version reads none)
+#              plain    config_load "$verb", the ordinary case
+#              special  it has to report something with no config at all, so
+#                       main() spells that arm out by name below
+# notify-failure is deliberately absent, as it was from the old text: it is the
+# units' OnFailure= hook, not something a person types, and leaving it out of
+# the table is also what keeps `omabackup notify-failure --help` reaching its
+# own usage line instead of a row rendered from here.
 VERB_TABLE=(
   "setup" "setup [--data-repo DIR] [--remote URL] [--create-private] [--import DIR]
-[--trust-remote] [--no-timers] [--yes]" "first-run wizard"
-  "setup" "setup check" "doctor"
-  "setup" "setup --remove [--yes]" "remove units, symlink, config"
-  "snapshot" "snapshot [--dry-run] [--no-push] [--accept-allowlist]" "the daily pipeline"
-  "drift" "drift" "report unbacked config"
-  "status" "status" "health (writes status.json)"
-  "allow ignore" "allow PATH | ignore PATH [REASON]" "triage a drift entry"
-  "resolve-gone" "resolve-gone PATH remove|optional" "fix a vanished entry"
-  "push" "push [--confirm [SIG]]" "push commits (repo edits need --confirm)"
-  "lint" "lint [--no-walk]" "list hygiene"
-  "restore" "restore --configs|--etc|--packages|--plugins|--services|--all [--apply]" ""
-  "verify" "verify" "restore fidelity check"
-  "health" "health" "login check (silent when ok)"
-  "timer" "timer pause|resume|status|run" ""
-  "self-test" "self-test [--real]" ""
-  "open" "open [--report|--remote]" "a terminal in the data repo, the drift report, or its page on GitHub"
-  "version" "version" ""
+[--trust-remote] [--no-timers] [--yes]" "first-run wizard" "none"
+  "setup" "setup check" "doctor" "none"
+  "setup" "setup --remove [--yes]" "remove units, symlink, config" "none"
+  "snapshot" "snapshot [--dry-run] [--no-push] [--accept-allowlist]" "the daily pipeline" "plain"
+  "drift" "drift" "report unbacked config" "plain"
+  "status" "status" "health (writes status.json)" "special"
+  "allow ignore" "allow PATH | ignore PATH [REASON]" "triage a drift entry" "plain"
+  "resolve-gone" "resolve-gone PATH remove|optional" "fix a vanished entry" "plain"
+  "push" "push [--confirm [SIG]]" "push commits (repo edits need --confirm)" "plain"
+  "lint" "lint [--no-walk]" "list hygiene" "plain"
+  "restore" "restore --configs|--etc|--packages|--plugins|--services|--all [--apply]" "" "plain"
+  "verify" "verify" "restore fidelity check" "plain"
+  "health" "health" "login check (silent when ok)" "special"
+  "timer" "timer pause|resume|status|run" "" "plain"
+  "self-test" "self-test [--real]" "" "plain"
+  "open" "open [--report|--remote]" "a terminal in the data repo, the drift report, or its page on GitHub" "plain"
+  "version" "version" "" "none"
 )
+# VERB_FIELDS: how many fields one VERB_TABLE row occupies. Every walk below
+# steps by it, so adding a field is one edit here and one per row.
+VERB_FIELDS=4
 VERB_FOOTER="Every verb accepts --json. Exit 0 ran, 1 refused or unhealthy, 2 usage."
 
 # verb_row SIG SUMMARY: render one table row. The signature's first line is
@@ -77,14 +86,38 @@ verb_row() {
   done
 }
 
+# verb_names_have NAMES VERB: 0 when VERB is one of the space-separated names
+# in a row's first field. The three walkers below all ask this question, and
+# they ask it here so there is one answer to get right.
+#
+# EXACT EQUALITY AGAINST EACH NAME, never a substring test over the joined
+# field. `[[ " $names " == *" $verb "* ]]` was the obvious spelling and it
+# accepted the field itself: `omabackup 'allow ignore'` matched the row whose
+# names are "allow ignore", so a malformed verb was answered as a known one.
+# It printed that row for `--help` and exited 0, and without `--help` it got as
+# far as looking for a `cmd_allow ignore` function and failing at exit 1. A
+# verb this tool does not have is a usage error, exit 2, whatever it is spelled
+# like.
+#
+# The verb is DATA, so it stays on the quoted side throughout: as a case
+# pattern it was glob text, and `omabackup '*' --help` matched every row.
+# `read -ra` does the splitting, which splits on the field's spaces without
+# letting a name be expanded as a pathname on the way past.
+verb_names_have() {
+  local -a names=()
+  local alias
+  read -ra names <<<"$1"
+  for alias in ${names[@]+"${names[@]}"}; do
+    [[ "$alias" == "$2" ]] && return 0
+  done
+  return 1
+}
+
 # verb_rows [VERB]: every row, or only the rows that document VERB.
 verb_rows() {
   local want=${1:-} i
-  for ((i = 0; i < ${#VERB_TABLE[@]}; i += 3)); do
-    # The verb is DATA. As a case pattern it was glob text, so `omabackup '*'
-    # --help` matched every row; inside [[ ]] the quoted side is a literal and
-    # only the bare wildcards are pattern.
-    if [[ -n "$want" ]] && [[ " ${VERB_TABLE[i]} " != *" $want "* ]]; then continue; fi
+  for ((i = 0; i < ${#VERB_TABLE[@]}; i += VERB_FIELDS)); do
+    if [[ -n "$want" ]] && ! verb_names_have "${VERB_TABLE[i]}" "$want"; then continue; fi
     verb_row "${VERB_TABLE[i+1]}" "${VERB_TABLE[i+2]}"
   done
 }
@@ -92,10 +125,24 @@ verb_rows() {
 # verb_known VERB: 0 when the table documents this verb.
 verb_known() {
   local i
-  for ((i = 0; i < ${#VERB_TABLE[@]}; i += 3)); do
-    # Quoted left side, so the verb is a literal and not a glob: as a case
-    # pattern, `omabackup '*' --help` matched every row and exited 0.
-    if [[ " ${VERB_TABLE[i]} " == *" $1 "* ]]; then return 0; fi
+  for ((i = 0; i < ${#VERB_TABLE[@]}; i += VERB_FIELDS)); do
+    if verb_names_have "${VERB_TABLE[i]}" "$1"; then return 0; fi
+  done
+  return 1
+}
+
+# verb_load_mode VERB: the load field of the first row documenting VERB (the
+# three setup rows all say the same thing). Returns 1, leaving VERB_LOAD_MODE
+# empty, when no row documents it -- callers ask only after verb_known has said
+# yes. The answer lands in a global rather than on stdout so that reading it
+# costs nothing: a command substitution here would fork a subshell on every
+# ordinary verb, once per run, for one word out of a table already in memory.
+VERB_LOAD_MODE=""
+verb_load_mode() {
+  local i
+  VERB_LOAD_MODE=""
+  for ((i = 0; i < ${#VERB_TABLE[@]}; i += VERB_FIELDS)); do
+    if verb_names_have "${VERB_TABLE[i]}" "$1"; then VERB_LOAD_MODE=${VERB_TABLE[i+3]}; return 0; fi
   done
   return 1
 }
@@ -178,20 +225,32 @@ main() {
         local nv; nv=$( (config_load >/dev/null 2>&1 && printf '%s' "${CFG_NOTIFY:-true}") || true )
         if [[ "$nv" == false ]]; then CFG_NOTIFY=false; fi
       fi ;;
-    # The verb is passed through: config_load validates the same way for all
-    # of them and uses it only to decide whether a notice about the allowlist
-    # floor is worth printing to a caller who did not ask about the floor.
-    snapshot|drift|allow|ignore|resolve-gone|push|lint|restore|verify|timer|self-test|open) config_load "$verb" ;;
-    *) usage_die "unknown verb '$verb'" ;;
+    # Everything else the table knows about, and the table's load field decides.
+    # A `plain` verb is passed through: config_load validates the same way for
+    # all of them and uses the verb only to decide whether a notice about the
+    # allowlist floor is worth printing to a caller who did not ask about the
+    # floor. A `none` verb runs without a config and a `special` one reports
+    # something of its own when there is none, which is why both kinds are
+    # named in the arms above rather than derived here.
+    *)
+      verb_known "$verb" || usage_die "unknown verb '$verb'"
+      verb_load_mode "$verb"
+      if [[ "$VERB_LOAD_MODE" == plain ]]; then config_load "$verb"; fi ;;
   esac
   case "$verb" in
     help|-h|--help) if [[ $JSON == 1 ]]; then jq -cn --arg u "$(usage)" '{ok:true, usage:$u}'; else usage; fi ;;
     version) if [[ $JSON == 1 ]]; then jq -cn --arg v "$VERSION" '{version:$v}'; else echo "$VERSION"; fi ;;
-    setup|snapshot|drift|status|allow|ignore|resolve-gone|push|lint|restore|verify|health|timer|self-test|open|notify-failure)
+    # Every other verb the table documents, plus the one it deliberately does
+    # not: cmd_<verb>, with the dashes that cannot be in a function name turned
+    # into underscores. The guard below cannot fire today, since the case
+    # statement above already ended the process on a verb the table does not
+    # know; it is kept so that this case stays correct on its own, rather than
+    # only because of what the one before it happens to do.
+    *)
+      verb_known "$verb" || [[ $verb == notify-failure ]] || usage_die "unknown verb '$verb'"
       local fn="cmd_${verb//-/_}"
       declare -F "$fn" >/dev/null || die "verb '$verb' is not implemented yet"
       "$fn" "${ARGS[@]}" ;;
-    *) usage_die "unknown verb '$verb'" ;;
   esac
 }
 main

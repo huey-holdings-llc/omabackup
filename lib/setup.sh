@@ -80,6 +80,15 @@ setup_phase() { config_write "$(jq --arg p "$1" '.setupPhase=$p' "$CONFIG_FILE")
 # and imported rank the same (either means the repo layout step is done); an
 # empty or unknown phase ranks below everything, so a fresh install always
 # runs every step.
+#
+# ONE comparison in the whole codebase uses these ranks: the `scanned` test in
+# cmd_setup that decides whether to run the first drift scan again. Ranks 3 and
+# up (remote, units, link, nag, snapshot, done) are stamped so a reader of the
+# config can see how far a run got, and nothing branches on them; the
+# first-snapshot step a few lines below that test deliberately asks
+# manifests/.last-run instead, for the reason written there. Keep every rank
+# anyway: a phase dropped from this case lands on the `*` arm and ranks 0, so a
+# config stamped `done` would read as a fresh install and rescan every rerun.
 setup_phase_rank() {
   case "$1" in
     seeded|imported) echo 1 ;;
@@ -143,12 +152,8 @@ setup_data_repo() {
   # says this directory is ours, never before.
   # A rerun MERGES into whatever config already exists (remote.trusted,
   # shellNag, timer.* and setupPhase must all survive); only a first-ever
-  # setup starts clean from CONFIG_DEFAULTS.
-  if config_exists; then
-    config_write "$(jq -c --argjson d "$CONFIG_DEFAULTS" --arg r "$dir" '$d * . + {dataRepo:$r}' "$CONFIG_FILE")"
-  else
-    config_write "$(jq -cn --arg r "$dir" --argjson d "$CONFIG_DEFAULTS" '$d + {dataRepo:$r}')"
-  fi
+  # setup starts clean from CONFIG_DEFAULTS. config_merge_write is both cases.
+  config_merge_write "$(jq -cn --arg r "$dir" '{dataRepo:$r}')"
   # shellcheck disable=SC2034  # CFG_JSON: read by cfg() (lib/config.sh), not this file
   CFG_JSON=$(cat "$CONFIG_FILE")
   DATA_REPO=$dir
@@ -285,11 +290,8 @@ setup_import() {
   # An imported repo was cloned by someone else, under whatever umask they
   # had, and this path chmod'd nothing at all, so all of .git stayed readable.
   # setup_marker below tightens it, once the marker says the repo is ours.
-  if config_exists; then
-    config_write "$(jq -c --argjson d "$CONFIG_DEFAULTS" --arg r "$dir" '$d * . + {dataRepo:$r}' "$CONFIG_FILE")"
-  else
-    config_write "$(jq -cn --arg r "$dir" --argjson d "$CONFIG_DEFAULTS" '$d + {dataRepo:$r}')"
-  fi
+  # Same merge-or-seed as setup_data_repo, and the same one helper.
+  config_merge_write "$(jq -cn --arg r "$dir" '{dataRepo:$r}')"
   # shellcheck disable=SC2034  # CFG_JSON: read by cfg() (lib/config.sh), not this file
   CFG_JSON=$(cat "$CONFIG_FILE")
   DATA_REPO=$dir

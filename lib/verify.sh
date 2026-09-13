@@ -113,17 +113,9 @@ cmd_verify() {
   # retargeted for the call and the restore floor lifted -- this is proving
   # the backup restores, not gating on how much of it there is.
   local live_home="$HOME"
-  # RESTORE_WOULD, RESTORE_WROTE, RESTORE_BACKED_UP and RESTORE_SKIPPED are
-  # read by restore_stage_configs in lib/restore.sh, not this file.
-  # shellcheck disable=SC2034
-  RESTORE_WOULD=()
-  # shellcheck disable=SC2034
-  RESTORE_WROTE=()
-  # shellcheck disable=SC2034
-  RESTORE_BACKED_UP=()
-  # shellcheck disable=SC2034
-  RESTORE_SKIPPED=()
-  RESTORE_FAILURES=0
+  # The accumulators restore_stage_configs appends to belong to lib/restore.sh
+  # and are reset by it; this file only reads RESTORE_FAILURES afterwards.
+  restore_reset_accumulators
   HOME="$R"
   # Floor of 1, passed as the stage's second ARGUMENT. This used to be
   # OMABACKUP_MIN_RESTORE=1 set in-process and put back afterwards, which is
