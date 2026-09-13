@@ -206,12 +206,11 @@ config_load() {
   # script (`daily|; s|ExecStart=.*|ExecStart=...|` rewrites the unit that runs
   # daily as the user). The substitution no longer uses sed, but a value
   # systemd cannot parse still produces a unit systemd refuses to load, which
-  # is a backup that silently stops. Ask systemd itself; it is the only
-  # authority on its own grammar. Skipped, loudly, where systemd-analyze is not
-  # installed -- refusing every verb over a missing diagnostic tool would be a
-  # worse failure than the one being prevented.
-  # The character class runs UNCONDITIONALLY, before and regardless of
-  # systemd-analyze. Two reasons it cannot be left to systemd:
+  # is a backup that silently stops.
+  #
+  # This character class is the cheap half of that guard and it runs
+  # UNCONDITIONALLY, on every verb that loads config, because it forks
+  # nothing and it is the one check that cannot be left to systemd:
   #   * a backslash is not systemd syntax but IS awk syntax -- `awk -v x=…`
   #     interprets escape sequences in the value, so `daily\nExecStart=…`
   #     became a real newline and a second directive inside the unit, with
@@ -220,9 +219,12 @@ config_load() {
   #   * a `%` is a systemd unit specifier (%h, %i), which systemd-analyze
   #     accepts in a calendar string but which means something else entirely
   #     once it is inside a unit file.
-  # A missing systemd-analyze is now a health problem rather than only a warn,
-  # so "not validated" is visible in the widget instead of scrolling past in a
-  # timer's journal.
+  # Asking systemd itself whether the rest of the value is a real OnCalendar
+  # expression or time span means forking systemd-analyze, which used to
+  # happen here too -- on every verb, including the widget's own status
+  # refresh, for a pair of values only `setup` ever consumes. That check now
+  # lives in setup_units (lib/setup.sh), right before the value reaches a unit
+  # file, and setup_check reports it as a doctor line.
   local tv
   for tv in "$CFG_TIMER_CALENDAR" "$CFG_TIMER_JITTER"; do
     case "$tv" in
@@ -230,16 +232,6 @@ config_load() {
         die "config: timer.calendar and timer.jitter must not contain a backslash, a newline or a percent sign: $tv" ;;
     esac
   done
-  CFG_TIMER_VALIDATED=1
-  if have systemd-analyze; then
-    systemd-analyze calendar -- "$CFG_TIMER_CALENDAR" >/dev/null 2>&1 \
-      || die "config: timer.calendar is not a systemd OnCalendar expression: $CFG_TIMER_CALENDAR"
-    systemd-analyze timespan -- "$CFG_TIMER_JITTER" >/dev/null 2>&1 \
-      || die "config: timer.jitter is not a systemd time span: $CFG_TIMER_JITTER"
-  else
-    CFG_TIMER_VALIDATED=0
-    warn "systemd-analyze not found: timer.calendar and timer.jitter were not validated"
-  fi
   export DATA_REPO STAGE
 }
 

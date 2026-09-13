@@ -116,6 +116,18 @@ unsorted copy is still real content and gets replaced by its sorted
 equivalent; every run after that is back to committing only on a real
 change.
 
+The widget's status refresh forks two fewer processes. `timer.calendar` and
+`timer.jitter` used to be checked against systemd's own grammar
+(`systemd-analyze calendar` and `systemd-analyze timespan`) on every verb
+that loads config, including that refresh, for a pair of values only `setup`
+ever consumes. The check now happens where the value is used: in `setup`,
+before it writes the unit files, with the same refusal as before for a value
+systemd cannot parse, and `setup check` reports it as a doctor line (`ok`,
+or `warn` when `systemd-analyze` itself is missing, or `FAIL` naming the
+fix) instead. `status` still catches the cheap, unconditional part of the
+same guard, the backslash, newline and percent sign a value must never
+carry, which forks nothing.
+
 ### Fixed
 
 A data repo the engine cannot read is recorded, not just refused. `status`
