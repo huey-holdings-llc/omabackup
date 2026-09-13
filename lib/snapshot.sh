@@ -133,30 +133,33 @@ allowlist_unresolved() {
 # rename the entries once, then delete 20 of 25, and the run drains the backup
 # where the same repo refused before the rename.
 #
-# The listing goes through a file, not a process substitution, so a `git log`
-# that fails can still be seen. It used to vanish: the loop read nothing, every
-# entry answered "never backed up", and the guard went quiet on exactly the run
-# that could not prove anything. Fail closed instead.
+# A `git log` THAT FAILS HAS TO BE SEEN. It used to disappear into a process
+# substitution: the loop read nothing, every entry answered "never backed up",
+# and the guard went quiet on exactly the run that could not prove anything.
+# Fail closed instead.
+#
+# NO SCRATCH FILE. The listing used to go through a mktemp under $STATE_DIR,
+# and the guard died when it could not write one, so a state directory that
+# takes no new files stopped a backup over a file the guard did not need. It
+# cannot be held in a variable either: the records are NUL-delimited (a
+# filename may contain a newline, and git would otherwise quote it into
+# something that is not the path) and command substitution drops NUL bytes.
+# So the status travels with the data instead. The producer prints one extra
+# record of its own only when `git log` succeeded, and every real record is a
+# path under home/, so no filename can forge it.
 snapshot_ever_added_load() {
   EVER_ADDED=()
-  local p hist
-  # Guarded, and with the same message shape as the mktemp below it: under
-  # `set -e` a failing mkdir kills the process with no line of its own, so a
-  # read-only or full $STATE_DIR ended a snapshot with nothing said about why.
-  # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
-  mkdir -m 700 -p "$STATE_DIR" \
-    || die "cannot create $STATE_DIR; refusing to judge vanished entries"
-  hist=$(mktemp "$STATE_DIR/.ever-added.XXXXXX") \
-    || die "cannot write scratch under $STATE_DIR; refusing to judge vanished entries"
-  if ! git -C "$DATA_REPO" log --no-renames --diff-filter=A --name-only --format= -z -- home/ >"$hist" 2>/dev/null; then
-    rm -f "$hist"
-    die "cannot read the repo history; refusing to judge vanished entries. Run: git -C $DATA_REPO fsck"
-  fi
+  local p walked=0
   while IFS= read -r -d '' p; do
-    [[ -n "$p" ]] || continue
-    EVER_ADDED+=("$p")
-  done < <(sort -zu "$hist")
-  rm -f "$hist"
+    case "$p" in
+      home/*) EVER_ADDED+=("$p") ;;
+      git-log-walked) walked=1 ;;
+    esac
+  done < <( { if git -C "$DATA_REPO" log --no-renames --diff-filter=A --name-only --format= -z -- home/ 2>/dev/null; then
+                printf 'git-log-walked\0'
+              fi; } | sort -zu )
+  [[ "$walked" == 1 ]] \
+    || die "cannot read the repo history; refusing to judge vanished entries. Run: git -C $DATA_REPO fsck"
 }
 
 # snapshot_entry_was_backed_up ENTRY: 0 when this data repo has ever held

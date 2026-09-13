@@ -168,6 +168,12 @@ adding to it, so whichever ran second disarmed the first and would have left
 its directory in the state directory for good. Both register with one
 handler now, and a Ctrl-C or a unit stop cleans up after `verify` too.
 
+The vanish guard no longer writes a scratch file. It wrote the repo's
+history listing to a temporary file under the state directory and refused
+the run when it could not, so a state directory that takes no new files
+stopped a backup over a file the guard did not need. A `git log` that cannot
+walk the history still refuses the run, as it must.
+
 The popup's Commit button now commits every edit it counts. `status`
 counted every uncommitted change in the data repo outside the snapshot's own
 files, but the button staged only the four lists and `.gitignore`, so
