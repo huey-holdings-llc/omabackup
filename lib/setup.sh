@@ -432,6 +432,30 @@ setup_units() {
   mkdir -p "$dst"
   local f cal jit
   cal=$(cfg timer.calendar); jit=$(cfg timer.jitter)
+  # timer.calendar and timer.jitter reach systemd's own grammar checker here,
+  # the one place that actually writes them into a unit file. This forked
+  # systemd-analyze on every verb that loaded config (config_load,
+  # lib/config.sh), including the widget's own status refresh, for a pair of
+  # values only setup ever consumes.
+  #
+  # FAIL CLOSED: no systemd-analyze means neither value can be proved valid,
+  # so setup now refuses to write the unit files rather than writing them
+  # unvalidated and warning. A warn-and-proceed here used to leave nothing
+  # for any later verb to report: config_load never ran systemd-analyze
+  # either (that fork moved here, this PR), and `setup check` is not
+  # something the widget's status refresh runs on its own, so a bad calendar
+  # could sail into a real unit file with no fault anywhere `status` reads.
+  # `setup --no-timers` is the way to finish setup on a machine with no
+  # systemd-analyze: it never calls this function at all (cmd_setup), so
+  # there is nothing here left unvalidated for it to warn about.
+  if have systemd-analyze; then
+    systemd-analyze calendar -- "$cal" >/dev/null 2>&1 \
+      || die "config: timer.calendar is not a systemd OnCalendar expression: $cal"
+    systemd-analyze timespan -- "$jit" >/dev/null 2>&1 \
+      || die "config: timer.jitter is not a systemd time span: $jit"
+  else
+    die "systemd-analyze not found: timer.calendar and timer.jitter cannot be validated, so no unit file will be written unvalidated. Fix: pacman -S systemd, or run setup --no-timers to finish setup without a timer"
+  fi
   # `awk -v x=VALUE` runs the value through awk's own escape processing, so a
   # literal backslash in it is not a backslash by the time the program sees
   # it: `daily\nExecStart=/bin/sh -c …` arrived as a real newline and a second
@@ -563,11 +587,38 @@ setup_check() {
   [[ $have_git == true && $have_rsync == true && $have_jq == true && $have_flock == true ]] || ok=false
 
   local cfg=false repo=false marker=false units_s=false units_t=false url="" kind=none trusted=false
+  # timer.calendar and timer.jitter are only ever consumed here and in
+  # setup_units, so this doctor is where their systemd grammar is checked:
+  # config_load's job is just the character class that guards unit-file
+  # injection (lib/config.sh), which runs on every verb and forks nothing.
+  # cal_ok/jit_ok are tri-state JSON literals, not booleans: "null" (nothing
+  # checked -- no config, or no systemd-analyze to check it with), or
+  # "true"/"false" once systemd-analyze has actually answered. A consumer of
+  # --json can then tell "checked and fine" from "not checked at all"
+  # without also reading timer.systemdAnalyze to disambiguate a bare true.
+  #
+  # Missing systemd-analyze is FAIL, not warn: setup_units (below in this
+  # file) now refuses to write a unit file it cannot validate, so a machine
+  # with no systemd-analyze cannot finish a timers setup at all, and this
+  # doctor has to say so at the same severity, not shrug it off as a
+  # cosmetic gap. cal_ok/jit_ok stay null either way -- neither value was
+  # actually checked -- the FAIL comes from ok=false and the line's own
+  # level below.
+  local have_sysd_analyze=false cal_ok=null jit_ok=null
   if config_exists; then
     cfg=true
     config_load
     [[ -d "$DATA_REPO/.git" ]] && repo=true
     if [[ -f "$DATA_REPO/.omabackup" ]]; then marker=true; else ok=false; fi
+    if have systemd-analyze; then
+      have_sysd_analyze=true
+      systemd-analyze calendar -- "$CFG_TIMER_CALENDAR" >/dev/null 2>&1 \
+        && cal_ok=true || { cal_ok=false; ok=false; }
+      systemd-analyze timespan -- "$CFG_TIMER_JITTER" >/dev/null 2>&1 \
+        && jit_ok=true || { jit_ok=false; ok=false; }
+    else
+      ok=false
+    fi
     url=$(remote_origin_url)
     # cfg()'s "getpath(...) // empty" treats a JSON false the same as
     # missing, so CFG_REMOTE_TRUSTED is empty (not "false") when the config
@@ -591,13 +642,20 @@ setup_check() {
     --argjson systemd "$have_systemd" \
     '{git:$git, rsync:$rsync, jq:$jq, gum:$gum, gitleaks:$gitleaks, flock:$flock, systemd:$systemd}')
 
+  local timer_json
+  timer_json=$(jq -cn \
+    --argjson analyze "$have_sysd_analyze" --argjson cal "$cal_ok" --argjson jit "$jit_ok" \
+    '{systemdAnalyze:$analyze, calendarOk:$cal, jitterOk:$jit}')
+
   local j
   j=$(jq -cn \
     --argjson ok "$ok" --argjson tools "$tools_json" --argjson cfg "$cfg" --argjson repo "$repo" \
     --argjson marker "$marker" --argjson us "$units_s" --argjson ut "$units_t" \
     --arg url "$(remote_url_display "$url")" --arg kind "$kind" --argjson trusted "$trusted" \
+    --argjson timer "$timer_json" \
     '{ok:$ok, tools:$tools, config:$cfg, dataRepo:$repo, marker:$marker,
-      units:{snapshot:$us, selftest:$ut}, remote:{url:$url, kind:$kind, trusted:$trusted}}')
+      units:{snapshot:$us, selftest:$ut}, remote:{url:$url, kind:$kind, trusted:$trusted},
+      timer:$timer}')
 
   if [[ $JSON == 1 ]]; then
     printf '%s\n' "$j"
@@ -609,9 +667,13 @@ setup_check() {
     # way out. Each check names its own package, never the whole set.
     #
     # fail vs warn is not decoration. FAIL is exactly the set of checks that
-    # set ok=false above (the four required tools and the marker), so a FAIL
-    # line means this verb exits 1, and exiting 0 means there was no FAIL
-    # line. Everything else that is wrong but does not refuse is a warn.
+    # set ok=false above (the four required tools, the marker, a
+    # timer.calendar or timer.jitter systemd-analyze itself rejects, and
+    # timer.calendar/timer.jitter when systemd-analyze is missing entirely --
+    # setup_units refuses to write a unit file it cannot validate, so this
+    # is not a cosmetic gap either), so a FAIL line means this verb exits 1,
+    # and exiting 0 means there was no FAIL line. Everything else that is
+    # wrong but does not refuse is a warn.
     setup_check_line "$have_git"      fail "git"      "not installed" "pacman -S git"
     setup_check_line "$have_rsync"    fail "rsync"    "not installed" "pacman -S rsync"
     setup_check_line "$have_jq"       fail "jq"       "not installed" "pacman -S jq"
@@ -631,6 +693,26 @@ setup_check() {
       setup_check_line "$marker" fail "data repo marker" \
         "$DATA_REPO/.omabackup is missing, so nothing will treat that directory as OmaBackup's" \
         "omabackup setup --data-repo $DATA_REPO"
+      # timer.calendar and timer.jitter reach a unit file only through
+      # setup_units, which refuses to write one it cannot validate -- a bad
+      # value there means the next `setup` dies, exactly like today, and so
+      # does a `setup` with no systemd-analyze to check either value with at
+      # all. Both are FAIL, not warn: a warn here used to leave a machine
+      # free to finish `setup` with a value nothing had actually checked,
+      # and now it cannot.
+      if [[ "$have_sysd_analyze" == true ]]; then
+        setup_check_line "$cal_ok" fail "timer.calendar" \
+          "not a systemd OnCalendar expression" "edit timer.calendar in $CONFIG_FILE"
+        setup_check_line "$jit_ok" fail "timer.jitter" \
+          "not a systemd time span" "edit timer.jitter in $CONFIG_FILE"
+      else
+        setup_check_line false fail "timer.calendar" \
+          "systemd-analyze not found, so it cannot be checked, and setup now refuses to write an unvalidated unit file" \
+          "pacman -S systemd, or omabackup setup --no-timers to finish setup without a timer"
+        setup_check_line false fail "timer.jitter" \
+          "systemd-analyze not found, so it cannot be checked, and setup now refuses to write an unvalidated unit file" \
+          "pacman -S systemd, or omabackup setup --no-timers to finish setup without a timer"
+      fi
       # Rendered from units_s/units_t, the same two values --json reports, and
       # not gated on OMABACKUP_SKIP_TIMERS: the gate belongs on the PROBE (it
       # keeps the suite off systemctl, above), and putting it here as well

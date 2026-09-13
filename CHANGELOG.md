@@ -116,6 +116,30 @@ unsorted copy is still real content and gets replaced by its sorted
 equivalent; every run after that is back to committing only on a real
 change.
 
+The widget's status refresh forks two fewer processes. `timer.calendar` and
+`timer.jitter` used to be checked against systemd's own grammar
+(`systemd-analyze calendar` and `systemd-analyze timespan`) on every verb
+that loads config, including that refresh, for a pair of values only `setup`
+ever consumes. The check now happens where the value is used: in `setup`,
+after the data repo is seeded, right before it writes the unit files, with
+the same refusal as before for a value systemd cannot parse; `setup
+--no-timers` writes no unit and so skips the check entirely, same as it
+always skipped writing the timer it would have checked. A machine with no
+`systemd-analyze` at all now refuses the same way, naming `pacman -S
+systemd` and `setup --no-timers` as the way out, rather than warning and
+writing an unvalidated unit file anyway: neither value can be proved valid
+without it, so `setup` no longer shows a fault in the popup for a bad timer
+setting it already wrote. `setup check` reports the same thing as a doctor
+line (`ok`, or `FAIL` naming the fix, whether the value itself is bad or
+`systemd-analyze` is missing to check it with). `status` still catches the
+cheap, unconditional part of the same guard, the backslash, newline and
+percent sign a value must never carry, which forks nothing.
+
+Content scanning remembers which `gitleaks` subcommand family it is talking
+to. Choosing between the modern and the pre-8.19 spelling of a scan means
+asking `gitleaks ... --help`; the answer is now kept for the rest of the
+process, so a second caller in the same process cannot re-fork it.
+
 ### Fixed
 
 A data repo the engine cannot read is recorded, not just refused. `status`

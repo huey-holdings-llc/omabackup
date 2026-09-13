@@ -337,7 +337,12 @@ setupPhase       setup's own resume marker, not something to edit
 
 Edits take effect on the next run, with two exceptions that only setup reads.
 `timer.*` is written into the unit files, so rerun `omabackup setup --yes`
-after changing it. `shellNag` set to true adds the login check the next time
+after changing it; no other verb validates it, so a bad value is only ever
+caught there, and by `omabackup setup check`, never by another verb along
+the way (`status` still reads `timer.calendar` back out of config to compare
+it against the installed unit, just without checking it against systemd's
+grammar).
+`shellNag` set to true adds the login check the next time
 setup runs; set back to false it removes nothing, so take the two lines under
 the OmaBackup comment out of `~/.bashrc` yourself (`setup --remove` does,
 but it uninstalls everything else too).
@@ -402,10 +407,14 @@ ignored with a warning, so a config written (or synced) by a newer OmaBackup
 does not stop an older one; a key that reads as a typo of a known one is
 refused instead, because a misspelled `maxMissingPct` is a threshold you
 believe is set and is not. `timer.calendar` and `timer.jitter` are checked with
-`systemd-analyze calendar` and `systemd-analyze timespan` before they can reach
-a unit file, and `status` reports it when the installed snapshot timer and the
-config disagree (editing the config alone changes nothing until you rerun
-`omabackup setup`).
+`systemd-analyze calendar` and `systemd-analyze timespan` in `omabackup setup`,
+right before they reach a unit file, and `omabackup setup check` reports the
+same check as a doctor line. A machine with no `systemd-analyze` at all
+refuses the same way, since neither value can be proved valid without it;
+`setup --no-timers` is the way to finish setup on one. `status` reports it
+separately when the installed snapshot timer and the config disagree
+(editing the config alone changes nothing until you rerun `omabackup
+setup`).
 
 ### CLI
 
@@ -691,12 +700,14 @@ actually broken.
   shipped negation you had deliberately deleted (`!id_*.pub` is the only one)
   is re-added, which ignores less rather than more. Delete a re-added line
   again if you meant it, and commit that.
-* **"timer settings not validated: systemd-analyze missing"**: `timer.calendar`
-  and `timer.jitter` are normally checked against systemd's own grammar
-  before they can reach a unit file. Without `systemd-analyze` only a
-  character-class check runs, which is a floor and not a substitute, so the
-  problem is reported rather than assumed away. Install `systemd` tooling, or
-  leave the timer settings at their defaults.
+* **"timer.calendar: systemd-analyze not found..." (a `setup check` FAIL
+  line, and `setup` itself refuses)**: `timer.calendar` and `timer.jitter`
+  are checked against systemd's own grammar in `setup`, right before they
+  reach a unit file. Without `systemd-analyze` neither value can be proved
+  valid, so `setup` refuses to write an unvalidated unit file and `setup
+  check` reports the same gap as a FAIL, rather than assuming the value is
+  fine. Install `systemd` tooling, or run `omabackup setup --no-timers` to
+  finish setup without a timer.
 
 ## Development
 

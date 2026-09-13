@@ -469,11 +469,16 @@ health_collect() {
   # said daily, or the other way round. Read the unit file rather than
   # systemctl, because the file is what setup wrote and the comparison must
   # work with the timer skipped (fixtures) as well as with it armed.
-  # A machine with no systemd-analyze cannot have its timer settings checked
-  # against systemd's own grammar, and the character-class refusal in
-  # config_load is a floor, not a substitute. Say so where it can be seen.
-  [[ "${CFG_TIMER_VALIDATED:-1}" == 1 ]] \
-    || H_PROBLEMS+=("timer settings not validated: systemd-analyze missing")
+  # Whether timer.calendar and timer.jitter parse as systemd expects is no
+  # longer this library's concern: config_load stopped forking
+  # systemd-analyze on every status refresh, and setup_check (lib/setup.sh)
+  # reports that as a doctor line, once, at the point the value is actually
+  # about to reach a unit file. A health problem here would have meant
+  # forking systemd-analyze again just to report on it. It would also have
+  # nothing left to catch: setup_units refuses to write a unit file it
+  # cannot validate (missing systemd-analyze included), so an unvalidated
+  # timer.calendar or timer.jitter can never reach a unit file for this
+  # comparison to find in the first place.
 
   local snap_unit="$HOME/.config/systemd/user/omabackup-snapshot.timer" unit_cal
   if [[ -r "$snap_unit" ]]; then

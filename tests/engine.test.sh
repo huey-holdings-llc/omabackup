@@ -49,6 +49,25 @@ fake_tool systemctl 'for a in "$@"; do
   [ "$a" = list-unit-files ] && { echo "fake-unit.service enabled enabled"; exit 0; }
 done
 echo "fake systemctl: $*" >&2; exit 1'
+# setup_units and setup_check both fork `systemd-analyze calendar -- VALUE`
+# and `systemd-analyze timespan -- VALUE` (lib/setup.sh) to validate
+# timer.calendar/timer.jitter, and a container with no systemd-analyze at
+# all (an Arch container missing the `systemd` package, for one) would
+# otherwise put every ordinary `setup` run in this suite on the "absent"
+# branch, which now refuses (fail closed) rather than warns -- so every
+# fixture needs a systemd-analyze on PATH exactly the way it needs a real
+# Omarchy box's, or nothing here would ever finish `setup` at all. Accepts
+# anything an OnCalendar/timespan value in this suite's fixtures actually
+# is; refuses the two shapes a real systemd-analyze refuses that the tests
+# rely on: a `;` in a calendar (the sed-delimiter injection payload) and a
+# jitter that is not digits-then-a-unit-letter ("every other tuesday"). A
+# group that needs systemd-analyze reported ABSENT builds its own PATH
+# without this stub, the way group 105 builds a PATH without one tool.
+fake_tool systemd-analyze 'case "$1" in
+  calendar) case "$3" in *";"*) exit 1 ;; esac ;;
+  timespan) case "$3" in [0-9]*[a-zA-Z]) : ;; *) exit 1 ;; esac ;;
+esac
+exit 0'
 fake_tool dconf 'printf "[org/fake]\nkey=1\n"'
 fake_tool lpstat 'case "$1" in -p) echo "printer fake is idle.";; -v) echo "device for fake: ipp://fake";; esac'
 fake_tool timedatectl 'echo Etc/UTC'
@@ -3312,16 +3331,21 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
   # `daily|; s|ExecStart=.*|ExecStart=/bin/sh -c "curl ..."|` rewrites the unit
   # that runs daily as the user. An innocent typo corrupted it just as well.
   mk_fixture g85; seed_home
+  # timer.calendar and timer.jitter are validated against systemd's own
+  # grammar in setup now, not in config_load: status (and every other verb)
+  # would otherwise fork systemd-analyze on every run for a pair of values
+  # only setup ever consumes. A value systemd cannot parse is still refused,
+  # just at the point it is actually about to reach a unit file.
   jq '.timer={calendar:"daily|; s|ExecStart=.*|ExecStart=/bin/sh -c evil|", jitter:"30m"}' \
     "$OMABACKUP_CONFIG" > "$T/bad.json"
-  b85=$(OMABACKUP_CONFIG=$T/bad.json obj status)
-  eq "a calendar carrying a sed delimiter is refused at load" "$(jq -r .ok <<<"$b85")" "false"
+  b85=$(OMABACKUP_CONFIG=$T/bad.json obj setup --yes)
+  eq "a calendar carrying a sed delimiter is refused at setup" "$(jq -r .ok <<<"$b85")" "false"
   has "the refusal names the key" "$(jq -r .error <<<"$b85")" "timer.calendar"
   jq '.timer={calendar:"daily", jitter:"every other tuesday"}' "$OMABACKUP_CONFIG" > "$T/bad2.json"
   eq "a jitter systemd cannot parse is refused too" \
-    "$(OMABACKUP_CONFIG=$T/bad2.json obj status | jq -r .ok)" "false"
+    "$(OMABACKUP_CONFIG=$T/bad2.json obj setup --yes | jq -r .ok)" "false"
   has "the refusal names that key" \
-    "$(OMABACKUP_CONFIG=$T/bad2.json obj status | jq -r .error)" "timer.jitter"
+    "$(OMABACKUP_CONFIG=$T/bad2.json obj setup --yes | jq -r .error)" "timer.jitter"
   # A backslash is not systemd syntax, but it IS awk syntax: `awk -v x=VALUE`
   # runs the value through awk's escape processing, so `daily\nExecStart=...`
   # arrived in the unit as a real newline and a second directive -- and the
@@ -3349,6 +3373,12 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
     "$(grep '^RandomizedDelaySec=' "$FH/.config/systemd/user/omabackup-snapshot.timer")" "RandomizedDelaySec=45m"
   eq "an installed unit matching the config is not a problem" \
     "$(obj status | jq -r '[.problems[] | select(contains("installed snapshot timer"))] | length')" "0"
+  # setup check is the doctor for timer.calendar and timer.jitter now: a good
+  # value on a machine with systemd-analyze says so, in the same three-shape
+  # line every other check uses.
+  ok85=$(env HOME="$FH" "$CLI" setup check)
+  has "a good calendar is an ok line" "$ok85" "^ok    timer.calendar$"
+  has "a good jitter is an ok line" "$ok85" "^ok    timer.jitter$"
 
   # Editing config.json has no effect until setup is rerun, so the two can
   # disagree indefinitely with nothing saying so.
@@ -3361,34 +3391,52 @@ if group 85 "timer.calendar and timer.jitter are validated, substituted safely, 
   has "and names the fix" "$(jq -r '.problems[]' <<<"$m85")" "omabackup setup"
   eq "the mismatch is a fault, not a footnote" "$(jq -r .state <<<"$m85")" "fault"
 
-  # ...and a machine with no systemd-analyze says so, rather than only warning
-  # into a timer's journal. A PATH of symlinks to everything in /usr/bin
-  # except systemd-analyze: `command -v` has to find nothing at all, so
-  # shadowing it with a stub would not do.
+  # ...and a machine with no systemd-analyze says so as a FAIL line from the
+  # doctor, not as a status-time fault: status itself no longer forks
+  # systemd-analyze at all, so it has nothing to say about it either way.
+  # `setup` fails closed the same way: neither value can be proved valid
+  # without systemd-analyze, so setup_units now refuses to write a unit file
+  # it cannot validate, rather than warning and writing one anyway. A PATH of
+  # symlinks to everything in /usr/bin except systemd-analyze: `command -v`
+  # has to find nothing at all, so shadowing it with a stub would not do.
   nsa85="$T/nosdbin"; mkdir -p "$nsa85"
   cp -as /usr/bin/. "$nsa85"/ 2>/dev/null || true
   rm -f "$nsa85/systemd-analyze"
   if [[ -x "$nsa85/jq" && ! -e "$nsa85/systemd-analyze" ]]; then
     jq '.timer={calendar:"daily", jitter:"30m"}' "$OMABACKUP_CONFIG" > "$T/c" && mv "$T/c" "$OMABACKUP_CONFIG"
-    n85=$(env HOME="$FH" PATH="$nsa85" "$CLI" status --json 2>/dev/null)
-    has "an unvalidated timer setting is a problem, not just a warning" \
-      "$(jq -r '.problems[]' <<<"$n85")" "timer settings not validated"
-    eq "and that makes the state a fault" "$(jq -r .state <<<"$n85")" "fault"
-    eq "the same run with systemd-analyze present says nothing of the kind" \
-      "$(obj status | jq -r '[.problems[] | select(contains("not validated"))] | length')" "0"
+    eq "status says nothing about validation either way, with or without systemd-analyze" \
+      "$(env HOME="$FH" PATH="$nsa85" "$CLI" status --json 2>/dev/null | jq -r '[.problems[] | select(contains("not validated"))] | length')" "0"
+    chk85=$(env HOME="$FH" PATH="$nsa85" "$CLI" setup check 2>/dev/null); chkrc85=$?
+    has "the doctor FAILs rather than assumes the calendar is fine" "$chk85" \
+      "^FAIL  timer.calendar: systemd-analyze not found"
+    has "and names installing it as the fix" "$chk85" "pacman -S systemd"
+    has "and names --no-timers as the other way out" "$chk85" "setup --no-timers"
+    has "the jitter check fails the same way" "$chk85" "^FAIL  timer.jitter: systemd-analyze not found"
+    eq "a doctor that cannot validate the timer exits 1, not 0" "$chkrc85" "1"
+    su85=$(env HOME="$FH" PATH="$nsa85" "$CLI" setup --data-repo "$FR" --yes --json 2>/dev/null)
+    eq "setup refuses without systemd-analyze (a wall, not a floor)" "$(jq -r .ok <<<"$su85")" "false"
+    has "and the refusal names the missing tool" "$(jq -r .error <<<"$su85")" "systemd-analyze"
+    has "and names --no-timers as the way out" "$(jq -r .error <<<"$su85")" "--no-timers"
+    eq "the previously-installed unit is untouched by the refused rerun" \
+      "$(grep '^OnCalendar=' "$FH/.config/systemd/user/omabackup-snapshot.timer")" "OnCalendar=Mon *-*-* 04:00:00"
     # The loss event in full: the backslash value on the machine that has no
     # systemd-analyze to catch it. The character class is the only thing
-    # standing between that value and awk.
+    # standing between that value and awk, and it runs regardless of
+    # systemd-analyze.
     eq "and the backslash value is still refused with no systemd-analyze at all" \
       "$(OMABACKUP_CONFIG=$T/bs.json env HOME="$FH" PATH="$nsa85" "$CLI" status --json 2>/dev/null | jq -r .ok)" "false"
     eq "the unit never gets written with an injected directive" \
       "$(grep -c 'ExecStart=/bin/sh' "$FH/.config/systemd/user/omabackup-snapshot.timer" || true)" "0"
+    # --no-timers is the documented way out, and it really does not touch
+    # setup_units at all, so it succeeds where a timers setup just refused.
+    eq "--no-timers finishes setup with no systemd-analyze at all" \
+      "$(env HOME="$FH" PATH="$nsa85" "$CLI" setup --data-repo "$FR" --no-timers --yes --json 2>/dev/null | jq -r .ok)" "true"
   else
-    # A skip says what it skipped and how much. A silent one does not add five
-    # passes, it takes five assertions out of the total, and a suite that
-    # reports 5 fewer than the last run with nothing said about why reads as a
-    # count nobody can check.
-    echo "  (could not build a systemd-analyze-free PATH: 5 assertions skipped)"
+    # A skip says what it skipped and how much. A silent one does not add
+    # eleven passes, it takes eleven assertions out of the total, and a
+    # suite that reports 11 fewer than the last run with nothing said about
+    # why reads as a count nobody can check.
+    echo "  (could not build a systemd-analyze-free PATH: 11 assertions skipped)"
   fi
 fi
 
@@ -5073,9 +5121,13 @@ if group 105 "setup check is a doctor: three line shapes, and a missing tool nam
     p105=$(command -v "$b105" 2>/dev/null) || continue
     ln -sf "$p105" "$D105/$b105"
   done
-  # gum, gitleaks and systemctl only have to EXIST for the doctor's probe, and
-  # none of the three is installed everywhere this suite runs.
-  for b105 in gum gitleaks systemctl; do printf '#!/bin/sh\nexit 0\n' > "$D105/$b105"; chmod +x "$D105/$b105"; done
+  # gum, gitleaks, systemctl and systemd-analyze only have to EXIST for the
+  # doctor's probe (this fixture's timer.calendar/timer.jitter are the
+  # unedited "daily"/"30m" defaults, so systemd-analyze answering yes to
+  # everything is enough); none of the four is installed everywhere this
+  # suite runs, and a missing systemd-analyze is now its own FAIL, not
+  # something this group is testing.
+  for b105 in gum gitleaks systemctl systemd-analyze; do printf '#!/bin/sh\nexit 0\n' > "$D105/$b105"; chmod +x "$D105/$b105"; done
   # A PATH with one binary left out. Built by copying the links rather than by
   # deleting from a shared directory, so the groups below cannot race or leak.
   mk_path105() {
@@ -5519,6 +5571,111 @@ PACMAN111RECHECK
   [ "$n111recheck" -ge 1 ] \
     && ok "and the recheck batch becomes ERROR rows instead of a mix" \
     || bad "and the recheck batch becomes ERROR rows instead of a mix" "got $n111recheck ERROR rows: $out111recheck"
+fi
+
+if group 112 "two forks per process: the widget's status refresh runs no systemd-analyze, and gitleaks is probed once per subcommand family"; then
+  # config_load used to run `systemd-analyze calendar` and `systemd-analyze
+  # timespan` on every verb that loads config, including status -- the
+  # widget's own refresh -- to validate timer.calendar and timer.jitter, two
+  # values only setup ever consumes. A counting stub in place of the real
+  # binary proves the fork is gone from status and lands exactly once per
+  # field where setup actually writes the units.
+  mk_fixture g112; seed_home
+  SDA112="$T/fakebin-sda"; mkdir -p "$SDA112"
+  SDALOG112="$T/sda-calls.log"; : > "$SDALOG112"
+  # A minimal stand-in, not a reimplementation: it logs its own argv and
+  # refuses only the two literal values these assertions plant, so the
+  # doctor's FAIL line can be exercised without a real systemd on PATH.
+  cat > "$SDA112/systemd-analyze" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$SDALOG112"
+case "\$1 \$3" in
+  "calendar bogus-calendar") exit 1 ;;
+  "timespan bogus-jitter") exit 1 ;;
+esac
+exit 0
+EOF
+  chmod +x "$SDA112/systemd-analyze"
+  ob112() { env HOME="$FH" PATH="$SDA112:$PATH" "$CLI" "$@" 2>/dev/null; }
+  obj112() { env HOME="$FH" PATH="$SDA112:$PATH" "$CLI" "$@" --json 2>/dev/null; }
+
+  check "status still runs" ob112 status
+  eq "status forks systemd-analyze zero times" "$(grep -c . "$SDALOG112" || true)" "0"
+
+  : > "$SDALOG112"
+  check "setup writes the units" ob112 setup --data-repo "$FR" --yes
+  eq "setup forks systemd-analyze exactly once for the calendar" \
+    "$(grep -c '^calendar -- daily$' "$SDALOG112" || true)" "1"
+  eq "and exactly once for the jitter" \
+    "$(grep -c '^timespan -- 30m$' "$SDALOG112" || true)" "1"
+  eq "and nothing else calls it during that setup" "$(wc -l < "$SDALOG112" || true)" "2"
+
+  # setup check is the doctor: a bad timer.calendar is a FAIL line naming the
+  # fix, not a die buried in a status refresh.
+  jq '.timer.calendar="bogus-calendar"' "$OMABACKUP_CONFIG" > "$T/badcal.json"
+  chk112=$(OMABACKUP_CONFIG="$T/badcal.json" ob112 setup check)
+  has "a bad timer.calendar is a FAIL line" "$chk112" \
+    "^FAIL  timer.calendar: not a systemd OnCalendar expression"
+  has "and it names the fix" "$chk112" "edit timer.calendar in $T/badcal.json"
+
+  # Fail closed: with systemd-analyze not merely returning failure but
+  # entirely absent from PATH, setup refuses before it writes (or
+  # overwrites) any unit file, rather than warning and writing one it never
+  # actually validated. A PATH of symlinks to everything already on PATH
+  # except systemd-analyze: `command -v` has to find nothing at all, so
+  # shadowing it with a stub (like SDA112 above) would not prove the point.
+  NSA112="$T/nosdbin112"; mkdir -p "$NSA112"
+  cp -as /usr/bin/. "$NSA112"/ 2>/dev/null || true
+  rm -f "$NSA112/systemd-analyze"
+  if [[ -x "$NSA112/jq" && ! -e "$NSA112/systemd-analyze" ]]; then
+    before112=$(grep '^OnCalendar=' "$FH/.config/systemd/user/omabackup-snapshot.timer" 2>/dev/null || true)
+    su112=$(env HOME="$FH" PATH="$NSA112" "$CLI" setup --data-repo "$FR" --yes --json 2>/dev/null)
+    eq "setup with systemd-analyze absent from PATH refuses" "$(jq -r .ok <<<"$su112")" "false"
+    has "and names the missing tool" "$(jq -r .error <<<"$su112")" "systemd-analyze"
+    has "and names --no-timers as the way out" "$(jq -r .error <<<"$su112")" "--no-timers"
+    eq "the unit already on disk is untouched by the refused write" \
+      "$(grep '^OnCalendar=' "$FH/.config/systemd/user/omabackup-snapshot.timer" 2>/dev/null || true)" "$before112"
+    chkna112=$(env HOME="$FH" PATH="$NSA112" "$CLI" setup check 2>/dev/null); chkna112rc=$?
+    has "and setup check prints FAIL for it, not warn" "$chkna112" \
+      "^FAIL  timer.calendar: systemd-analyze not found"
+    eq "so setup check exits 1 too" "$chkna112rc" "1"
+  else
+    echo "  (could not build a systemd-analyze-free PATH: 5 assertions skipped)"
+  fi
+
+  # The gitleaks half: a snapshot's two scans (staging tree, then the staged
+  # commit) each choose between the modern and legacy subcommand once, and
+  # the choice is memoised so a re-entrant caller in the same process cannot
+  # reprobe -- lib/secrets.sh's gitleaks_has_dir / gitleaks_has_git.
+  GLBIN112="$T/fakebin-gl"; mkdir -p "$GLBIN112"
+  GLLOG112="$T/gl-calls.log"; : > "$GLLOG112"
+  cat > "$GLBIN112/gitleaks" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$GLLOG112"
+exit 0
+EOF
+  chmod +x "$GLBIN112/gitleaks"
+  # The setup call above already ran the fixture's first snapshot (its own
+  # phase, not this test's concern), so the repo is clean; an edit is needed
+  # so this snapshot actually has something to stage and commit -- otherwise
+  # it returns before the staged-commit scan ever runs, and "0" would read as
+  # a pass for the wrong reason.
+  printf 'export FOO112=bar\n' >> "$FH/.bashrc"
+  check "a snapshot runs with the fake gitleaks installed" \
+    env HOME="$FH" PATH="$GLBIN112:$PATH" "$CLI" snapshot --no-push
+  # This pins one probe per subcommand family for the SNAPSHOT path only:
+  # `snapshot` runs both scans (staging tree, then staged commit) in one
+  # process, so the memo set by the first is read by the second. The
+  # widget's push --confirm path is not covered here -- it runs
+  # secrets_scan_staged in a subshell (lib/widget.sh:537), so any memo it
+  # sets dies with that subshell and cannot be read back by a caller outside
+  # it. That is fine for this process's own probe count (still one fork,
+  # since nothing else in that subshell asks again), but it means the memo
+  # never crosses the subshell boundary either way.
+  eq "one dir --help probe for the whole snapshot" \
+    "$(grep -c '^dir --help$' "$GLLOG112" || true)" "1"
+  eq "one git --help probe for the whole snapshot" \
+    "$(grep -c '^git --help$' "$GLLOG112" || true)" "1"
 fi
 
 group_close
