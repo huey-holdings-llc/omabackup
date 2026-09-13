@@ -283,15 +283,27 @@ lint_normalize() {
 }
 
 # lint_emit: the one JSON object, printed only when JSON=1.
+#
+# problems[] IS A LIST OF STRINGS, here and everywhere else. It used to be the
+# one key in this tool whose type depended on which verb you asked: strings
+# from status and health, {code,path,note} objects from lint. Panel.qml renders
+# every entry as text and Service.qml puts problems[0] in the error line, so an
+# object reached the user as "[object Object]" the moment a lint reply got
+# there. The records are still the useful thing for a program, so they keep
+# their own key, findings[], unchanged; the sentence built from each one is
+# exactly what the non-JSON rendering prints.
 lint_emit() {
   [[ $JSON == 1 ]] || return 0
   local ok=true
   [[ ${#LINT_PROBLEMS[@]} -eq 0 ]] || ok=false
   jq -cn \
     --argjson ok "$ok" \
-    --argjson problems "[$(jjoin ${LINT_PROBLEMS[@]+"${LINT_PROBLEMS[@]}"})]" \
+    --argjson findings "[$(jjoin ${LINT_PROBLEMS[@]+"${LINT_PROBLEMS[@]}"})]" \
     --argjson notes "[$(jjoin ${LINT_NOTES[@]+"${LINT_NOTES[@]}"})]" \
-    '{ok:$ok, problems:$problems, notes:$notes}'
+    '{ok:$ok,
+      problems: ($findings | map(.code + " " + .path
+                                 + (if (.note // "") == "" then "" else " (" + .note + ")" end))),
+      findings:$findings, notes:$notes}'
 }
 
 # cmd_lint: `lint` verb. --no-walk skips lint_completeness (the write-gate

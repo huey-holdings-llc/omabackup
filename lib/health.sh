@@ -57,6 +57,43 @@ health_not_configured_json() {
       selftest_enabled:false, selftest_active:false, problems:[]}'
 }
 
+# health_require_repo_or_fault: data_repo_require for the two READ verbs,
+# `status` and `health`, with the refusal recorded in status.json on the way
+# out. Returns 0 when the repo is usable; otherwise it has already written the
+# degraded file and it die()s with the same reason, so the reply on stdout is
+# the one refusal object it always was.
+#
+# WHY: data_repo_require refuses before any of these verbs writes anything, so
+# a data repo that broke overnight (a marker lost to a bad merge, a .git that
+# is no longer one, a format this version will not read) left the widget
+# reading a green status.json from the last good run, for as long as the repo
+# stayed broken. A backup tool whose whole promise is telling you what it is
+# not backing up must not answer that with yesterday's reassurance.
+#
+# data_repo_require die()s, and die exits the process rather than returning, so
+# it runs in a subshell with JSON=1 and only its answer is carried back. Its
+# warn() output is deliberately NOT redirected: data_repo_assert_mode tightens
+# a too-open repo on this path and says so, and that line is still the user's.
+health_require_repo_or_fault() {
+  local reply rc=0 reason
+  reply=$( JSON=1; data_repo_require ) || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    reason=$(jq -r '.error // empty' <<<"$reply" 2>/dev/null) || reason=""
+    [[ -n "$reason" ]] || reason="the data repo at $DATA_REPO cannot be read"
+    state_write_status "$(health_fault_json "$reason")"
+    die "$reason"
+  fi
+  return 0
+}
+
+# health_fault_json REASON: the schema-complete status object for a data repo
+# this engine cannot read. Same writer the not-configured case uses (so the
+# two can never drift apart, and `repo` and `setup` read the same way), with
+# the state and the one problem that say what happened.
+health_fault_json() {
+  health_not_configured_json | jq -c --arg r "$1" '.state = "fault" | .problems = [$r]'
+}
+
 # repo_own_edits: every edit in the data repo that is not the snapshot's own
 # output, one NUL-terminated path each, unsorted. This is THE list: `status`
 # counts it as uncommitted and the Commit button (cmd_push) commits it. They
@@ -531,7 +568,7 @@ health_print_human() {
 # once every NAG_DAYS (or when the pending set changes), tracked by a
 # signature stamp -- never on the JSON path, which always reflects the truth.
 cmd_health() {
-  data_repo_require
+  health_require_repo_or_fault
   health_collect
   local -a lines=()
   local p

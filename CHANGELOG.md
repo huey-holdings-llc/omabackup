@@ -7,6 +7,22 @@ Keep a Changelog 1.1.0 and the project uses Semantic Versioning.
 
 ### Changed
 
+The triage verbs (`allow`, `ignore`, `resolve-gone`, `push`, `timer`, `open`)
+honour `--json` like every other verb. They used to answer in JSON whether or
+not you asked, because the popup is their main caller, which made all six of
+them awkward to use by hand. Without `--json` each one now prints a single
+plain line: `allowed ~/.config/mytool/mytool.conf`, `ignored
+~/.cache/thing/** (reason: regenerable)`, `refused: already allowlisted:
+.bashrc`. With `--json` the reply is byte for byte what it was, refusals
+included, so the popup sees no change at all. Exit codes did not move.
+
+`problems` is a list of sentences in every reply and in `status.json`. It was
+strings from `status` and `health` and `{code, path, note}` objects from
+`lint`, and the popup renders whatever it finds there as text, so one shape
+had to win. `lint --json` keeps its records under a new `findings` key, with
+the same contents as before, and its `problems` now holds the same lines the
+plain `omabackup lint` prints. The human output of `lint` is unchanged.
+
 `omabackup self-test` takes a few minutes instead of twelve. Its fixture
 snapshots ran the real machine-fact tools (pacman, systemctl, npm, fprintd
 and the rest) around 180 times; they now run stubs that print something
@@ -43,6 +59,15 @@ this sync outside the lock. `setup --import` holds the repo lock while it
 writes the marker and runs the sync.
 
 ### Fixed
+
+A data repo the engine cannot read is recorded, not just refused. `status`
+checks the repo before it writes anything, so a marker lost to a bad merge, or
+a `.git` that stopped being one, made the verb exit without touching
+`status.json`, and the bar widget went on showing the last good run's green
+for as long as the repo stayed broken. `status` and `health` now write a
+status object with `"state": "fault"` and the reason in `problems` before they
+exit, so the popup shows what broke. Both still exit 1, and no write verb is
+any more willing to touch a repo in that state.
 
 The popup's Commit button now commits every edit it counts. `status`
 counted every uncommitted change in the data repo outside the snapshot's own

@@ -15,7 +15,10 @@
 
 # cmd_status: writes status.json and prints it (--json) or a human summary.
 cmd_status() {
-  data_repo_require
+  # A repo this engine cannot read is RECORDED, not just refused: the widget
+  # reads status.json and nothing else, so a refusal that writes nothing leaves
+  # it showing the last good run (see health_require_repo_or_fault).
+  health_require_repo_or_fault
   health_collect
   local j; j=$(health_status_json)
   state_write_status "$j"
@@ -25,8 +28,21 @@ cmd_status() {
 
 # ---- write actions ---------------------------------------------------------
 
+# widget_reply JSON HUMAN: the one place the triage verbs answer from.
+#
+# These verbs used to print JSON whether or not --json was passed, because the
+# popup is their main caller and it always passes it (Service.qml appends
+# --json to every call it makes). That made every one of them unusable by
+# hand: `omabackup allow ~/.config/foo` answered with an object to read back
+# through jq. The switch lives here, once, so no call site has to remember it
+# and the two modes can never disagree about what happened. JSON is byte for
+# byte what it always was, refusals included; HUMAN is one line on stdout.
+widget_reply() {
+  if [[ "${JSON:-0}" == 1 ]]; then printf '%s\n' "$1"; else printf '%s\n' "$2"; fi
+}
+
 # widget_reply_fail MSG: the one-line refusal shape every write verb uses.
-widget_reply_fail() { printf '{"ok":false,"problems":[%s]}\n' "$(jstr "$1")"; return 1; }
+widget_reply_fail() { widget_reply "{\"ok\":false,\"problems\":[$(jstr "$1")]}" "refused: $1"; return 1; }
 
 # rel_from_tilde PATH: "~/rel" -> rel, refusing anything that is not a clean
 # HOME-relative path. Matches the LITERAL "~/" prefix `status` emits; no
@@ -176,9 +192,11 @@ edited_with_lint_gate() {
     # prevent the lint-rejection reply from reaching the caller.
     if take_lock; then cp "$bak" "$DATA_REPO/$file" 2>/dev/null || true; drop_lock; fi
     rm -f "$bak"
-    problems=$(jq -r '[.problems[] | "\(.code) \(.path)"] | .[0:2] | join(" ")' <<<"$lint_json" 2>/dev/null)
-    printf '{"ok":false,"lint_ok":false,"problems":[%s]}\n' \
-      "$(jstr "lint rejected the edit (rolled back): $problems")"
+    # findings[], not problems[]: lint's problems[] is the human sentence now,
+    # and the code/path pair this line wants is the record beside it.
+    problems=$(jq -r '[.findings[] | "\(.code) \(.path)"] | .[0:2] | join(" ")' <<<"$lint_json" 2>/dev/null)
+    widget_reply "{\"ok\":false,\"lint_ok\":false,\"problems\":[$(jstr "lint rejected the edit (rolled back): $problems")]}" \
+      "refused: lint rejected the edit (rolled back): $problems"
     return 1
   fi
   rm -f "$bak"
@@ -218,7 +236,8 @@ cmd_allow() {
   _widget_edit_allow() { printf '%s\n' "$rel" >> "$DATA_REPO/allowlist.txt"; }
   edited_with_lint_gate "allowlist.txt" _widget_edit_allow || return 1
   health_write_status
-  printf '{"ok":true,"lint_ok":true,"added":%s}\n' "$(jstr "$rel")"
+  # shellcheck disable=SC2088  # the literal "~/" the report and the popup use, not a path to expand
+  widget_reply "{\"ok\":true,\"lint_ok\":true,\"added\":$(jstr "$rel")}" "allowed ~/$rel"
 }
 
 # cmd_ignore PATH [REASON]: append a dated entry to drift-ignore.txt,
@@ -252,7 +271,11 @@ cmd_ignore() {
   _widget_edit_ignore() { printf '%s   # %s %s\n' "$entry" "$(date +%F)" "$reason" >> "$DATA_REPO/drift-ignore.txt"; }
   edited_with_lint_gate "drift-ignore.txt" _widget_edit_ignore || return 1
   health_write_status
-  printf '{"ok":true,"lint_ok":true,"ignored":%s}\n' "$(jstr "$entry")"
+  # shellcheck disable=SC2088  # the literal "~/" the report and the popup use, not a path to expand
+  # The ENTRY, not the argument: a collapsed tree was written as the /**
+  # subtree form, and that is the fact worth reading back.
+  widget_reply "{\"ok\":true,\"lint_ok\":true,\"ignored\":$(jstr "$entry")}" \
+    "ignored ~/$entry (reason: $reason)"
 }
 
 # widget_entry_vanished REL: 0 when allowlist.txt carries an entry for REL
@@ -336,7 +359,9 @@ cmd_resolve_gone() {
   }
   edited_with_lint_gate "allowlist.txt" _widget_edit_gone || return 1
   health_write_status
-  printf '{"ok":true,"lint_ok":true,"resolved":%s,"verb":%s}\n' "$(jstr "$rel")" "$(jstr "$verb")"
+  # shellcheck disable=SC2088  # the literal "~/" the report and the popup use, not a path to expand
+  widget_reply "{\"ok\":true,\"lint_ok\":true,\"resolved\":$(jstr "$rel"),\"verb\":$(jstr "$verb")}" \
+    "resolved ~/$rel ($verb)"
 }
 
 # push_nothing_ahead: 0 when git can prove there is nothing to send. An
@@ -433,7 +458,8 @@ cmd_push() {
 
   if [[ ${#dirty[@]} -gt 0 ]] && { [[ "$confirm" != --confirm ]] || [[ -n "$want_sig" && "$want_sig" != "$sig" ]]; }; then
     for p in "${dirty[@]}"; do files_json+=("$(jstr "$p")"); done
-    printf '{"ok":false,"needs_confirm":true,"files":[%s],"sig":"%s"}\n' "$(jjoin "${files_json[@]}")" "$sig"
+    widget_reply "{\"ok\":false,\"needs_confirm\":true,\"files\":[$(jjoin "${files_json[@]}")],\"sig\":\"$sig\"}" \
+      "refused: ${#dirty[@]} uncommitted edit(s) in the data repo; see them with git -C $DATA_REPO status, then run: omabackup push --confirm $sig"
     return 1
   fi
 
@@ -445,7 +471,7 @@ cmd_push() {
   # git alone, and record no verdict: a probe that was never asked for must
   # not overwrite the answer of one that was.
   if [[ ${#dirty[@]} -eq 0 ]] && push_nothing_ahead; then
-    printf '{"ok":true,"pushed":0,"note":"nothing to push"}\n'
+    widget_reply '{"ok":true,"pushed":0,"note":"nothing to push"}' "nothing to push"
     return 0
   fi
 
@@ -489,7 +515,7 @@ cmd_push() {
       drop_lock
       remote_push_if_ahead
       health_write_status
-      printf '{"ok":true,"committed":0}\n'
+      widget_reply '{"ok":true,"committed":0}' "committed 0 edit(s)"
       return 0
     fi
     # --literal-pathspecs: a file named `m*.txt` or `a[1].txt`, or one that
@@ -528,7 +554,7 @@ cmd_push() {
   fi
   remote_push_if_ahead
   health_write_status
-  printf '{"ok":true,"committed":%s}\n' "${#stage[@]}"
+  widget_reply "{\"ok\":true,\"committed\":${#stage[@]}}" "committed ${#stage[@]} edit(s)"
 }
 
 # cmd_timer pause|resume|status|run: drive the daily unit.
@@ -541,13 +567,13 @@ cmd_timer() {
       out=$(systemctl --user disable --now omabackup-snapshot.timer 2>&1) \
         || { widget_reply_fail "could not pause the timer: $out"; return 1; }
       health_write_status
-      printf '{"ok":true}\n'
+      widget_reply '{"ok":true}' "timer paused"
       ;;
     resume)
       out=$(systemctl --user enable --now omabackup-snapshot.timer 2>&1) \
         || { widget_reply_fail "could not resume the timer: $out"; return 1; }
       health_write_status
-      printf '{"ok":true}\n'
+      widget_reply '{"ok":true}' "timer resumed"
       ;;
     status)
       local enabled=false active=false next=""
@@ -557,8 +583,11 @@ cmd_timer() {
         next=$(systemctl --user show omabackup-snapshot.timer -p NextElapseUSecRealtime --value 2>/dev/null || true)
         case "$next" in ''|'n/a'|0) next="" ;; esac
       fi
-      jq -cn --argjson enabled "$enabled" --argjson active "$active" --arg next "$next" \
-        '{ok:true, enabled:$enabled, active:$active, next:$next}'
+      local tj hline="timer: enabled=$enabled active=$active"
+      [[ -z "$next" ]] || hline="$hline next=$next"
+      tj=$(jq -cn --argjson enabled "$enabled" --argjson active "$active" --arg next "$next" \
+        '{ok:true, enabled:$enabled, active:$active, next:$next}')
+      widget_reply "$tj" "$hline"
       ;;
     run)
       # The proven daily path is the unit; block only long enough to ask
@@ -577,14 +606,14 @@ cmd_timer() {
       # button still does something.
       if [[ "${OMABACKUP_SKIP_TIMERS:-0}" != 1 ]] && have systemctl \
         && systemctl --user start --no-block omabackup-snapshot.service >/dev/null 2>&1; then
-        printf '{"ok":true,"started":"unit"}\n'
+        widget_reply '{"ok":true,"started":"unit"}' "snapshot started (the systemd unit)"
       else
         have setsid || { widget_reply_fail "setsid is not available"; return 1; }
         if ! setsid -f "$PLUGIN_DIR/bin/omabackup" snapshot >/dev/null 2>&1; then
           widget_reply_fail "could not start a detached snapshot"
           return 1
         fi
-        printf '{"ok":true,"started":"detached"}\n'
+        widget_reply '{"ok":true,"started":"detached"}' "snapshot started (detached, no unit loaded)"
       fi
       ;;
     *) widget_reply_fail "usage: timer pause|resume|status|run"; return 1 ;;
@@ -631,7 +660,11 @@ cmd_open() {
     widget_reply_fail "could not open a terminal in $DATA_REPO"
     return 1
   fi
-  printf '{"ok":true}\n'
+  if [[ $want_report == 1 ]]; then
+    widget_reply '{"ok":true}' "opened the drift report in a terminal"
+  else
+    widget_reply '{"ok":true}' "opened a terminal in $DATA_REPO"
+  fi
 }
 
 # open_remote_page: the data repo's own page in a browser. Only a GitHub remote
@@ -668,5 +701,5 @@ open_remote_page() {
     widget_reply_fail "could not open $page"
     return 1
   fi
-  printf '{"ok":true,"opened":%s}\n' "$(jstr "$page")"
+  widget_reply "{\"ok\":true,\"opened\":$(jstr "$page")}" "opened $page"
 }

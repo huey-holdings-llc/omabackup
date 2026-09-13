@@ -420,11 +420,26 @@ omabackup <verb> [args] [--json]
 ```
 
 Every verb accepts `--json`, which prints exactly one JSON object, even on
-failure. Two caveats: `jq` is what builds that object, so on a machine without
-it the CLI prints one plain line and exits 1 before any verb runs; and the
-triage verbs (`allow`, `ignore`, `resolve-gone`, `push`, `timer`, `open`)
-answer in JSON whether or not you asked, because the popup is their main
-caller. Exit codes: 0 ran, 1 refused or unhealthy, 2 usage.
+failure. One caveat: `jq` is what builds that object, so on a machine without
+it the CLI prints one plain line and exits 1 before any verb runs. Without
+`--json` the triage verbs (`allow`, `ignore`, `resolve-gone`, `push`, `timer`,
+`open`) print one plain line saying what happened, such as `allowed
+~/.config/mytool/mytool.conf` or `refused: already allowlisted: .bashrc`. The
+popup passes `--json` on every call, so what it reads is unchanged. Exit codes
+are the same either way: 0 ran, 1 refused or unhealthy, 2 usage.
+
+In every JSON reply, `problems` is a list of sentences meant to be read as
+they are, which is what the popup shows you. `lint --json` adds `findings`
+beside it: the same problems as `{code, path, note}` records, for a script
+that wants to sort or count them rather than print them. `notes` holds the
+informational ones lint does not fail on.
+
+`status` records what it found even when it cannot go on. If the data repo has
+become unreadable (the `.omabackup` marker is gone, or `.git` is no longer a
+repository) it writes `status.json` with `"state": "fault"` and the reason
+before exiting 1, so the bar widget shows what broke instead of the last good
+run's green. `health` does the same at login. A repo in that state is still
+refused outright by every verb that would write to it.
 
 ### Popup keys
 
