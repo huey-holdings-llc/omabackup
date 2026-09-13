@@ -327,6 +327,26 @@ run_record() {
 # A null verdict reads as "nothing to report" everywhere, the same as no file.
 run_record_start() { run_record null "the run has not finished"; }
 
+# run_record_stand_down MINE SAVED: a run that cleared the verdict as it
+# started, then stood down on a held lock, never ran and has no verdict to
+# leave; its "the run has not finished" would sit in status with no run going.
+# Put back what it replaced (SAVED, or no file at all), but only while the
+# file still holds what this run wrote (MINE): a run that did start may have
+# written its own verdict since, and that one stands.
+run_record_stand_down() {
+  local mine=$1 saved=$2 cur tmp
+  cur=$(cat "$STATE_DIR/last-run.json" 2>/dev/null || true)
+  [[ -n "$mine" && "$cur" == "$mine" ]] || return 0
+  if [[ -z "$saved" ]]; then rm -f "$STATE_DIR/last-run.json" 2>/dev/null || true; return 0; fi
+  tmp=$(mktemp "$STATE_DIR/.last-run.XXXXXX" 2>/dev/null) || return 0
+  if printf '%s\n' "$saved" > "$tmp" 2>/dev/null && chmod 600 "$tmp" 2>/dev/null \
+     && mv -f "$tmp" "$STATE_DIR/last-run.json" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+
 run_record_unless_failed() {
   local prev=""
   if [[ -r "$STATE_DIR/last-run.json" ]]; then

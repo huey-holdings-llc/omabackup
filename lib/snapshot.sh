@@ -771,6 +771,17 @@ cmd_snapshot() {
   # From here every refusal is recorded as a failed run. A dry run is an
   # inspection, not a backup attempt, so it records nothing either way.
   [[ $dry == 1 ]] || RUN_RECORDING=1
+  # Clear last run's verdict before this one does anything, so a run the unit
+  # kills cannot be reported with the previous run's reason. Early, before the
+  # lock: a kill can land within a fraction of a second. What it replaced is
+  # kept for the one case that undoes it, a run that stands down on a held
+  # lock (run_record_stand_down, below the take_lock).
+  local rec_saved="" rec_mine=""
+  if [[ $dry != 1 ]]; then
+    rec_saved=$(cat "$STATE_DIR/last-run.json" 2>/dev/null || true)
+    run_record_start
+    rec_mine=$(cat "$STATE_DIR/last-run.json" 2>/dev/null || true)
+  fi
   # Stamped at the START of the run, not the end: anything comparing a live
   # file against this stamp treats a file newer than it as "changed since the
   # snapshot". Stamping at the end left a window where a file rewritten
@@ -803,15 +814,13 @@ cmd_snapshot() {
   # not silently do nothing.
   if ! take_lock; then
     exec 9>&-
+    # This run never started, so it leaves no verdict: status said a run was
+    # under way with none running. Put back the one it cleared.
+    [[ $dry == 1 ]] || run_record_stand_down "$rec_mine" "$rec_saved"
     warn "another run held the lock for ${OMABACKUP_LOCK_WAIT:-20}s; skipping this run"
     snapshot_result skipped
     return 0
   fi
-  # Clear the last run's verdict as this one starts, so a run the unit kills
-  # cannot be reported with the previous run's reason. After the lock, not
-  # before: a run that stood down on a held lock never started, and clearing
-  # first left status saying a run was under way with none running.
-  [[ $dry == 1 ]] || run_record_start
 
   repo_assert_clean
   # The shipped ignore patterns, and their commit, belong here: under the

@@ -81,7 +81,8 @@ redrew them from the old report. It now keeps them until the run it started
 has landed, says "Snapshot running…" meanwhile, and checks every 15 seconds.
 status.json gains `last_attempt_at` and `last_attempt_ok`, the last
 attempt's time and verdict, which is how it knows. A run that finds another
-one holding the lock no longer clears the last verdict before standing down.
+one holding the lock no longer leaves the last verdict cleared when it
+stands down, so status stops saying a run is under way with none running.
 
 `omabackup drift` lists GONE rows (allowlist entries that resolve to
 nothing), as the popup always did. Only the snapshot used to write them, so
