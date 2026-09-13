@@ -81,6 +81,29 @@ RULES_FILE="$PLUGIN_DIR/share/gitleaks.toml"
 
 gitleaks_available() { have gitleaks; }
 
+# gitleaks_has_dir / gitleaks_has_git: does this gitleaks build answer to the
+# modern `dir` / `git` subcommands, or only the pre-8.19 `detect` / `protect`
+# pair (engine: snapshot.sh:495-499)? Each probe is a fork (`gitleaks ...
+# --help`), and a snapshot asks both -- staging scan, then staged scan -- so
+# the answer is memoised in a process-global variable, set on first use and
+# read on every call after. Unset (not empty-string) means "not probed yet",
+# so a build that fails the probe still memoises false rather than probing
+# again on every subsequent call. Never exported: the answer is only ever
+# good for the process that just asked gitleaks, never cached across a
+# process boundary where a different gitleaks could be on PATH.
+gitleaks_has_dir() {
+  if [[ -z "${GITLEAKS_HAS_DIR:-}" ]]; then
+    if gitleaks dir --help >/dev/null 2>&1; then GITLEAKS_HAS_DIR=1; else GITLEAKS_HAS_DIR=0; fi
+  fi
+  [[ "$GITLEAKS_HAS_DIR" == 1 ]]
+}
+gitleaks_has_git() {
+  if [[ -z "${GITLEAKS_HAS_GIT:-}" ]]; then
+    if gitleaks git --help >/dev/null 2>&1; then GITLEAKS_HAS_GIT=1; else GITLEAKS_HAS_GIT=0; fi
+  fi
+  [[ "$GITLEAKS_HAS_GIT" == 1 ]]
+}
+
 # secrets_filename_gate DIR: die on a credential-looking basename. No pipe:
 # `find | grep -q` failed open on SIGPIPE in the original engine -- grep -q
 # exits at the first match, find dies of SIGPIPE (141), and pipefail reported
@@ -134,7 +157,7 @@ secrets_scan_staging() {
   log "Scanning staged tree with gitleaks ($RULES_FILE)"
   # gitleaks 8.19+ has `dir`; older builds use `detect --no-git` (engine: snapshot.sh:495-499).
   local -a gl
-  if gitleaks dir --help >/dev/null 2>&1; then
+  if gitleaks_has_dir; then
     gl=(gitleaks dir . -c "$RULES_FILE" -i "$DATA_REPO" --no-banner --redact -v --exit-code 1)
   else
     gl=(gitleaks detect --source . --no-git -c "$RULES_FILE" -i "$DATA_REPO" --no-banner --redact -v --exit-code 1)
@@ -177,7 +200,7 @@ secrets_scan_staged() {
   # machine whose other gate coped fine. `protect --staged` is the same scan
   # under the pre-8.19 name.
   local -a gl
-  if gitleaks git --help >/dev/null 2>&1; then
+  if gitleaks_has_git; then
     gl=(gitleaks git --staged --config "$RULES_FILE" --no-banner --redact -v --exit-code 1)
   else
     gl=(gitleaks protect --staged --config "$RULES_FILE" --no-banner --redact -v --exit-code 1)

@@ -128,6 +128,12 @@ fix) instead. `status` still catches the cheap, unconditional part of the
 same guard, the backslash, newline and percent sign a value must never
 carry, which forks nothing.
 
+Content scanning remembers which `gitleaks` subcommand family it is talking
+to. Choosing between the modern and the pre-8.19 spelling of a scan means
+asking `gitleaks ... --help`, once for the staging scan and once for the
+staged one; the answer for each is now kept for the rest of the process
+instead of being asked for again by a second caller in the same run.
+
 ### Fixed
 
 A data repo the engine cannot read is recorded, not just refused. `status`
