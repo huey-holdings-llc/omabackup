@@ -352,18 +352,28 @@ actually be used on. The warning that names a mismatched push URL redacts it
 as well. A password in a URL would otherwise sit in `.git/config`, in the
 tool's config and in the log; raised by the Codex reviews on PRs 6 and 7.
 
-Every commit a run can push is scanned, the two list commits included.
-`snapshot --accept-allowlist` commits `allowlist.txt`, and the `.gitignore`
-sync commits `.gitignore`, both inside a run that goes on to push; the
-snapshot's own scan covers only `home/`, `etc/`, `manifests/` and
-`modes.txt`, so neither of those commits was ever scanned. A value pasted
-into a comment beside an allowlist entry could be committed and pushed with
-no gate in front of it. Both now stage, scan and commit through the same
+Four more commits this tool makes for you are scanned before they can be
+pushed, and each one now records the exact tree the scan looked at.
+`snapshot --accept-allowlist` commits `allowlist.txt`, the `.gitignore` sync
+commits `.gitignore`, and `setup` commits the repo's initial layout and its
+adoption marker; the snapshot's own scan covers only `home/`, `etc/`,
+`manifests/` and `modes.txt`, so none of those four went through a content
+gate at all. A value pasted into a comment beside an allowlist entry, or
+already sitting in an `allowlist.txt` you had written yourself before
+pointing `setup` at the directory, could be committed and then pushed with
+nothing in front of it. All four now stage, scan and commit through one
 helper, and a scan that says no undoes the staging and refuses the run
-rather than warning. What gets committed is the index, never the file as
-the worktree holds it at that moment, so a list rewritten while the scan was
-running cannot slip in behind its clean answer; the edit is left for you to
-commit, like any other.
+rather than warning.
+
+Recording the scanned tree matters as much as running the scan. The commit
+is built from the tree hash taken the moment staging finished, so a list
+rewritten in the worktree while `gitleaks` was still running cannot slip in
+behind its clean answer, and neither can a file some other process stages
+before the commit lands: if the index moves at all while the scan is
+looking, the run is refused rather than committed. Your own edit is left
+where it was, for you to commit. `setup` refusing this way means a data repo
+whose list files already hold a finding is reported before the repo has any
+history at all, rather than after it has been pushed.
 
 The filename gate refuses the run when its walk of the staging tree fails.
 The walk sat in one pipeline ending in `|| true`, put there for grep's

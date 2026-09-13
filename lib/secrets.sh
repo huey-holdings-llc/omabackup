@@ -248,24 +248,44 @@ secrets_scan_staged() {
 # only for a future non-zero status that does not come through that die. It is
 # not what unstages the refused file.
 #
-# THE COMMIT TAKES NO PATHSPEC. `git commit -- <paths>` does not commit the
-# index for those paths: git documents that when files are given on the
-# command line it ignores their staged contents and records their CURRENT
-# worktree contents instead. A file rewritten while gitleaks was running, or
-# in the window between its clean answer and this line, would then be
-# committed unscanned and pushed by the same run, which is the whole hole this
-# helper exists to close (Codex on PR #23). Committing the index commits
-# exactly the tree that was scanned.
+# WHAT GETS COMMITTED IS THE TREE THAT WAS SCANNED, by hash, not whatever the
+# index and the worktree happen to hold by the time a `git commit` runs. Two
+# different ways that came apart, both found by Codex on PR #23:
 #
-# What makes a bare `git commit` safe here is the empty-index precondition
-# below: with nothing else staged, the index IS these paths and nothing more,
-# so no pathspec is needed to keep the commit narrow and the mutation rule
-# holds. Both callers already stand down when something is staged; the check
-# is repeated here because the no-pathspec commit is what depends on it.
+#   - `git commit -- <paths>` does not commit the index for those paths. Git
+#     documents that files given on the command line make it ignore their
+#     staged changes and record their CURRENT worktree contents, so a list
+#     rewritten while gitleaks was running was committed unscanned.
+#   - a bare `git commit` commits the whole index, and the repo flock does not
+#     stop another process (a person at a terminal, another tool) running
+#     `git add`. Anything staged between the scan's clean answer and the
+#     commit rode out with it, unscanned, and the same run pushed it.
 #
-# Returns 0 committed, 2 the scan refused (nothing committed, index reset, and
-# it is the caller's job to refuse the run), 1 the precondition, the add or
-# the commit itself failed.
+# So `git write-tree` records the scanned tree by hash right after the add; a
+# second `write-tree` after the scan has to produce the same hash, or the run
+# is refused, because something moved the index while the gate was looking and
+# nothing here can say what; and the commit is built with `git commit-tree`
+# over the FIRST hash and installed with `git update-ref`, whose old-value
+# argument makes a HEAD that moved meanwhile fail the update rather than force
+# it. A commit object built this way cannot pick anything up on the way.
+#
+# The empty-index precondition below is what keeps the commit narrow, now that
+# it is the index rather than a pathspec that decides its contents: with
+# nothing else staged the index IS these paths and nothing more. Every caller
+# already stands down when something is staged; the check is repeated here
+# because the tree this helper commits is what depends on it.
+#
+# An unborn HEAD is a real case, not a theoretical one: setup_seed's initial
+# layout is the repo's first commit. `commit-tree` then takes no `-p`, and
+# `update-ref` is given "" as the old value, which means "this ref must not
+# exist" and fails closed in the same way.
+#
+# Returns:
+#   0  committed
+#   1  the precondition, the add, or git itself failed; nothing committed
+#   2  the scan refused; index reset, and the caller refuses the run
+#   3  nothing to commit: the staged tree already matches HEAD
+#   4  the index changed while the scan ran; index reset, caller refuses
 repo_commit_scanned() {
   local -a paths=()
   while (( $# )); do
@@ -283,6 +303,22 @@ repo_commit_scanned() {
 
   git -C "$DATA_REPO" add -- "${paths[@]}" || return 1
 
+  # The scanned tree, pinned by hash before anything else gets a turn.
+  local tree old="" head_tree=""
+  tree=$(git -C "$DATA_REPO" write-tree) || { repo_commit_unstage "${paths[@]}"; return 1; }
+  if old=$(git -C "$DATA_REPO" rev-parse --verify -q HEAD); then
+    head_tree=$(git -C "$DATA_REPO" rev-parse --verify -q "HEAD^{tree}") || head_tree=""
+  else
+    old=""
+  fi
+  # A rerun that laid nothing new down must be a silent no-op, not an empty
+  # commit: setup_seed rewrites the marker every time and usually with the
+  # same bytes.
+  if [[ -n "$head_tree" && "$tree" == "$head_tree" ]]; then
+    repo_commit_unstage "${paths[@]}"
+    return 3
+  fi
+
   local scan_rc=0 scan_out=""
   scan_out=$(secrets_scan_staged 2>&1) || scan_rc=$?
   # Always back to stderr, never stdout: the scan's own narration and
@@ -290,13 +326,50 @@ repo_commit_scanned() {
   # and under --json stdout carries one object and nothing else.
   [[ -z "$scan_out" ]] || printf '%s\n' "$scan_out" >&2
   if [[ $scan_rc -ne 0 ]]; then
-    git -C "$DATA_REPO" reset -q -- "${paths[@]}" 2>/dev/null || true
+    repo_commit_unstage "${paths[@]}"
     return 2
   fi
 
+  # The gate looked at `$tree`. If the index is no longer that tree, something
+  # staged something while it was looking, and what that was has not been
+  # scanned. Refuse: committing `$tree` anyway would be correct for THIS
+  # commit but would silently drop someone else's staging, and committing the
+  # new one would push it unscanned.
+  local tree2
+  tree2=$(git -C "$DATA_REPO" write-tree) || { repo_commit_unstage "${paths[@]}"; return 1; }
+  if [[ "$tree2" != "$tree" ]]; then
+    warn "the data repo index changed while the secret scan was running, so what is staged now is not what was scanned; nothing was committed"
+    repo_commit_unstage "${paths[@]}"
+    return 4
+  fi
+
   # Same identity fallback as every other commit path: a machine with no
-  # ~/.gitconfig cannot commit at all without it.
+  # ~/.gitconfig cannot commit at all without it. `-c user.name/-c user.email`
+  # set the committer AND the author for commit-tree, exactly as they do for
+  # commit.
   git_ident_args
-  git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} \
-    commit -q -m "$msg" || return 1
+  local new
+  if [[ -n "$old" ]]; then
+    new=$(git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} \
+      commit-tree "$tree" -p "$old" -m "$msg") || return 1
+  else
+    new=$(git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} \
+      commit-tree "$tree" -m "$msg") || return 1
+  fi
+  # "$old" as the expected value, "" when HEAD is unborn: a HEAD that moved
+  # under us fails the update instead of being forced over.
+  git -C "$DATA_REPO" update-ref -m "$msg" HEAD "$new" "$old" || return 1
+}
+
+# repo_commit_unstage PATHS...: undo repo_commit_scanned's own `git add`. The
+# empty-index precondition is what makes this exact: the index held nothing
+# else, so on a repo with no commits at all (setup_seed's first layout, where
+# `git reset` has no HEAD to reset against) emptying the index is the same
+# undo as resetting these paths against HEAD.
+repo_commit_unstage() {
+  if git -C "$DATA_REPO" rev-parse --verify -q HEAD >/dev/null; then
+    git -C "$DATA_REPO" reset -q -- "$@" 2>/dev/null || true
+  else
+    git -C "$DATA_REPO" read-tree --empty 2>/dev/null || true
+  fi
 }

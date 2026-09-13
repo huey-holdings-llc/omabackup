@@ -203,12 +203,24 @@ setup_seed() {
     case " ${laid[*]} " in *" $s "*) continue ;; esac
     git -C "$DATA_REPO" ls-files --error-unmatch -- "$s" >/dev/null 2>&1 || laid+=("$s")
   done
-  git -C "$DATA_REPO" add -- "${laid[@]}" >/dev/null
-  # `git commit -q` does not suppress "nothing to commit, working tree
-  # clean" on stdout when a rerun has nothing new to lay down; that line
+  # Through the scanned-commit helper, like every other commit this tool
+  # signs. `laid` is not all this tool's own output: the loop just above adds
+  # any seed list git has never seen, which on a directory someone had already
+  # put their own allowlist.txt in is a USER-PROVIDED file being committed
+  # into the repo's first commit, with setup_first_snapshot pushing that
+  # history moments later. It went in with no content scan at all (Codex on
+  # PR #23). The helper also answers 3 for a rerun that laid nothing new down,
+  # which is what the old `|| true` was really for: `git commit -q` does not
+  # suppress "nothing to commit, working tree clean" on stdout, and that line
   # must never leak into a --json caller's single JSON object.
-  git_ident_args
-  git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -qm "omabackup: initial layout" >/dev/null 2>&1 || true
+  local seedrc=0
+  repo_commit_scanned "${laid[@]}" -m "omabackup: initial layout" || seedrc=$?
+  case $seedrc in
+    0|3) : ;;
+    2) die "the staged secret scan refused the data repo's initial layout, so nothing was committed. Fix the finding in the list files under $DATA_REPO (or record it in $DATA_REPO/.gitleaksignore) and run omabackup setup again" ;;
+    4) die "the data repo index changed while the initial layout was being scanned, so what would have been committed is not what was scanned; nothing was committed" ;;
+    *) warn "could not commit the initial layout in $DATA_REPO; it stays an uncommitted edit there" ;;
+  esac
   setup_phase "seeded"
 }
 
@@ -310,9 +322,20 @@ setup_import() {
   # .omabackup meant a clone of the adopted repo carried no marker at all and
   # every verb refused it there. `|| true` for the same reason as setup_seed:
   # a rerun with nothing new to write must be a silent no-op, not a failure.
-  git -C "$DATA_REPO" add -- "${adopted[@]}" >/dev/null || die "could not stage the adoption marker"
-  git_ident_args
-  git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -qm "omabackup: adopt existing repo" >/dev/null 2>&1 || true
+  # Through the same helper as setup_seed's layout commit. Everything in
+  # `adopted` is this tool's own output, so the scan has nothing to find; what
+  # the helper buys here is the other half of the same guarantee, that the
+  # commit records the tree it scanned rather than the whole index. An adopted
+  # repo is somebody's existing clone, so its index is exactly the one this
+  # tool has no business committing on their behalf.
+  local adoptrc=0
+  repo_commit_scanned "${adopted[@]}" -m "omabackup: adopt existing repo" || adoptrc=$?
+  case $adoptrc in
+    0|3) : ;;
+    2) die "the staged secret scan refused the adoption commit, so nothing was committed. Fix the finding in $DATA_REPO (or record it in $DATA_REPO/.gitleaksignore) and run omabackup setup --import again" ;;
+    4) die "the data repo index changed while the adoption commit was being scanned; nothing was committed" ;;
+    *) warn "could not commit the adoption marker in $DATA_REPO; it stays an uncommitted edit there" ;;
+  esac
   # A repo from an older version lacks the ignore patterns added since. The
   # gate used to append them on the first scan and leave the edit; the sync
   # now owns its commit, and adoption is the other path that commits.

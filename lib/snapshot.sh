@@ -403,8 +403,9 @@ snapshot_accept_allowlist_commit() {
   repo_commit_scanned allowlist.txt \
     -m "omabackup: allowlist accepted at $n entries (--accept-allowlist)" || rc=$?
   case $rc in
-    0) log "committed the accepted allowlist.txt; the next run's floor follows it, with no flag" ;;
+    0|3) log "committed the accepted allowlist.txt; the next run's floor follows it, with no flag" ;;
     2) die "the staged secret scan refused the accepted allowlist.txt; staging undone, nothing committed" ;;
+    4) die "the data repo index changed while the accepted allowlist.txt was being scanned, so what would have been committed is not what was scanned; staging undone, nothing committed" ;;
     *) warn "could not commit the accepted allowlist.txt; the next run needs --accept-allowlist again" ;;
   esac
 }

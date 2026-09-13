@@ -6119,6 +6119,13 @@ case " \$* " in
     if [ -f "$T/gl-race-line" ]; then
       cat "$T/gl-race-line" >> allowlist.txt
     fi
+    # The other half of the race: the INDEX moving, not the worktree. A
+    # person at a terminal running git add is not serialised by the repo
+    # flock.
+    if [ -f "$T/gl-race-stage" ]; then
+      printf 'raced in\n' > racedin114.txt
+      git add racedin114.txt
+    fi
     ;;
 esac
 exit 0
@@ -6186,6 +6193,30 @@ EOF
   # nothing to do and says so on stdout.
   git -C "$FR" commit -qam "back to the list the run scanned" >/dev/null 2>&1 || true
 
+  # ...and the other half of that race: not the worktree changing behind the
+  # scan, but the INDEX. The repo flock does not stop another process running
+  # `git add`, and a commit that takes the whole index takes whatever landed
+  # there, so a path staged after the scan answered clean was committed
+  # unscanned and pushed by the same run (Codex on PR #23, round two). The
+  # tree is pinned by hash before the scan and compared again after it.
+  : > "$T/gl-race-stage"
+  printf '.config/t114/d.conf\n' >> "$FR/allowlist.txt"
+  printf 'setting=4\n' > "$FH/.config/t114/d.conf"
+  before114i=$(git -C "$FR" rev-parse HEAD)
+  i114=$(obj114 snapshot --no-push --accept-allowlist)
+  rm -f "$T/gl-race-stage"
+  eq "a path staged while the scan ran refuses the acceptance" \
+    "$(jq -r .ok <<<"$i114")" "false"
+  has "and the refusal says the index moved under the scan" \
+    "$(jq -r .error <<<"$i114")" "index changed while"
+  eq "nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$before114i"
+  eq "and the raced-in path is in no commit" \
+    "$(git -C "$FR" log --format= --name-only | grep -cx 'racedin114.txt' || true)" "0"
+  eq "the run records the refusal, so status does not read healthy" \
+    "$(obj status | jq -r .last_attempt_ok)" "false"
+  git -C "$FR" reset -q >/dev/null 2>&1 || true
+  rm -f "$FR/racedin114.txt"
+
   # ...and the empty index the pathspec-free commit rests on is a
   # precondition, not an assumption. With an unrelated path staged by hand the
   # acceptance stands down rather than committing an index that holds more
@@ -6243,6 +6274,59 @@ EOF
     "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
   eq "the run stopped at the sync's own staged scan, before the snapshot's" \
     "$(grep -c -- '--staged' "$GLLOG114g" || true)" "1"
+
+  # SETUP'S OWN FIRST COMMIT. setup_seed stages any seed list git has never
+  # seen, which on a directory the user had already put their own
+  # allowlist.txt in is a USER-PROVIDED file going into the repo's very first
+  # commit, with setup_first_snapshot pushing that history moments later. It
+  # went in with no content scan at all (Codex on PR #23, round two), and it
+  # is also the one caller whose HEAD is unborn when the helper runs.
+  mk_fixture g114s
+  GL114s="$T/fakebin-gl"; mkdir -p "$GL114s"
+  cat > "$GL114s/gitleaks" <<'FAKEGL'
+#!/bin/sh
+case " $* " in
+  *" --staged "*)
+    if git diff --cached 2>/dev/null | grep -q 'sk-ant-'; then
+      echo "fake gitleaks: anthropic-api-key found in a staged file"
+      exit 1
+    fi
+    ;;
+esac
+exit 0
+FAKEGL
+  chmod +x "$GL114s/gitleaks"
+  SD114="$T/seedrepo"; mkdir -p "$SD114"
+  git init -q -b main "$SD114"
+  git -C "$SD114" config user.email t@t; git -C "$SD114" config user.name t
+  printf '# my own list, never committed\n.bashrc\n# pasted: sk-ant-api03-%sAA\n' \
+    "$(rand_body 90)" > "$SD114/allowlist.txt"
+  s114=$(env HOME="$FH" PATH="$GL114s:$PATH" "$CLI" setup --data-repo "$SD114" --no-timers --yes --json 2>/dev/null)
+  eq "setup refuses a secret already sitting in the directory's own allowlist.txt" \
+    "$(jq -r .ok <<<"$s114")" "false"
+  has "and the refusal names the scan" "$(jq -r .error <<<"$s114")" "staged secret scan"
+  git -C "$SD114" rev-parse --verify -q HEAD >/dev/null \
+    && bad "setup committed an initial layout it had not scanned" \
+    || ok "so the repo still has no commit at all"
+
+  # ...and a directory with nothing planted in it seeds exactly as before,
+  # through the same unborn-HEAD path.
+  SD114c="$T/seedclean"; mkdir -p "$SD114c"
+  check "a clean directory still seeds" \
+    env HOME="$FH" PATH="$GL114s:$PATH" "$CLI" setup --data-repo "$SD114c" --no-timers --yes
+  eq "with the initial layout committed" \
+    "$(git -C "$SD114c" log --format=%s 2>/dev/null | grep -c '^omabackup: initial layout$' || true)" "1"
+  eq "and the seed lists in it" \
+    "$(git -C "$SD114c" ls-tree -r --name-only HEAD | grep -c '^allowlist.txt$' || true)" "1"
+  eq "the marker too" \
+    "$(git -C "$SD114c" ls-tree -r --name-only HEAD | grep -c '^.omabackup$' || true)" "1"
+  # A rerun lays nothing new down, so it must be a silent no-op rather than an
+  # empty commit: that is what the old `commit || true` was really for.
+  n114s=$(git -C "$SD114c" log --format=%s | grep -c . || true)
+  check "a flagless rerun is idempotent" \
+    env HOME="$FH" PATH="$GL114s:$PATH" "$CLI" setup --data-repo "$SD114c" --no-timers --yes
+  eq "and adds no second layout commit" \
+    "$(git -C "$SD114c" log --format=%s | grep -c . || true)" "$n114s"
 fi
 
 if group 115 "a drift scan that cannot make its scratch still says so, and still prints one JSON object"; then

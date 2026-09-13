@@ -739,8 +739,9 @@ data_repo_gitignore_sync_commit() {
   repo_commit_scanned .gitignore \
     -m "omabackup: .gitignore gains $GITIGNORE_SYNC_ADDED ignore pattern(s) this version ships" || rc=$?
   case $rc in
-    0) log "committed the .gitignore update" ;;
+    0|3) log "committed the .gitignore update" ;;
     2) die "the staged secret scan refused the .gitignore update; staging undone, nothing committed" ;;
+    4) die "the data repo index changed while the .gitignore update was being scanned, so what would have been committed is not what was scanned; staging undone, nothing committed" ;;
     *) warn "could not commit the .gitignore update; it stays an uncommitted edit (the popup's Commit button, or omabackup push --confirm)" ;;
   esac
 }
