@@ -80,6 +80,15 @@ setup_phase() { config_write "$(jq --arg p "$1" '.setupPhase=$p' "$CONFIG_FILE")
 # and imported rank the same (either means the repo layout step is done); an
 # empty or unknown phase ranks below everything, so a fresh install always
 # runs every step.
+#
+# ONE comparison in the whole codebase uses these ranks: the `scanned` test in
+# cmd_setup that decides whether to run the first drift scan again. Ranks 3 and
+# up (remote, units, link, nag, snapshot, done) are stamped so a reader of the
+# config can see how far a run got, and nothing branches on them; the
+# first-snapshot step a few lines below that test deliberately asks
+# manifests/.last-run instead, for the reason written there. Keep every rank
+# anyway: a phase dropped from this case lands on the `*` arm and ranks 0, so a
+# config stamped `done` would read as a fresh install and rescan every rerun.
 setup_phase_rank() {
   case "$1" in
     seeded|imported) echo 1 ;;
