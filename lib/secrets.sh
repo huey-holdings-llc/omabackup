@@ -120,18 +120,24 @@ secrets_filename_gate() {
 
 # secrets_scan_staging DIR: content scan of the staging tree, before anything
 # is synced into the repo. -i pins the .gitleaksignore lookup to the data
-# repo: gitleaks defaults that to ".", and the engine always ran this scan
-# from inside $REPO_DIR (snapshot.sh:42,265), so a repo carrying a
-# .gitleaksignore keeps working here even though this function does not cd.
+# repo, where gitleaks would otherwise look in ".".
+#
+# It scans "." from INSIDE the staging tree, so a finding is named
+# home/<path>:<rule>:<line>, the same fingerprint the staged scan below gives
+# it. Handed the absolute path, gitleaks named it by that path, so one line
+# in .gitleaksignore satisfied one gate and not the other, and the line that
+# satisfied this one carried the machine's own path. -v prints each finding
+# (value redacted) with its fingerprint: without it the refusal said only
+# "leaks found: 1" and named nothing to fix or record.
 secrets_scan_staging() {
   gitleaks_available || { warn "gitleaks not installed: content scan skipped (push will be refused)"; return 0; }
   log "Scanning staged tree with gitleaks ($RULES_FILE)"
   # gitleaks 8.19+ has `dir`; older builds use `detect --no-git` (engine: snapshot.sh:495-499).
   local -a gl
   if gitleaks dir --help >/dev/null 2>&1; then
-    gl=(gitleaks dir "$1" -c "$RULES_FILE" -i "$DATA_REPO" --no-banner --redact --exit-code 1)
+    gl=(gitleaks dir . -c "$RULES_FILE" -i "$DATA_REPO" --no-banner --redact -v --exit-code 1)
   else
-    gl=(gitleaks detect --source "$1" --no-git -c "$RULES_FILE" -i "$DATA_REPO" --no-banner --redact --exit-code 1)
+    gl=(gitleaks detect --source . --no-git -c "$RULES_FILE" -i "$DATA_REPO" --no-banner --redact -v --exit-code 1)
   fi
   # Let gitleaks' own stdout/stderr through (findings are already --redact'd) --
   # swallowing it made a missing rules file, a crashed binary and a real leak
@@ -144,7 +150,11 @@ secrets_scan_staging() {
   # body is NOT errexit-exempt -- it killed the process before `rc` could be
   # read, so a real leak never reached reset/die at all.
   local rc=0
-  if [[ "${JSON:-0}" == 1 ]]; then "${gl[@]}" >&2 || rc=$?; else "${gl[@]}" || rc=$?; fi
+  if [[ "${JSON:-0}" == 1 ]]; then
+    ( cd "$1" && "${gl[@]}" >&2 ) || rc=$?
+  else
+    ( cd "$1" && "${gl[@]}" ) || rc=$?
+  fi
   [[ $rc -eq 0 ]] || die "gitleaks exited $rc scanning the staging tree; investigate the output above; no snapshot was committed"
 }
 
@@ -168,9 +178,9 @@ secrets_scan_staged() {
   # under the pre-8.19 name.
   local -a gl
   if gitleaks git --help >/dev/null 2>&1; then
-    gl=(gitleaks git --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1)
+    gl=(gitleaks git --staged --config "$RULES_FILE" --no-banner --redact -v --exit-code 1)
   else
-    gl=(gitleaks protect --staged --config "$RULES_FILE" --no-banner --redact --exit-code 1)
+    gl=(gitleaks protect --staged --config "$RULES_FILE" --no-banner --redact -v --exit-code 1)
   fi
   local rc=0
   if [[ "${JSON:-0}" == 1 ]]; then

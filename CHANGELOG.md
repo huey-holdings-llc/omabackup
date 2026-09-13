@@ -45,6 +45,22 @@ instead of committed. `omabackup push --confirm` commits the same set. Past
 gains `uncommitted_count`, `uncommitted_truncated` and `uncommitted_sig`, and
 `uncommitted` now holds bare paths.
 
+`/etc` reference copies keep their own permissions, capped at 0644. They
+were staged 0644 whatever the source was, so a 0600 or 0640 file you can
+read sat readable to everyone in the data repo's working tree, and
+`modes.txt` recorded the wider mode as the real one. The next snapshot
+tightens the copies already there. Git's history is unaffected, since git
+only ever stores 644 or 755, and an executable `/etc` file is still stored
+as a plain one.
+
+A gitleaks false positive takes one line in the data repo's
+`.gitleaksignore`. The staging-tree scan named a finding by an absolute path
+under `.staging` and the staged scan by its path in the repo, so a
+fingerprint satisfied one gate and not the other, and the line that
+satisfied the staging scan carried this machine's own path. Both now name it
+`<path in the repo>:<rule>:<line>`. The README's Troubleshooting says how to
+record a false positive, and SECURITY.md why that is not a bypass.
+
 The drift scan no longer reports the tool's own files, on any data repo:
 the five systemd units setup writes (by their exact names; a hand-written
 unit beside them, even one starting `omabackup-`, is still reported) and
