@@ -14,11 +14,14 @@
 # `has` assertions in tests/engine.test.sh that match strings like
 # "NEW        ~/.config/mytool".
 
-# DRIFT_CLASSES: the report line classes that count as drift a human has to
-# act on. One constant, because manifests_drift, manifests_drift_counts and
-# snapshot_drift_finish all filter the report with it and comm(1) diffs two
-# of those filters against each other: a class added to one regex and not the
-# others made every run report the same item as new, forever.
+# DRIFT_CLASSES: NOT the actionable-row count (see drift_count_actionable
+# below for that, deliberately a separate job with its own TOOBIG/EXCLUDED
+# rows). This is the narrower set "new since the last report" is computed
+# over: manifests_drift's MAN_DRIFT_PREV and snapshot_drift_finish's
+# new_drift both filter the SAME report with this one regex, and comm(1)
+# diffs those two filtered lists against each other. One constant for both,
+# because a class added to one and not the other made every run report the
+# same item as new, forever.
 # shellcheck disable=SC2034  # read by lib/manifests.sh and lib/snapshot.sh
 DRIFT_CLASSES='^(MODIFIED|NEW|GONE|# ERROR)'
 
@@ -681,3 +684,28 @@ drift_optional_load() {
 }
 # drift_parse FILE: emit JSON items from a saved report file, honouring the sentinel.
 drift_parse() { drift_items_json < "$1"; }
+
+# drift_count_actionable: reads a parsed drift-items JSON ARRAY on stdin --
+# the shape drift_parse/drift_items_json produce, wrapped in "[...]", exactly
+# what health_collect and manifests_drift_counts already build for their own
+# purposes -- and prints the number of rows a human can act on. NEW,
+# MODIFIED, GONE, TOOBIG and EXCLUDED all offer a button (ui/DriftRow.qml:
+# Allow, Ignore, or Ignore alone for the last two); an ERROR row has none,
+# and is not counted.
+#
+# TAKES PARSED DATA, NEVER A PATH. `status --json .drift_count` (lib/health.sh)
+# and `snapshot --json .drift_count` (lib/manifests.sh, manifests_drift_counts)
+# both call this so the two can never disagree about what counts -- that was
+# the whole point of the shared function -- but a first version took a FILE
+# and reopened it, and health_collect had already parsed the very same file
+# for status.json's `.drift` array a few lines above. cmd_status takes no
+# repo lock, so a concurrent snapshot could replace manifests/drift.txt
+# between those two reads: `.drift` and `.drift_count` would then describe
+# two different reports, and a report that went clean on the second read
+# could publish `state:"ok"` beside rows still sitting in `.drift` from the
+# first (Codex, PR 14, round 2). Every caller now parses the report exactly
+# once and hands those same parsed bytes to both the `.drift` array and this
+# count.
+drift_count_actionable() {
+  jq '[.[] | select(.type != "ERROR")] | length'
+}

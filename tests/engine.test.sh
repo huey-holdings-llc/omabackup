@@ -4568,6 +4568,32 @@ if group 59 "the new-drift toast is normal urgency, and open --report shows the 
   has "on the drift report" "$(cat "$T/open.argv" 2>/dev/null)" "$FR/manifests/drift.txt"
 fi
 
+if group 100 "status and snapshot agree on the drift count, TOOBIG and EXCLUDED included"; then
+  # health_collect (status) counted every non-ERROR row, and
+  # manifests_drift_counts (snapshot) filtered with DRIFT_CLASSES, which never
+  # matched TOOBIG or EXCLUDED lines at all: a report with either disagreed
+  # between the two --json replies, and the popup and the badge could show
+  # two different numbers for the same report.
+  mk_fixture g100; seed_home; allow '.config/mytool'; commit_baseline
+  # A TOOBIG row (group 36's fixture): a live file over maxFileSize inside an
+  # allowlisted directory.
+  head -c 12000000 /dev/urandom > "$FH/.config/mytool/huge.dat"
+  # An EXCLUDED row (group 32's fixture): a live file the allowlist covers but
+  # the data repo's own .gitignore matches (share/data.gitignore: *.sqlite).
+  printf 'x\n' > "$FH/.config/mytool/cache.sqlite"
+  j100=$(obj snapshot --no-push)
+  s100=$(obj status)
+  grep -q '^TOOBIG' "$FR/manifests/drift.txt" && ok "the fixture produced a TOOBIG row" \
+    || bad "no TOOBIG row; fixture is not exercising the disagreement"
+  grep -q '^EXCLUDED' "$FR/manifests/drift.txt" && ok "the fixture produced an EXCLUDED row" \
+    || bad "no EXCLUDED row; fixture is not exercising the disagreement"
+  actionable100=$(jq -r '[.drift[] | select(.type != "ERROR")] | length' <<<"$s100")
+  eq "status --json .drift_count is the number of non-ERROR rows in .drift" \
+    "$(jq -r .drift_count <<<"$s100")" "$actionable100"
+  eq "snapshot --json .drift_count agrees with status --json .drift_count" \
+    "$(jq -r .drift_count <<<"$j100")" "$(jq -r .drift_count <<<"$s100")"
+fi
+
 group_close
 if (( ${#GROUP_SECS[@]} > 1 )); then
   echo; echo "slowest groups (seconds):"
