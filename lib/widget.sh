@@ -406,6 +406,17 @@ cmd_push() {
       return 1
     fi
   done
+  # The same for a byte that is not UTF-8, which [[:cntrl:]] does not catch:
+  # jq turns it into U+FFFD on its way into status.json. One grep over the
+  # whole list; -x '.*' under a UTF-8 locale fails exactly the invalid names.
+  if (( ${#dirty[@]} > 0 )); then
+    local bad
+    bad=$(printf '%s\0' "${dirty[@]}" | LC_ALL=C.UTF-8 grep -zaxv '.*' | head -zn1 | tr -d '\0' || true)
+    if [[ -n "$bad" ]]; then
+      widget_reply_fail "an edit in the data repo has a name that is not valid UTF-8, which the list cannot show as it is: $(printf '%q' "$bad"); rename it, or commit it by hand"
+      return 1
+    fi
+  fi
   # The snapshot's filename gate (secrets_filename_gate), over what this button
   # would add or change. The five list files it used to stage could never
   # match; now an adopted repo's tracked `.env` or vault can, .gitignore only

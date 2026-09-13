@@ -4285,6 +4285,15 @@ FAKEGL
   has "saying so" "$(jq -r '.problems[0]' <<<"$n52")" "control character"
   eq "and nothing is committed" "$(git -C "$FR" rev-parse HEAD)" "$head52"
   rm "$FR/notes"$'\r'".md"
+  # The same for a byte that is not UTF-8: jq turns it into U+FFFD on its way
+  # into status.json, so the dialog would show a name git never stages, and
+  # two such names could show as one (Codex, PR 10, second review).
+  printf 'b\n' > "$FR/bad"$'\xff'".md"
+  b52=$(pj52 push --confirm)
+  eq "a name that is not UTF-8 is refused, not shown altered" "$(jq -r .ok <<<"$b52")" "false"
+  has "saying so" "$(jq -r '.problems[0]' <<<"$b52")" "not valid UTF-8"
+  eq "and nothing is committed" "$(git -C "$FR" rev-parse HEAD)" "$head52"
+  rm "$FR/bad"$'\xff'".md"
 
   # Widening what the button commits must not widen what it lets through.
   printf 'TOKEN=sk-ant-api03-%sAA\n' "$(rand_body 90)" > "$FR/bin/tok.sh"
