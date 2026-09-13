@@ -174,6 +174,15 @@ the run when it could not, so a state directory that takes no new files
 stopped a backup over a file the guard did not need. A `git log` that cannot
 walk the history still refuses the run, as it must.
 
+A `[` in a filename is no longer a file the popup cannot triage. Allow and
+Ignore refused any name holding `*`, `?` or `[`, because both lists are
+matched as globs and an entry carrying one of those would have claimed every
+sibling it matched. A bracket has a spelling the matchers accept, `[[]`, and
+the write path uses it, so the entry matches that file and no other through
+the snapshot, the drift scan and `lint` alike. `*` and `?` have no such
+spelling and are still refused, with a message that no longer names the
+bracket.
+
 The popup's Commit button now commits every edit it counts. `status`
 counted every uncommitted change in the data repo outside the snapshot's own
 files, but the button staged only the four lists and `.gitignore`, so

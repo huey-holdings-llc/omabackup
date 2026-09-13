@@ -1576,27 +1576,26 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
   # A path is not a glob. The lists are MATCHED as globs (lists_load expands
   # every allowlist entry, is_ignored runs each ignore entry as a pattern), so
   # a file genuinely named `*` would have had one Allow click write an entry
-  # matching every sibling it has.
-  # The report NAMES all three, so the refusal below is about the glob
-  # characters and nothing else.
-  printf 'x\n' > "$FH/.config/appz/*"; printf 'x\n' > "$FH/.config/appz/?"; printf 'x\n' > "$FH/.config/appz/[a]"
+  # matching every sibling it has. A `[` has an escaped spelling and is
+  # accepted (group 110); `*` and `?` have none and stay refused.
+  # The report NAMES both, so the refusal below is about the glob characters
+  # and nothing else.
+  printf 'x\n' > "$FH/.config/appz/*"; printf 'x\n' > "$FH/.config/appz/?"
   printf 'y\n' > "$FH/.config/appz/slashme.toml"
   { printf 'NEW        ~/.config/appz/*\n'
     printf 'NEW        ~/.config/appz/?\n'
-    printf 'NEW        ~/.config/appz/[a]\n'
     printf 'NEW        ~/.config/appz/slashme.toml\n'
     printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
   out51=$(obj allow "$(tp '.config/appz/*')")
   eq "allow: refuses a path holding a glob character" "$(jq -r .ok <<<"$out51")" "false"
   # The message has to name an action that exists. "Edit allowlist.txt by
-  # hand" did not: no allowlist spelling resolves a literal `[`.
+  # hand" did not: no allowlist spelling resolves a literal `*`.
   has "and names the two things a user can actually do" \
     "$(jq -r '.problems[0]' <<<"$out51")" "rename it, or ignore the folder it is in"
   eq "and nothing was written" "$(grep -c '^\.config/appz/\*$' "$FR/allowlist.txt")" "0"
   eq "ignore: refuses a question mark too" "$(obj ignore "$(tp '.config/appz/?')" | jq -r .ok)" "false"
-  eq "ignore: refuses a bracket too" "$(obj ignore "$(tp '.config/appz/[a]')" | jq -r .ok)" "false"
-  eq "and no ignore entry was written for either" \
-    "$(grep -cE '^\.config/appz/(\?|\[a\])' "$FR/drift-ignore.txt")" "0"
+  eq "and no ignore entry was written for it" \
+    "$(grep -cE '^\.config/appz/\?' "$FR/drift-ignore.txt")" "0"
 
   # A slashed argument names a DIRECTORY, and a file row is not one. The
   # report's own slash is the only authority for that; taking the argument's

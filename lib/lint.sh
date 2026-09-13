@@ -129,9 +129,13 @@ lint_drift_ignore() {
         esac
         ;;
     esac
-    # An ignore for a path that no longer exists is dead weight.
+    # An ignore for a path that no longer exists is dead weight. The test is a
+    # literal `-e`, so an entry with any pattern character in it is skipped:
+    # a `*` may legitimately match nothing today, and a `[` is the escaped
+    # spelling of a literal bracket (`[[]`), which never exists under that
+    # name on disk and would have been called stale on every lint.
     case "$e" in
-      *'*'*) ;;   # globs can legitimately match nothing today
+      *'*'*|*'['*) ;;
       *)
         case "$e" in
           /*) p="$e" ;;
