@@ -163,7 +163,7 @@ health_collect() {
   fi
 
   # --- drift report: a scan that never finished is a FAULT, never "clean".
-  local drift_file="$DATA_REPO/manifests/drift.txt" items arr count total
+  local drift_file="$DATA_REPO/manifests/drift.txt" items arr total
   H_SCAN_COMPLETE=false; H_DRIFT_COUNT=0; H_DRIFT_TRUNCATED=false; H_DRIFT_JSON="[]"
   if [[ ! -f "$drift_file" ]]; then
     H_PROBLEMS+=("no drift report -- the snapshot timer may not be running")
@@ -172,11 +172,13 @@ health_collect() {
     [[ "$H_SCAN_COMPLETE" == true ]] || H_PROBLEMS+=("drift report is incomplete -- the scan did not finish")
     items=$(drift_parse "$drift_file")
     arr="[${items}]"
-    # An ERROR row is a fault below, not a path to triage: it has no buttons,
-    # so counting it put a number on the badge nothing in the popup could
-    # bring down. The row itself stays in the list, to be read.
-    read -r total count < <(jq -r '[length, ([.[] | select(.type != "ERROR")] | length)] | @tsv' <<<"$arr")
-    H_DRIFT_COUNT=$count
+    total=$(jq -r 'length' <<<"$arr")
+    # drift_count_actionable (lib/drift.sh) is the one counter: it and
+    # manifests_drift_counts (lib/manifests.sh, `snapshot --json`) both count
+    # every row a drift report can hold except ERROR, which has no button
+    # (Allow/Ignore, ui/DriftRow.qml) and so is a fault below, not a path to
+    # triage. The row itself stays in the list, to be read.
+    H_DRIFT_COUNT=$(drift_count_actionable "$drift_file")
     # An ERROR row means a detector did not run: a missing stock tree, a pacman
     # this scan could not parse, an unreadable drop-in directory. Counting it
     # as one more drift item made "the biggest detector is switched off" render

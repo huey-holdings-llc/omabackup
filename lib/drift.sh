@@ -14,11 +14,14 @@
 # `has` assertions in tests/engine.test.sh that match strings like
 # "NEW        ~/.config/mytool".
 
-# DRIFT_CLASSES: the report line classes that count as drift a human has to
-# act on. One constant, because manifests_drift, manifests_drift_counts and
-# snapshot_drift_finish all filter the report with it and comm(1) diffs two
-# of those filters against each other: a class added to one regex and not the
-# others made every run report the same item as new, forever.
+# DRIFT_CLASSES: NOT the actionable-row count (see drift_count_actionable
+# below for that, deliberately a separate job with its own TOOBIG/EXCLUDED
+# rows). This is the narrower set "new since the last report" is computed
+# over: manifests_drift's MAN_DRIFT_PREV and snapshot_drift_finish's
+# new_drift both filter the SAME report with this one regex, and comm(1)
+# diffs those two filtered lists against each other. One constant for both,
+# because a class added to one and not the other made every run report the
+# same item as new, forever.
 # shellcheck disable=SC2034  # read by lib/manifests.sh and lib/snapshot.sh
 DRIFT_CLASSES='^(MODIFIED|NEW|GONE|# ERROR)'
 
@@ -681,3 +684,22 @@ drift_optional_load() {
 }
 # drift_parse FILE: emit JSON items from a saved report file, honouring the sentinel.
 drift_parse() { drift_items_json < "$1"; }
+
+# drift_count_actionable FILE: the number of drift report rows a human can act
+# on -- NEW, MODIFIED, GONE, TOOBIG and EXCLUDED all offer a button
+# (ui/DriftRow.qml: Allow, Ignore, or Ignore alone for the last two); an ERROR
+# row has none, and is not counted here, the same way health_collect never
+# counted one as drift.
+#
+# THE ONE COUNTER. `status --json .drift_count` (lib/health.sh) and
+# `snapshot --json .drift_count` (lib/manifests.sh, manifests_drift_counts)
+# both call this instead of deriving their own answer. They used to disagree
+# on any report holding a TOOBIG or EXCLUDED row: health counted every row
+# `drift_items_json` produced except ERROR, while the snapshot counted only
+# rows matching DRIFT_CLASSES (MODIFIED, NEW, GONE), a regex TOOBIG and
+# EXCLUDED never matched at all. The popup and the badge could show two
+# different numbers for the same report.
+drift_count_actionable() {
+  [[ -f "$1" ]] || { echo 0; return 0; }
+  jq '[.[] | select(.type != "ERROR")] | length' <<<"[$(drift_parse "$1")]"
+}

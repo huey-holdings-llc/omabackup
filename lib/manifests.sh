@@ -272,10 +272,14 @@ manifests_drift() {
 manifests_drift_counts() {
   DRIFT_N=0; TOOBIG_N=0; EXCLUDED_N=0
   [[ -f "$1" ]] || return 0
-  # ERROR rows are faults, not paths to triage, and health counts them that
-  # way; this count used to include them, so `snapshot --json` and `status
-  # --json` gave two drift_counts for one report (Codex, PR 13).
-  DRIFT_N=$( { grep -E "$DRIFT_CLASSES" "$1" 2>/dev/null || true; } | grep -cv '^# ERROR' || true)
+  # DRIFT_N comes from drift_count_actionable (lib/drift.sh), the same
+  # function health_collect calls for `status --json .drift_count`: this used
+  # to filter with DRIFT_CLASSES instead (MODIFIED, NEW, GONE only), a regex
+  # that never matched a TOOBIG or EXCLUDED row, so a report holding either
+  # made `snapshot --json` under-report what `status --json` and the popup
+  # showed for the same report (Task 1, 0.8.0). TOOBIG_N and EXCLUDED_N below
+  # are a separate, narrower tally kept only for the snapshot's own log line.
+  DRIFT_N=$(drift_count_actionable "$1")
   TOOBIG_N=$(grep -c '^TOOBIG' "$1" 2>/dev/null || true)
   EXCLUDED_N=$(grep -c '^EXCLUDED' "$1" 2>/dev/null || true)
   DRIFT_N=${DRIFT_N:-0}; TOOBIG_N=${TOOBIG_N:-0}; EXCLUDED_N=${EXCLUDED_N:-0}

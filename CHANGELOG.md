@@ -142,6 +142,15 @@ since it is an inspection and not a backup. A run the timer had to kill never
 reaches the refusal path, so the `OnFailure=` hook files it instead, and it
 never overwrites a reason the refusal already explained.
 
+`snapshot --json` and `status --json` now report the same drift count. The
+snapshot counted only rows matching `MODIFIED`, `NEW` and `GONE`, while
+`status` counted every row a drift report can hold except `ERROR`, so a
+report with a `TOOBIG` or `EXCLUDED` line (a file over `maxFileSize`, or one
+the repo's `.gitignore` matches) made the two disagree about how many items
+needed attention, on the same report at the same moment. Both now come from
+one function, and the count means the same thing everywhere: every row the
+popup can put an Ignore or Allow button on, which is every row but `ERROR`.
+
 ### Security
 
 `setup` refuses a remote URL that carries a password, whether it arrives
