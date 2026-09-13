@@ -68,6 +68,17 @@ work and then listed it under `--json` alone, so the human dry run of the
 three stages that install and enable things said nothing about what they
 would install or enable.
 
+The allowlist floor now follows the list your last successful run committed
+at every size, instead of only once that list held twenty entries or more.
+Below twenty a flat bootstrap floor of twenty applied, so a machine whose
+config genuinely lives in fifteen paths was refused on every run, with a
+message about damage and nothing but a test-only variable to get past it.
+The floor is nine tenths of the last committed count, never below one, and
+the bootstrap floor still applies to a repo that has never committed a list.
+A new config key, `minAllowlist` (default 20), overrides both and is the
+answer to "I trimmed the list on purpose"; the refusal names it, and the
+config file to put it in, alongside the two counts it compared.
+
 `omabackup self-test` takes a few minutes instead of twelve. Its fixture
 snapshots ran the real machine-fact tools (pacman, systemctl, npm, fprintd
 and the rest) around 180 times; they now run stubs that print something

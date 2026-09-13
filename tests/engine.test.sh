@@ -2145,7 +2145,7 @@ if group 66 "guards that had no proving assertion"; then
   # shrink the backup.
   f66=$(env HOME="$FH" OMABACKUP_MIN_ALLOWLIST=99 "$CLI" snapshot --no-push --json 2>/dev/null)
   eq "an allowlist below the floor refuses the run" "$(jq -r .ok <<<"$f66")" "false"
-  has "the refusal names the floor" "$f66" "floor 99"
+  has "the refusal names the floor" "$f66" "floor of 99"
 
   # snapshot_normalize: a rule like `d` is valid sed and empties the file.
   # Backing up 0 bytes while the live file has content is silent data loss.
@@ -5299,6 +5299,183 @@ if group 107 "the human dry run names what every restore stage would do, not jus
   git -C "$FR" commit -qam "no units left to enable"
   eq "a stage with nothing to do prints its zero" \
     "$(ob restore --services | grep -c '\[dry\] --services would enable 0 unit' || true)" "1"
+fi
+
+if group 108 "the allowlist floor follows the last committed list, and minAllowlist is the way to trim it"; then
+  # The floor was derived from history only once history held 20 or more
+  # entries; below that the bootstrap 20 applied. A machine whose config
+  # legitimately lives in 15 paths was therefore refused every run, with a
+  # message about damage and no way out short of a test-only variable.
+  mk_fixture g108
+  # mk_fixture pins the floor at 1 so every other group can get on with its
+  # own subject. This group is about the derived floor, so it takes the pin out.
+  unset OMABACKUP_MIN_ALLOWLIST
+  mkdir -p "$FH/.config/f108"
+  i108=1
+  while [ "$i108" -le 15 ]; do
+    printf 'setting=%d\n' "$i108" > "$FH/.config/f108/e$i108.conf"
+    printf '.config/f108/e%d.conf\n' "$i108" >> "$FR/allowlist.txt"
+    i108=$((i108+1))
+  done
+  git -C "$FR" commit -qam "15 entries, a legitimate small machine"
+  check "a 15-entry allowlist backs up, where the bootstrap 20 refused it" \
+    env HOME="$FH" "$CLI" snapshot --no-push
+
+  # The trim is left UNCOMMITTED on purpose: the floor compares the working
+  # list against the one the last successful run had, which is HEAD's.
+  sed -i '/^\.config\/f108\/e15\.conf$/d' "$FR/allowlist.txt"
+  rm -f "$FH/.config/f108/e15.conf"
+  check "14 against a committed 15 is inside the floor" \
+    env HOME="$FH" "$CLI" snapshot --no-push
+
+  sed -i -e '/^\.config\/f108\/e14\.conf$/d' -e '/^\.config\/f108\/e13\.conf$/d' "$FR/allowlist.txt"
+  rm -f "$FH/.config/f108/e14.conf" "$FH/.config/f108/e13.conf"
+  f108=$(obj snapshot --no-push)
+  eq "12 against a committed 15 is below it" "$(jq -r .ok <<<"$f108")" "false"
+  has "the refusal counts both lists and shows its arithmetic" "$(jq -r .error <<<"$f108")" \
+    "allowlist has 12 entries; the last successful run had 15, so the floor is 13"
+  has "and names the key that lifts it, in the file it goes in" "$(jq -r .error <<<"$f108")" \
+    "set minAllowlist in $OMABACKUP_CONFIG"
+  eq "nothing was committed by the refused run" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c 'f108' || true)" "14"
+
+  jq '.minAllowlist=5' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
+  check "an explicit minAllowlist is the escape hatch, and a known key" \
+    env HOME="$FH" "$CLI" snapshot --no-push
+
+  # NO HISTORY. The fixture's HEAD carries a header-only allowlist, so no run
+  # has ever committed a list to compare against: the bootstrap floor applies
+  # and it is minAllowlist's default.
+  mk_fixture g108n
+  unset OMABACKUP_MIN_ALLOWLIST
+  mkdir -p "$FH/.config/n108"
+  i108=1
+  while [ "$i108" -le 15 ]; do
+    printf 'setting=%d\n' "$i108" > "$FH/.config/n108/e$i108.conf"
+    printf '.config/n108/e%d.conf\n' "$i108" >> "$FR/allowlist.txt"
+    i108=$((i108+1))
+  done
+  n108=$(obj snapshot --no-push)
+  eq "15 entries with no committed list yet is below the bootstrap floor" "$(jq -r .ok <<<"$n108")" "false"
+  has "the refusal says which floor it is" "$(jq -r .error <<<"$n108")" \
+    "allowlist has 15 entries, below the bootstrap floor of 20 (minAllowlist)"
+  has "and names the config file to set it in" "$(jq -r .error <<<"$n108")" "$OMABACKUP_CONFIG"
+  jq '.minAllowlist=10' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
+  check "an explicit minAllowlist lifts the bootstrap floor too" \
+    env HOME="$FH" "$CLI" snapshot --no-push
+  jq '.minAllowlist="lots"' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
+  has "and a minAllowlist that is not a number is refused like the other integers" \
+    "$(obj status | jq -r .error)" "must be integers"
+fi
+
+if group 109 "one registry owns the scratch directories, and the vanish guard needs none"; then
+  # Two verbs, two scratch directories, and each used to install a bare EXIT
+  # trap of its own: whichever ran second silently replaced the first, so the
+  # first one's directory would have been left behind. No verb runs both in
+  # one process today, which is what makes the collision latent; what a black
+  # box can prove is that neither leaks, through the one handler both now use.
+  mk_fixture g109; seed_home; commit_baseline
+  ob drift >/dev/null
+  eq "drift leaves no scratch behind" \
+    "$(find "$OMABACKUP_STATE_DIR" -maxdepth 1 -name '.drift.*' 2>/dev/null | grep -c . || true)" "0"
+  eq "a clean repo verifies" "$(obj verify | jq -r .ok)" "true"
+  eq "verify leaves no scratch behind either" \
+    "$(find "$OMABACKUP_STATE_DIR" -maxdepth 1 -name 'verify.*' 2>/dev/null | grep -c . || true)" "0"
+
+  # THE VANISH GUARD'S SCRATCH FILE. It used to mktemp under $STATE_DIR and
+  # die if it could not, so a state directory nobody can write stopped a
+  # backup over a file the guard did not need: the history listing is held in
+  # the process now.
+  mk_fixture g109v
+  i109=1
+  while [ "$i109" -le 25 ]; do
+    mkdir -p "$FH/.config/v109/d$i109"
+    for j109 in 1 2 3 4; do printf 'setting=%d\n' "$j109" > "$FH/.config/v109/d$i109/f$j109.conf"; done
+    printf '?.config/v109/d%d\n' "$i109" >> "$FR/allowlist.txt"
+    i109=$((i109+1))
+  done
+  git -C "$FR" commit -qam "25 optional directory entries, 100 files"
+  check "the baseline run commits all of it" env HOME="$FH" "$CLI" snapshot --no-push
+  rm -rf "$FH/.config/v109/d1"
+  chmod 500 "$OMABACKUP_STATE_DIR"
+  v109=$(ob snapshot --no-push)
+  chmod 700 "$OMABACKUP_STATE_DIR"
+  grep -q "refusing to judge vanished entries" <<<"$v109" \
+    && bad "the vanish guard still asks for a scratch file" \
+    || ok "a state directory that takes no new files no longer stops the vanish guard"
+  # The run still refuses, at the drift scan, whose own scratch directory is a
+  # separate guard and out of this fix's scope. Getting that far is the proof
+  # that the allowlist phase judged the vanished entry without writing a thing.
+  has "the run gets past the allowlist phase to the drift scan" "$v109" "drift scan did not complete"
+
+  # ...and the guard still guards. 13 of 25 entries gone is well over
+  # maxMissingPct, and the answer comes from the same history listing.
+  for i109 in 2 3 4 5 6 7 8 9 10 11 12 13; do rm -rf "$FH/.config/v109/d$i109"; done
+  m109=$(obj snapshot --no-push)
+  eq "a mass disappearance is still refused" "$(jq -r .ok <<<"$m109")" "false"
+  has "with the maxMissingPct refusal" "$(jq -r .error <<<"$m109")" "no longer exist; refusing to run"
+  eq "and nothing was committed" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c . || true)" "100"
+fi
+
+if group 110 "a [ in a filename can be allowed and ignored, and matches only itself"; then
+  # Both lists are MATCHED as globs, so a bare `[` in an entry is a character
+  # class and never the file it came from. `[[]` is the one spelling every
+  # reader here agrees on: a class holding a literal bracket. `*` and `?` have
+  # no such spelling and stay refused.
+  # shellcheck disable=SC2088  # matching the LITERAL "~/" status emits, not a path to expand
+  tp110() { printf '~/%s' "$1"; }
+  mk_fixture g110; seed_home
+  mkdir -p "$FH/.config/brk"
+  printf 'x\n' > "$FH/.config/brk/note[1].conf"
+  printf 'y\n' > "$FH/.config/brk/note1.conf"
+  printf 'z\n' > "$FH/.config/brk/other[2].conf"
+  commit_baseline
+  { printf 'NEW        ~/.config/brk/note[1].conf\n'
+    printf 'NEW        ~/.config/brk/note1.conf\n'
+    printf 'NEW        ~/.config/brk/other[2].conf\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+
+  a110=$(obj allow "$(tp110 '.config/brk/note[1].conf')")
+  eq "allow: a bracket in the name is accepted" "$(jq -r .ok <<<"$a110")" "true"
+  eq "the entry is written with the bracket as a one-character class" \
+    "$(grep -cxF '.config/brk/note[[]1].conf' "$FR/allowlist.txt")" "1"
+  i110=$(obj ignore "$(tp110 '.config/brk/other[2].conf')")
+  eq "ignore: a bracket in the name is accepted" "$(jq -r .ok <<<"$i110")" "true"
+  eq "and written the same way" \
+    "$(grep -cF '.config/brk/other[[]2].conf' "$FR/drift-ignore.txt")" "1"
+
+  check "the next snapshot runs" env HOME="$FH" "$CLI" snapshot --no-push
+  check "the bracketed file is in the backup" test -f "$FR/home/.config/brk/note[1].conf"
+  fails "and the sibling the raw name would have matched is not" \
+    test -f "$FR/home/.config/brk/note1.conf"
+
+  d110=$(ob drift)
+  eq "the allowed path is no longer drift" "$(grep -c 'note\[1\]' <<<"$d110" || true)" "0"
+  eq "the ignored path is no longer drift" "$(grep -c 'other\[2\]' <<<"$d110" || true)" "0"
+  eq "and the sibling still is" "$(grep -c 'note1\.conf' <<<"$d110" || true)" "1"
+
+  l110=$(obj lint)
+  eq "lint accepts both escaped entries" "$(jq -r .ok <<<"$l110")" "true"
+  eq "and complains about neither" \
+    "$(jq -r '[.problems[] | select(.path | test("note|other"))] | length' <<<"$l110")" "0"
+  eq "nor calls the escaped ignore entry stale" \
+    "$(jq -r '[.notes[] | select(.code == "STALE" and (.path | test("other")))] | length' <<<"$l110")" "0"
+
+  # No spelling resolves these to a literal, so both stay refused.
+  printf 'q\n' > "$FH/.config/brk/star*"
+  printf 'r\n' > "$FH/.config/brk/quer?"
+  { printf 'NEW        ~/.config/brk/star*\n'
+    printf 'NEW        ~/.config/brk/quer?\n'
+    printf '# drift-scan-complete\n'; } > "$FR/manifests/drift.txt"
+  s110=$(obj allow "$(tp110 '.config/brk/star*')")
+  eq "a * in the name is still refused" "$(jq -r .ok <<<"$s110")" "false"
+  has "and the refusal names only the two it cannot spell" "$(jq -r '.problems[0]' <<<"$s110")" \
+    "contains \* or ?"
+  eq "a ? in the name is still refused too" \
+    "$(obj ignore "$(tp110 '.config/brk/quer?')" | jq -r .ok)" "false"
+  eq "and neither was written" \
+    "$(grep -cE '^\.config/brk/(star|quer)' "$FR/allowlist.txt" "$FR/drift-ignore.txt" | grep -cv ':0$' || true)" "0"
 fi
 
 if group 113 "manifests absorb tool-order jitter (nmcli returns its connections in a different order)"; then

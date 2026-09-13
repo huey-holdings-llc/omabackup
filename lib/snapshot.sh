@@ -20,6 +20,22 @@
 # deleting one allowlisted glob is not an emergency. OMABACKUP_MIN_FILES and
 # OMABACKUP_MIN_ALLOWLIST override; config.sh unsets them when they are empty,
 # which is how a caller asks for "derive it" explicitly.
+#
+# THE ALLOWLIST FLOOR IS DERIVED AT EVERY SIZE. It used to be derived only
+# once the last commit's list held 20 or more entries, and the bootstrap 20
+# applied below that: a machine whose config genuinely lives in 15 paths was
+# refused on every single run, with a message about damage and nothing but a
+# suite-only variable to get past it. Nine tenths of the last committed count,
+# never below 1, says the same thing at 15 entries as it does at 200. A repo
+# whose HEAD carries no list with anything in it has nothing to compare
+# against, so it gets the bootstrap floor, which is the minAllowlist config
+# key (default 20); minAllowlist WRITTEN DOWN in the config overrides both,
+# and is the answer to "I trimmed the list on purpose".
+#
+# A committed allowlist.txt holding only comments is bootstrap, not history:
+# it is what setup leaves before the first list is written, and treating it as
+# a previous run of zero entries would drop the floor to 1 on the one repo
+# that has never proven anything.
 # shellcheck disable=SC2034  # PREV_TRACKED: read by snapshot_assert_allowlist, not this function
 snapshot_floors_from_history() {
   local prev_tracked=0 prev_entries=0 listing
@@ -46,11 +62,25 @@ snapshot_floors_from_history() {
   else
     MIN_FILES="${OMABACKUP_MIN_FILES:-20}"      # bootstrap: no meaningful history yet
   fi
-  if [[ "${prev_entries:-0}" -ge 20 ]]; then
-    MIN_ALLOWLIST="${OMABACKUP_MIN_ALLOWLIST:-$(( prev_entries * 9 / 10 ))}"
+  # PREV_ENTRIES and MIN_ALLOWLIST_DERIVED are read by snapshot_assert_allowlist,
+  # which is the only thing that can say what the refusal should sound like.
+  PREV_ENTRIES=$prev_entries
+  MIN_ALLOWLIST_DERIVED=0
+  local floor
+  if [[ "${prev_entries:-0}" -ge 1 ]]; then
+    floor=$(( prev_entries * 9 / 10 ))
+    [[ "$floor" -ge 1 ]] || floor=1
+    MIN_ALLOWLIST_DERIVED=1
   else
-    MIN_ALLOWLIST="${OMABACKUP_MIN_ALLOWLIST:-20}"
+    floor="${CFG_MIN_ALLOWLIST:-20}"
   fi
+  if [[ "${CFG_MIN_ALLOWLIST_SET:-0}" == 1 ]]; then
+    floor="${CFG_MIN_ALLOWLIST:-20}"
+    MIN_ALLOWLIST_DERIVED=0
+  fi
+  MIN_ALLOWLIST="${OMABACKUP_MIN_ALLOWLIST:-$floor}"
+  # The suite's own override wins, and it is not the history's answer either.
+  [[ "$MIN_ALLOWLIST" == "$floor" ]] || MIN_ALLOWLIST_DERIVED=0
 }
 
 # snapshot_entry_exists ENTRY: true when at least one live path matches.
@@ -184,10 +214,20 @@ snapshot_assert_allowlist() {
     fi
   done < <(read_list "$al")
 
+  # THE FLOOR, and a refusal that names the way out. This used to read as
+  # damage detection ("only N entries, floor 20") on a machine whose list was
+  # simply small, and the only thing that lifted it was a variable the tool
+  # refuses to honour outside its own test suite. Both shapes below say what
+  # the floor is, where it came from, and which key changes it.
   local entry_count
   entry_count=$(read_list "$al" | grep -c . || true)
-  [[ "${entry_count:-0}" -ge "${MIN_ALLOWLIST:-20}" ]] \
-    || die "allowlist has only ${entry_count:-0} entries (floor ${MIN_ALLOWLIST:-20}); refusing to run"
+  if [[ "${entry_count:-0}" -lt "${MIN_ALLOWLIST:-20}" ]]; then
+    local trim_hint="If you trimmed the list on purpose, set minAllowlist in $CONFIG_FILE to the number you now have"
+    if [[ "${MIN_ALLOWLIST_DERIVED:-0}" == 1 ]]; then
+      die "allowlist has ${entry_count:-0} entries; the last successful run had ${PREV_ENTRIES:-0}, so the floor is ${MIN_ALLOWLIST:-20}. $trim_hint"
+    fi
+    die "allowlist has ${entry_count:-0} entries, below the bootstrap floor of ${MIN_ALLOWLIST:-20} (minAllowlist). $trim_hint"
+  fi
 
   # Second look. Omarchy migrations move a file aside and rewrite it, so a
   # daily run can catch a real path mid-rename; only a persistent absence is a

@@ -82,9 +82,9 @@ NAG_DAYS=7
 [[ -n "${OMABACKUP_MIN_FILES:-}" ]] || unset OMABACKUP_MIN_FILES
 [[ -n "${OMABACKUP_MIN_ALLOWLIST:-}" ]] || unset OMABACKUP_MIN_ALLOWLIST
 
-CONFIG_KNOWN='["dataRepo","remote","maxFileSize","staleDays","maxMissingPct","maxScanFiles","notify","shellNag","timer","setupPhase"]'
+CONFIG_KNOWN='["dataRepo","remote","maxFileSize","staleDays","maxMissingPct","maxScanFiles","minAllowlist","notify","shellNag","timer","setupPhase"]'
 CONFIG_KNOWN_DOTTED='["remote.url","remote.trusted","timer.calendar","timer.jitter"]'
-CONFIG_DEFAULTS='{"remote":{"url":"","trusted":false},"maxFileSize":"8m","staleDays":2,"maxMissingPct":25,"maxScanFiles":2000,"notify":true,"shellNag":false,"timer":{"calendar":"daily","jitter":"30m"},"setupPhase":""}'
+CONFIG_DEFAULTS='{"remote":{"url":"","trusted":false},"maxFileSize":"8m","staleDays":2,"maxMissingPct":25,"maxScanFiles":2000,"minAllowlist":20,"notify":true,"shellNag":false,"timer":{"calendar":"daily","jitter":"30m"},"setupPhase":""}'
 
 # logf LINE: append to the tool's own log. Never fatal, and never noisy about
 # itself: a log line is a record of work that has already happened, so a
@@ -194,10 +194,22 @@ config_load() {
   CFG_REMOTE_URL=$(cfg remote.url); CFG_REMOTE_TRUSTED=$(cfg remote.trusted)
   CFG_MAX_FILE_SIZE=$(cfg maxFileSize); CFG_STALE_DAYS=$(cfg staleDays)
   CFG_MAX_MISSING_PCT=$(cfg maxMissingPct); CFG_MAX_SCAN_FILES=$(cfg maxScanFiles)
+  CFG_MIN_ALLOWLIST=$(cfg minAllowlist)
   CFG_NOTIFY=$(cfg notify); CFG_SHELL_NAG=$(cfg shellNag)
   CFG_TIMER_CALENDAR=$(cfg timer.calendar); CFG_TIMER_JITTER=$(cfg timer.jitter)
-  for n in "$CFG_STALE_DAYS" "$CFG_MAX_MISSING_PCT" "$CFG_MAX_SCAN_FILES"; do
-    [[ "$n" =~ ^[0-9]+$ ]] || die "config: staleDays, maxMissingPct and maxScanFiles must be integers"
+  # WRITTEN DOWN, not defaulted. minAllowlist set by hand is the user saying
+  # "this many paths is what my machine has", and it overrides the floor the
+  # repo's own history derives; the same number arriving from CONFIG_DEFAULTS
+  # is only the bootstrap value and must not override anything. `has()` rather
+  # than the value, because that is the one question jq can answer without
+  # `//` folding an explicit value into a missing one.
+  if jq -e 'has("minAllowlist")' "$CONFIG_FILE" >/dev/null 2>&1; then
+    CFG_MIN_ALLOWLIST_SET=1
+  else
+    CFG_MIN_ALLOWLIST_SET=0
+  fi
+  for n in "$CFG_STALE_DAYS" "$CFG_MAX_MISSING_PCT" "$CFG_MAX_SCAN_FILES" "$CFG_MIN_ALLOWLIST"; do
+    [[ "$n" =~ ^[0-9]+$ ]] || die "config: staleDays, maxMissingPct, maxScanFiles and minAllowlist must be integers"
   done
   [[ "$CFG_MAX_FILE_SIZE" =~ ^[0-9]+[kmg]?$ ]] || die "config: maxFileSize must look like 8m"
   # timer.* was the one pair of config values that reached a FILE unchecked:

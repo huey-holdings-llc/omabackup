@@ -328,6 +328,9 @@ maxMissingPct    25; this share of allowlist entries or more vanishing at
                  once refuses the run
 maxScanFiles     2000; a folder with more files than this is one collapsed
                  row in the drift report
+minAllowlist     20; the allowlist floor before any run has committed a list
+                 to compare against. Once one has, the floor is nine tenths
+                 of that run's entry count; set this key to override both
 notify           true; false silences the desktop notifications
 shellNag         false; true makes setup add the login check to ~/.bashrc
 timer.calendar   daily; the snapshot timer's OnCalendar
@@ -631,6 +634,14 @@ actually broken.
   gone for good, `omabackup resolve-gone <path> remove` for each one, or edit
   `allowlist.txt` by hand and commit it. An entry for something that is
   simply not on this machine belongs in the list with a leading `?`.
+* **"allowlist has N entries ... so the floor is K"**: the allowlist floor,
+  and it is derived from the list the last successful run committed: nine
+  tenths of that count, so trimming a few entries is fine and gutting the
+  list is not. Before any run has committed a list there is nothing to
+  compare against, and the message is the other shape, "below the bootstrap
+  floor of 20 (minAllowlist)". Either way, if the list really is that short
+  now, put `minAllowlist` in the config file with the number you have; commit
+  the trimmed `allowlist.txt` and the next run's floor follows it on its own.
 * **"data repo marker has no usable format field"**: `.omabackup` is the file
   that says the repo is OmaBackup's and what format it is in, and a marker
   that is not readable JSON is refused rather than overwritten, because
