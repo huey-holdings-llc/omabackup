@@ -93,10 +93,12 @@ QtObject {
   // first ("timer run"). The engine replies {ok:false, problems:[...]} when it
   // could start neither the unit nor a detached run (no systemd session, no
   // setsid); only then does the panel run the snapshot itself and wait on it.
-  function snapshotNow() {
+  // onDone fires only for the inline fallback, which the panel waits on; the
+  // unit and the detached run are followed through status.json instead.
+  function snapshotNow(onDone) {
     act(["timer", "run"], function (o) {
       if (o && o.ok === true) { svc.refresh(); return }
-      act(["snapshot"], function () { svc.refresh() })
+      act(["snapshot"], function (r) { svc.refresh(); if (onDone) onDone(r) })
     })
   }
   // sig: status.json's uncommitted_sig for the list the dialog showed, so the
@@ -110,7 +112,9 @@ QtObject {
   function allow(path, onDone) { act(["allow", path], function (o) { svc.refresh(); if (onDone) onDone(o) }) }
   function ignore(path, reason, onDone) { act(reason ? ["ignore", path, reason] : ["ignore", path], function (o) { svc.refresh(); if (onDone) onDone(o) }) }
   function resolveGone(path, verb, onDone) { act(["resolve-gone", path, verb], function (o) { svc.refresh(); if (onDone) onDone(o) }) }
-  function openTerminal() { act(["open"], null) }
+  // Triage: the drift report the panel is showing, in a pager. A bare shell in
+  // the data repo is still `omabackup open` from a terminal.
+  function openTerminal() { act(["open", "--report"], null) }
   // The repository's own page. The URL is built by the CLI from a validated
   // owner/repo, so nothing here names a host, a scheme or a browser.
   function openRemote() { act(["open", "--remote"], null) }

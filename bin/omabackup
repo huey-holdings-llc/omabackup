@@ -46,7 +46,7 @@ omabackup <verb> [args] [--json]
   health                                            login check (silent when ok)
   timer pause|resume|status|run
   self-test [--real]
-  open [--remote]                                   a terminal in the data repo, or its page on GitHub
+  open [--report|--remote]                          a terminal in the data repo, the drift report, or its page on GitHub
   version
 Every verb accepts --json. Exit 0 ran, 1 refused or unhealthy, 2 usage.
 EOF

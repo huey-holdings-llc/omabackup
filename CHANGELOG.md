@@ -17,6 +17,19 @@ moved aside for a moment is not reported GONE) is now a suite-only knob,
 `OMABACKUP_SECOND_LOOK`: outside a test run it is ignored and `status`
 names it, like the other guard overrides.
 
+The "new unbacked config" desktop notification is normal urgency, not
+critical: new drift is news for the next triage, not an emergency. A failed
+snapshot is still critical.
+
+The popup's Triage button (and `t`) opens the drift report in a pager,
+through the new `omabackup open --report`, instead of a bare shell in the
+data repo. Plain `omabackup open` still opens the shell.
+
+The bar shows a different glyph for each state: the warning triangle for a
+fault, a disk with an alert mark while something waits on you, the plain
+disk when all is well, and an outline before setup. Healthy, "attention
+with nothing left to triage" and "not configured" used to share one.
+
 The `.gitignore` top-up on an adopted or upgraded data repo now happens in
 the snapshot, under the repo lock, and commits what it appended in a commit
 of its own, so the first `status` after an upgrade reports a clean repo
@@ -60,6 +73,23 @@ fingerprint satisfied one gate and not the other, and the line that
 satisfied the staging scan carried this machine's own path. Both now name it
 `<path in the repo>:<rule>:<line>`. The README's Troubleshooting says how to
 record a false positive, and SECURITY.md why that is not a bypass.
+
+Pressing Snapshot in the popup no longer brings back every row you had just
+triaged. The button starts the snapshot unit and returns at once, and the
+panel cleared its record of your decisions right away, so the next refresh
+redrew them from the old report. It now keeps them until the run it started
+has landed, says "Snapshot running…" meanwhile, and checks every 15 seconds.
+status.json gains `last_attempt_at` and `last_attempt_ok`, the last
+attempt's time and verdict, which is how it knows. A run that finds another
+one holding the lock no longer clears the last verdict before standing down.
+
+`omabackup drift` lists GONE rows (allowlist entries that resolve to
+nothing), as the popup always did. Only the snapshot used to write them, so
+the command the login reminder names for "GONE = vanished" never showed one.
+
+An ERROR row in the drift report no longer counts toward the paths to
+triage. It is still a fault, with its reason in the popup; it has no
+buttons, so the count it added could never come down.
 
 The drift scan no longer reports the tool's own files, on any data repo:
 the five systemd units setup writes (by their exact names; a hand-written

@@ -68,6 +68,23 @@ snapshot_entry_exists() {
   return "$rc"
 }
 
+# allowlist_unresolved: every allowlist entry, optional or required, that
+# resolves to nothing right now, one per line, without its '?' marker. No
+# second look, no guard, no die: `omabackup drift` lists these as GONE, live,
+# where only the snapshot used to (snapshot_assert_allowlist below adds the
+# wait and the guards before it commits anything on the strength of them).
+allowlist_unresolved() {
+  local entry nullglob_was_on
+  shopt -q nullglob && nullglob_was_on=1 || nullglob_was_on=0
+  shopt -s nullglob
+  while IFS= read -r entry; do
+    [[ -z "$entry" ]] && continue
+    entry=${entry#\?}
+    snapshot_entry_exists "$entry" || printf '%s\n' "$entry"
+  done < <(read_list "$DATA_REPO/allowlist.txt")
+  [[ "$nullglob_was_on" = 1 ]] || shopt -u nullglob
+}
+
 # snapshot_ever_added_load: fill EVER_ADDED with every path this data repo has
 # ever ADDED under home/. One listing per run, built where the vanish check
 # needs it and never cached beyond this process.
@@ -428,8 +445,9 @@ snapshot_drift_finish() {
   grep -q '^# drift-scan-complete' "$rep" \
     || die "drift scan did not complete; refusing to commit a snapshot whose drift report is unreliable"
   # Advance the committed copy immediately. The new-drift comparison reads the
-  # repo copy, so if a later step died the same item re-fired a critical
-  # notification on every subsequent run, forever.
+  # repo copy, so if a later step died the same item re-fired the notification
+  # on every subsequent run, forever. (It is normal urgency: new drift is news
+  # for the next triage, not an emergency. A failed snapshot is the critical one.)
   if [[ "$SNAP_DRY" != 1 ]]; then
     cp "$rep" "$DATA_REPO/manifests/drift.txt" 2>/dev/null || true
   fi
@@ -706,7 +724,7 @@ snapshot_notify_new_drift() {
   # One line of body on purpose: a multi-line notification body is truncated by
   # most daemons anyway, and the report itself is one command away.
   notify "OmaBackup: new unbacked config" \
-    "$(printf '%s' "$SNAP_NEW_DRIFT" | grep -c . || true) new item(s). Run: omabackup drift" critical
+    "$(printf '%s' "$SNAP_NEW_DRIFT" | grep -c . || true) new item(s). Run: omabackup drift"
 }
 
 # snapshot_result STATE: the one JSON object this verb contracts to produce,
@@ -753,9 +771,6 @@ cmd_snapshot() {
   # From here every refusal is recorded as a failed run. A dry run is an
   # inspection, not a backup attempt, so it records nothing either way.
   [[ $dry == 1 ]] || RUN_RECORDING=1
-  # Clear last run's verdict before this one does anything, so a run the unit
-  # kills cannot be reported with the previous run's reason.
-  [[ $dry == 1 ]] || run_record_start
   # Stamped at the START of the run, not the end: anything comparing a live
   # file against this stamp treats a file newer than it as "changed since the
   # snapshot". Stamping at the end left a window where a file rewritten
@@ -792,6 +807,11 @@ cmd_snapshot() {
     snapshot_result skipped
     return 0
   fi
+  # Clear the last run's verdict as this one starts, so a run the unit kills
+  # cannot be reported with the previous run's reason. After the lock, not
+  # before: a run that stood down on a held lock never started, and clearing
+  # first left status saying a run was under way with none running.
+  [[ $dry == 1 ]] || run_record_start
 
   repo_assert_clean
   # The shipped ignore patterns, and their commit, belong here: under the

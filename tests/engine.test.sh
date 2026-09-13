@@ -4461,6 +4461,89 @@ if group 55 "a gitleaks false positive is recorded once, in the data repo's .git
   fi
 fi
 
+if group 56 "the last attempt reaches status.json, and a run that stands down on the lock leaves no verdict"; then
+  # The popup's Snapshot button starts the unit and returns at once, so the
+  # panel has to learn from status.json when the run it asked for has landed.
+  # status.json carried only last_run, which a refused run never moves.
+  mk_fixture g56; seed_home; allow '.config/mytool'; commit_baseline
+  s56=$(obj status)
+  eq "a finished run is an ok attempt" "$(jq -c .last_attempt_ok <<<"$s56")" "true"
+  [[ "$(jq -r '.last_attempt_at // 0' <<<"$s56")" -ge "$(jq -r .last_run <<<"$s56")" && "$(jq -r '.last_attempt_at // 0' <<<"$s56")" -gt 0 ]] \
+    && ok "stamped no earlier than the run's own start" || bad "last_attempt_at missing or before last_run" "$s56"
+  ghp56="$FH/.config/mytool/ghp_$(rand_body 20).txt"; printf 'x\n' > "$ghp56"
+  fails "a run refuses" env HOME="$FH" "$CLI" snapshot --no-push
+  eq "and status carries a failed attempt" "$(obj status | jq -c .last_attempt_ok)" "false"
+  rm "$ghp56"
+  check "a run succeeds again" env HOME="$FH" "$CLI" snapshot --no-push
+  # A run that finds the lock held stands down without starting. It cleared
+  # the verdict first, so status said a run was under way with none running.
+  ( flock -x 9; sleep 3 ) 9>>"$FR/.lock" &
+  _l56=$!
+  sleep 0.3
+  env HOME="$FH" OMABACKUP_LOCK_WAIT=1 "$CLI" snapshot --no-push >/dev/null 2>&1
+  wait "$_l56" 2>/dev/null
+  eq "a run that stood down on the lock leaves the last verdict alone" \
+    "$(jq -c .ok "$OMABACKUP_STATE_DIR/last-run.json")" "true"
+  # In flight: the record a run writes as it starts.
+  jq -n '{ok:null, reason:"the run has not finished", at:(now|floor)}' > "$OMABACKUP_STATE_DIR/last-run.json"
+  eq "an attempt under way reads as null, not as a verdict" "$(obj status | jq -c .last_attempt_ok)" "null"
+fi
+
+if group 57 "omabackup drift shows GONE rows, live, before the sentinel"; then
+  # GONE rows were written only by the snapshot, so the popup showed them and
+  # the command the login nag names ("NEW = unbacked, GONE = vanished. Run:
+  # omabackup drift") never did.
+  mk_fixture g57; seed_home; allow '.config/mytool'
+  printf '?.config/was-here.conf\n.config/also-gone.conf\n' >> "$FR/allowlist.txt"
+  git -C "$FR" commit -qam "two entries that do not resolve"
+  d57=$(ob drift)
+  has "an optional entry that does not resolve is GONE" "$d57" "GONE       ~/.config/was-here.conf"
+  has "and so is a required one" "$d57" "GONE       ~/.config/also-gone.conf"
+  eq "the sentinel is still the last line" "$(tail -1 <<<"$d57")" "# drift-scan-complete"
+  eq "and nothing calls a report with GONE rows clean" "$(grep -c '^# clean' <<<"$d57" || true)" "0"
+  eq "--json carries them as GONE, and complete" \
+    "$(obj drift | jq -c '[.complete, ([.items[] | select(.type=="GONE") | .path] | sort)]')" \
+    '[true,["~/.config/also-gone.conf","~/.config/was-here.conf"]]'
+fi
+
+if group 58 "ERROR rows are faults, not paths to triage"; then
+  # An ERROR row has no buttons, so counting it as drift put a number on the
+  # badge that nothing in the popup could bring down.
+  mk_fixture g58; seed_home; commit_baseline
+  printf 'NEW        ~/.config/one.toml\n# ERROR: omarchy stock config tree not found at /nowhere\n# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  s58=$(obj status)
+  eq "the ERROR row is not counted as drift" "$(jq -r .drift_count <<<"$s58")" "1"
+  eq "it is still a fault" "$(jq -r .state <<<"$s58")" "fault"
+  has "with the failed check named" "$(jq -r '.problems[]' <<<"$s58")" "stock config tree not found"
+  eq "and the row is still there to read" "$(jq -r '[.drift[] | select(.type=="ERROR")] | length' <<<"$s58")" "1"
+fi
+
+if group 59 "the new-drift toast is normal urgency, and open --report shows the report"; then
+  mk_fixture g59; seed_home
+  mkdir -p "$T/fakebin"
+  for n in notify-send omarchy-notification-send; do
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/notify.log"\n' "$T" > "$T/fakebin/$n"; chmod +x "$T/fakebin/$n"
+  done
+  : > "$T/notify.log"
+  env INVOCATION_ID=fixture OMABACKUP_NOTIFY=1 PATH="$T/fakebin:$PATH" HOME="$FH" "$CLI" snapshot --no-push >/dev/null 2>&1
+  has "a timer run with new drift sends the toast" "$(cat "$T/notify.log")" "new unbacked"
+  eq "at normal urgency: new drift is news, not an emergency" \
+    "$(grep 'new unbacked' "$T/notify.log" | grep -c -- '-u critical' || true)" "0"
+
+  # Triage opened a bare shell in the data repo. It opens the report the
+  # popup is showing, argv only, the same launcher.
+  printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/open.argv"\nexit 0\n' "$T" \
+    > "$T/fakebin/omarchy-launch-floating-terminal-with-presentation"
+  chmod +x "$T/fakebin/omarchy-launch-floating-terminal-with-presentation"
+  : > "$T/open.argv"
+  eq "open --report: accepted" \
+    "$(env PATH="$T/fakebin:$PATH" HOME="$FH" "$CLI" open --report --json 2>/dev/null | jq -r .ok)" "true"
+  _d59=$(( $(date +%s) + 5 ))
+  while [[ ! -s "$T/open.argv" && $(date +%s) -lt $_d59 ]]; do sleep 0.1; done
+  has "the terminal runs a pager" "$(cat "$T/open.argv" 2>/dev/null)" "^less$"
+  has "on the drift report" "$(cat "$T/open.argv" 2>/dev/null)" "$FR/manifests/drift.txt"
+fi
+
 group_close
 if (( ${#GROUP_SECS[@]} > 1 )); then
   echo; echo "slowest groups (seconds):"

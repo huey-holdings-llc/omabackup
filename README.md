@@ -415,7 +415,7 @@ omabackup <verb> [args] [--json]
   health                                            login check (silent when ok)
   timer pause|resume|status|run
   self-test [--real]
-  open [--remote]                                   a terminal in the data repo, or its page on GitHub
+  open [--report|--remote]                          a terminal in the data repo, the drift report, or its page on GitHub
   version
 ```
 
@@ -432,7 +432,7 @@ caller. Exit codes: 0 ran, 1 refused or unhealthy, 2 usage.
 |---|---|
 | `s` | Snapshot now |
 | `p` | Push, or open the commit confirmation if the lists are dirty |
-| `t` | Open a terminal in the data repo |
+| `t` | Open the drift report in a pager (`omabackup open --report`) |
 | `b` | Open the backup repository on GitHub (nothing happens if the remote has no page) |
 | `n` | Toggle ask-for-a-reason mode on Ignore |
 | `r` | Refresh |

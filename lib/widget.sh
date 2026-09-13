@@ -591,22 +591,32 @@ cmd_timer() {
   esac
 }
 
-# cmd_open: the escape hatch for everything a button should not judge
-# (MODIFIED, TOOBIG, ERROR lines) -- a terminal, cd'd into the data repo.
-# Always an argv array, never a shell string; detached so the popup does not
-# wait on it.
+# cmd_open [--report|--remote]: the escape hatch for everything a button
+# should not judge (MODIFIED, TOOBIG, ERROR lines) -- a terminal, cd'd into the
+# data repo. --report runs a pager on the drift report the popup is showing;
+# that is what the Triage button opens, where a bare shell left the reader to
+# find the report. Always an argv array, never a shell string; detached so the
+# popup does not wait on it.
 cmd_open() {
   # Flags before the repo check: a typo is a usage error whatever state the
   # repo is in, and every other verb answers that way.
-  local want_remote=0
+  local want_remote=0 want_report=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --remote) want_remote=1; shift ;;
+      --report) want_report=1; shift ;;
       *) usage_die "open: unknown flag $1" ;;
     esac
   done
+  [[ $want_remote == 0 || $want_report == 0 ]] || usage_die "open: --remote and --report are two different places; pick one"
   data_repo_require
   [[ $want_remote == 0 ]] || { open_remote_page; return $?; }
+  local -a cmd=()
+  if [[ $want_report == 1 ]]; then
+    [[ -f "$DATA_REPO/manifests/drift.txt" ]] || { widget_reply_fail "no drift report yet; run a snapshot first"; return 1; }
+    have less || { widget_reply_fail "less is not installed"; return 1; }
+    cmd=(less -- "$DATA_REPO/manifests/drift.txt")
+  fi
   local -a term=()
   if have omarchy-launch-floating-terminal-with-presentation; then
     term=(omarchy-launch-floating-terminal-with-presentation)
@@ -617,7 +627,7 @@ cmd_open() {
     return 1
   fi
   have setsid || { widget_reply_fail "setsid is not available"; return 1; }
-  if ! ( cd "$DATA_REPO" && setsid -f "${term[@]}" >/dev/null 2>&1 ); then
+  if ! ( cd "$DATA_REPO" && setsid -f "${term[@]}" ${cmd[@]+"${cmd[@]}"} >/dev/null 2>&1 ); then
     widget_reply_fail "could not open a terminal in $DATA_REPO"
     return 1
   fi

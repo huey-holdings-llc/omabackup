@@ -591,14 +591,38 @@ X11/xorg.conf.d fonts/conf.d"
 }
 
 # cmd_drift: `drift` verb. --json wraps the report as {ok, complete, items[]}.
+#
+# GONE rows are added here, live, from allowlist_unresolved. Only the snapshot
+# used to write them, so the popup showed them and this command, which the
+# login nag names for "NEW = unbacked, GONE = vanished", never did. They go in
+# just before the sentinel, which --json requires to be the last line, and a
+# report with any of them is not "clean".
 cmd_drift() {
   data_repo_require; lists_load
+  local rep g gone="" n=0 sentinel='# drift-scan-complete' body tail=""
+  rep=$(drift_scan)
+  while IFS= read -r g; do
+    [[ -n "$g" ]] || continue
+    n=$((n+1))
+    # shellcheck disable=SC2088  # literal "~/" display prefix, exactly what the report prints
+    if drift_path_representable "~/$g"; then
+      gone+=$(printf 'GONE       ~/%s' "$g")$'\n'
+    else
+      gone+=$(drift_error_unrepresentable "~/$g")$'\n'
+    fi
+  done < <(allowlist_unresolved)
+  if (( n > 0 )); then
+    body=$rep
+    if [[ "$(tail -1 <<<"$rep")" == "$sentinel" ]]; then body=${rep%"$sentinel"}; tail=$sentinel; fi
+    body=$(grep -v '^# clean:' <<<"$body" || true)
+    rep=$(printf '%s\n%s# %d allowlist entr(ies) resolve to nothing. Run: omabackup resolve-gone PATH remove|optional\n%s' \
+            "$body" "$gone" "$n" "$tail")
+  fi
   if [[ $JSON == 1 ]]; then
-    local rep; rep=$(drift_scan)
-    local complete=false; [[ "$(tail -1 <<<"$rep")" == "# drift-scan-complete" ]] && complete=true
+    local complete=false; [[ "$(tail -1 <<<"$rep")" == "$sentinel" ]] && complete=true
     printf '{"ok":true,"complete":%s,"items":[%s]}\n' "$complete" "$(drift_items_json <<<"$rep")"
   else
-    drift_scan
+    printf '%s\n' "$rep"
   fi
 }
 
