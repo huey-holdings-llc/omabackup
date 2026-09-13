@@ -810,9 +810,9 @@ Contribution principles: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Roadmap
 
-What is planned for 1.0, and what was deliberately left out of 0.7.0, is
-written down in
-[docs/superpowers/plans/2026-09-05-omabackup-1.0-roadmap.md](docs/superpowers/plans/2026-09-05-omabackup-1.0-roadmap.md).
+What is planned for 1.0 is the remainder left in
+[docs/superpowers/plans/2026-09-05-omabackup-1.0-roadmap.md](docs/superpowers/plans/2026-09-05-omabackup-1.0-roadmap.md)
+after 0.8.0.
 
 Not planned: syncing two machines, and sending anything anywhere but the
 remote you configured. It is also not designed or tested to run as root.
