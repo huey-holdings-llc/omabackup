@@ -86,14 +86,38 @@ verb_row() {
   done
 }
 
+# verb_names_have NAMES VERB: 0 when VERB is one of the space-separated names
+# in a row's first field. The three walkers below all ask this question, and
+# they ask it here so there is one answer to get right.
+#
+# EXACT EQUALITY AGAINST EACH NAME, never a substring test over the joined
+# field. `[[ " $names " == *" $verb "* ]]` was the obvious spelling and it
+# accepted the field itself: `omabackup 'allow ignore'` matched the row whose
+# names are "allow ignore", so a malformed verb was answered as a known one.
+# It printed that row for `--help` and exited 0, and without `--help` it got as
+# far as looking for a `cmd_allow ignore` function and failing at exit 1. A
+# verb this tool does not have is a usage error, exit 2, whatever it is spelled
+# like.
+#
+# The verb is DATA, so it stays on the quoted side throughout: as a case
+# pattern it was glob text, and `omabackup '*' --help` matched every row.
+# `read -ra` does the splitting, which splits on the field's spaces without
+# letting a name be expanded as a pathname on the way past.
+verb_names_have() {
+  local -a names=()
+  local alias
+  read -ra names <<<"$1"
+  for alias in ${names[@]+"${names[@]}"}; do
+    [[ "$alias" == "$2" ]] && return 0
+  done
+  return 1
+}
+
 # verb_rows [VERB]: every row, or only the rows that document VERB.
 verb_rows() {
   local want=${1:-} i
   for ((i = 0; i < ${#VERB_TABLE[@]}; i += VERB_FIELDS)); do
-    # The verb is DATA. As a case pattern it was glob text, so `omabackup '*'
-    # --help` matched every row; inside [[ ]] the quoted side is a literal and
-    # only the bare wildcards are pattern.
-    if [[ -n "$want" ]] && [[ " ${VERB_TABLE[i]} " != *" $want "* ]]; then continue; fi
+    if [[ -n "$want" ]] && ! verb_names_have "${VERB_TABLE[i]}" "$want"; then continue; fi
     verb_row "${VERB_TABLE[i+1]}" "${VERB_TABLE[i+2]}"
   done
 }
@@ -102,9 +126,7 @@ verb_rows() {
 verb_known() {
   local i
   for ((i = 0; i < ${#VERB_TABLE[@]}; i += VERB_FIELDS)); do
-    # Quoted left side, so the verb is a literal and not a glob: as a case
-    # pattern, `omabackup '*' --help` matched every row and exited 0.
-    if [[ " ${VERB_TABLE[i]} " == *" $1 "* ]]; then return 0; fi
+    if verb_names_have "${VERB_TABLE[i]}" "$1"; then return 0; fi
   done
   return 1
 }
@@ -120,7 +142,7 @@ verb_load_mode() {
   local i
   VERB_LOAD_MODE=""
   for ((i = 0; i < ${#VERB_TABLE[@]}; i += VERB_FIELDS)); do
-    if [[ " ${VERB_TABLE[i]} " == *" $1 "* ]]; then VERB_LOAD_MODE=${VERB_TABLE[i+3]}; return 0; fi
+    if verb_names_have "${VERB_TABLE[i]}" "$1"; then VERB_LOAD_MODE=${VERB_TABLE[i+3]}; return 0; fi
   done
   return 1
 }

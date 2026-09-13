@@ -5224,6 +5224,22 @@ if group 106 "every verb answers --help, --remove says how to confirm, and diver
     "$(env HOME="$FH" "$CLI" bogus --help >/dev/null 2>&1; echo $?)" "2"
   eq "and a verb that is a glob is not read as one (exit 2)" \
     "$(env HOME="$FH" "$CLI" '*' --help >/dev/null 2>&1; echo $?)" "2"
+  # One row of the table documents two verbs, and its names field is the string
+  # "allow ignore". Looked up with a substring test over that joined field, the
+  # field ITSELF answered as a known verb: `omabackup 'allow ignore' --help`
+  # printed the row and exited 0, and without --help the dispatcher went
+  # looking for a `cmd_allow ignore` function and failed at exit 1. A verb this
+  # tool does not have is a usage error whatever it is spelled like, and both
+  # halves of the row still have to answer for themselves.
+  ai106=$(env HOME="$FH" "$CLI" 'allow ignore' 2>&1); airc106=$?
+  eq "a two-verb row's names field is not itself a verb (exit 2)" "$airc106" "2"
+  has "and the refusal names what was typed" "$ai106" "unknown verb 'allow ignore'"
+  eq "nor with --help after it (exit 2)" \
+    "$(env HOME="$FH" "$CLI" 'allow ignore' --help >/dev/null 2>&1; echo $?)" "2"
+  eq "while allow --help still answers (exit 0)" \
+    "$(env HOME="$FH" "$CLI" allow --help >/dev/null 2>&1; echo $?)" "0"
+  eq "and ignore --help still answers (exit 0)" \
+    "$(env HOME="$FH" "$CLI" ignore --help >/dev/null 2>&1; echo $?)" "0"
 
   # setup --remove with nothing that can ask: the answer is no, and the
   # message has to say how to mean yes. It used to say only "cancelled".
