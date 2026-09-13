@@ -212,11 +212,22 @@ config_load() {
   # above), an empty CFG_MIN_ALLOWLIST is exactly "absent or null": cfg's
   # `select(. != null)` is the test, so a value of 0 still reads as set, where
   # jq's `//` would have folded it into "missing".
-  if [[ -n "$CFG_MIN_ALLOWLIST" ]]; then CFG_MIN_ALLOWLIST_SET=1; else CFG_MIN_ALLOWLIST_SET=0; fi
-  # An absent minAllowlist stands in as 0 for the check alone: it is validated
-  # the same way as the other integer knobs whenever it IS there.
-  for n in "$CFG_STALE_DAYS" "$CFG_MAX_MISSING_PCT" "$CFG_MAX_SCAN_FILES" "${CFG_MIN_ALLOWLIST:-0}"; do
-    [[ "$n" =~ ^[0-9]+$ ]] || die "config: staleDays, maxMissingPct, maxScanFiles and minAllowlist must be integers"
+  # A POSITIVE integer, and that is not pedantry about types. minAllowlist is
+  # a floor, and 0 is not a floor: it would let the allowlist be truncated to
+  # nothing with this guard still reporting a healthy run, and one broad glob
+  # left standing can carry enough files past the separate file-count floor to
+  # commit the result over a good backup. A fail-closed guard must not be
+  # switchable off, so 0 and anything negative are refused here, at config
+  # load, where every verb passes (Codex, PR 20).
+  if [[ -n "$CFG_MIN_ALLOWLIST" ]]; then
+    [[ "$CFG_MIN_ALLOWLIST" =~ ^[0-9]+$ && "$CFG_MIN_ALLOWLIST" -ge 1 ]] \
+      || die "config: minAllowlist must be a positive integer, the number of allowlist entries this machine has (at least 1); got: $CFG_MIN_ALLOWLIST"
+    CFG_MIN_ALLOWLIST_SET=1
+  else
+    CFG_MIN_ALLOWLIST_SET=0
+  fi
+  for n in "$CFG_STALE_DAYS" "$CFG_MAX_MISSING_PCT" "$CFG_MAX_SCAN_FILES"; do
+    [[ "$n" =~ ^[0-9]+$ ]] || die "config: staleDays, maxMissingPct and maxScanFiles must be integers"
   done
   [[ "$CFG_MAX_FILE_SIZE" =~ ^[0-9]+[kmg]?$ ]] || die "config: maxFileSize must look like 8m"
   # timer.* was the one pair of config values that reached a FILE unchecked:

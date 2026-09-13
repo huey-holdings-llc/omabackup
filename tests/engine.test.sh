@@ -5333,7 +5333,7 @@ if group 108 "the allowlist floor follows the last committed list, and minAllowl
   f108=$(obj snapshot --no-push)
   eq "12 against a committed 15 is below it" "$(jq -r .ok <<<"$f108")" "false"
   has "the refusal counts both lists and shows its arithmetic" "$(jq -r .error <<<"$f108")" \
-    "allowlist has 12 entries; the last successful run had 15, so the floor is 13"
+    "allowlist has 12 entries; the last successful run had 15, so the floor is 14"
   has "and names the key that lifts it, in the file it goes in" "$(jq -r .error <<<"$f108")" \
     "set minAllowlist in $OMABACKUP_CONFIG"
   eq "nothing was committed by the refused run" \
@@ -5342,6 +5342,37 @@ if group 108 "the allowlist floor follows the last committed list, and minAllowl
   jq '.minAllowlist=5' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
   check "an explicit minAllowlist is the escape hatch, and a known key" \
     env HOME="$FH" "$CLI" snapshot --no-push
+
+  # A SHORT LIST IS WHERE ROUNDING DECIDES THE GUARD. `prev * 9 / 10`
+  # truncates, so two entries gave a floor of one and half the list could go
+  # with the run still committing; the file floor is half the previous tree,
+  # so an entry covering about as many files as the one left standing sailed
+  # through that too and the loss was backed up over the good copy. The floor
+  # rounds up (Codex, PR 20).
+  mk_fixture g108t
+  unset OMABACKUP_MIN_ALLOWLIST
+  mkdir -p "$FH/.config/t108"
+  for i108 in 1 2 3; do
+    printf 'setting=%d\n' "$i108" > "$FH/.config/t108/e$i108.conf"
+    printf '.config/t108/e%d.conf\n' "$i108" >> "$FR/allowlist.txt"
+  done
+  git -C "$FR" commit -qam "three entries"
+  check "three against a committed three is exactly the floor" \
+    env HOME="$FH" "$CLI" snapshot --no-push
+  # Committed, so the next run compares two against two rather than two
+  # against three.
+  sed -i '/^\.config\/t108\/e3\.conf$/d' "$FR/allowlist.txt"
+  rm -f "$FH/.config/t108/e3.conf"
+  git -C "$FR" commit -qam "down to two"
+  check "two against a committed two still runs" env HOME="$FH" "$CLI" snapshot --no-push
+  sed -i '/^\.config\/t108\/e2\.conf$/d' "$FR/allowlist.txt"
+  rm -f "$FH/.config/t108/e2.conf"
+  t108=$(obj snapshot --no-push)
+  eq "one against a committed two is below the floor" "$(jq -r .ok <<<"$t108")" "false"
+  has "because a tenth of two rounds up, not down" "$(jq -r .error <<<"$t108")" \
+    "allowlist has 1 entries; the last successful run had 2, so the floor is 2"
+  eq "and the two-file backup is untouched" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c 't108' || true)" "2"
 
   # NO HISTORY. The fixture's HEAD carries a header-only allowlist, so no run
   # has ever committed a list to compare against: the bootstrap floor applies
@@ -5363,9 +5394,25 @@ if group 108 "the allowlist floor follows the last committed list, and minAllowl
   jq '.minAllowlist=10' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
   check "an explicit minAllowlist lifts the bootstrap floor too" \
     env HOME="$FH" "$CLI" snapshot --no-push
+  # A FLOOR THAT CANNOT REFUSE IS NOT A FLOOR. minAllowlist 0 would let the
+  # allowlist be truncated to nothing with this guard still reporting a
+  # healthy run, and one broad glob left standing can carry enough files past
+  # the file-count floor to commit that over a good backup. Refused at config
+  # load, where every verb passes, alongside the other bad values.
   jq '.minAllowlist="lots"' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
-  has "and a minAllowlist that is not a number is refused like the other integers" \
-    "$(obj status | jq -r .error)" "must be integers"
+  has "a minAllowlist that is not a number is refused" \
+    "$(obj status | jq -r .error)" "minAllowlist must be a positive integer"
+  jq '.minAllowlist=0' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
+  has "and so is 0, which would switch the guard off" \
+    "$(obj status | jq -r .error)" "minAllowlist must be a positive integer"
+  has "the refusal names the number to put there instead" \
+    "$(obj status | jq -r .error)" "the number of allowlist entries this machine has"
+  jq '.minAllowlist=-3' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
+  has "and so is a negative one" \
+    "$(obj status | jq -r .error)" "minAllowlist must be a positive integer"
+  jq '.minAllowlist=1' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
+  eq "1 is the smallest floor there is, and it is accepted" \
+    "$(obj status | jq -r '.error // "none"')" "none"
 
   # setup writes the default config verbatim, so a minAllowlist among the
   # defaults would land in every config ever written and pin the floor at 20

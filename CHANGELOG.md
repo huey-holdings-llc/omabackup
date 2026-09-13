@@ -73,13 +73,15 @@ at every size, instead of only once that list held twenty entries or more.
 Below twenty a flat bootstrap floor of twenty applied, so a machine whose
 config genuinely lives in fifteen paths was refused on every run, with a
 message about damage and nothing but a test-only variable to get past it.
-The floor is nine tenths of the last committed count, never below one, and
-the bootstrap floor still applies to a repo that has never committed a list.
-A new config key, `minAllowlist`, overrides both and is the answer to "I
-trimmed the list on purpose"; the refusal names it, and the config file to
-put it in, alongside the two counts it compared. It is the one key `setup`
-never writes for you: its being there at all is what says you chose the
-number, so a config that does not mention it gets the derived floor.
+The floor is at least nine tenths of the last committed count, rounded up,
+and the bootstrap floor still applies to a repo that has never committed a
+list. A new config key, `minAllowlist`, overrides both and is the answer to
+"I trimmed the list on purpose"; set it to the number of entries you
+actually have, which has to be at least 1, since a floor of nothing is not a
+floor. The refusal names the key, and the config file to put it in,
+alongside the two counts it compared. It is the one key `setup` never writes
+for you: its being there at all is what says you chose the number, so a
+config that does not mention it gets the derived floor.
 
 `omabackup self-test` takes a few minutes instead of twelve. Its fixture
 snapshots ran the real machine-fact tools (pacman, systemctl, npm, fprintd

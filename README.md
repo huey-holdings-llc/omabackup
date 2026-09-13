@@ -330,10 +330,12 @@ maxMissingPct    25; this share of allowlist entries or more vanishing at
                  once refuses the run
 maxScanFiles     2000; a folder with more files than this is one collapsed
                  row in the drift report
-minAllowlist     absent by default. The floor is nine tenths of the list the
-                 last successful run committed, or 20 before any run has
-                 committed one; writing this key sets the floor yourself,
-                 and 0 switches the floor off entirely
+minAllowlist     absent by default. The floor is at least nine tenths of the
+                 list the last successful run committed, rounded up, or 20
+                 before any run has committed one; write this key to set the
+                 floor yourself, to the number of entries you actually have
+                 (a positive integer: 0 is refused, a floor of nothing is
+                 not a floor)
 notify           true; false silences the desktop notifications
 shellNag         false; true makes setup add the login check to ~/.bashrc
 timer.calendar   daily; the snapshot timer's OnCalendar
@@ -638,17 +640,16 @@ actually broken.
   `allowlist.txt` by hand and commit it. An entry for something that is
   simply not on this machine belongs in the list with a leading `?`.
 * **"allowlist has N entries ... so the floor is K"**: the allowlist floor,
-  and it is derived from the list the last successful run committed: nine
-  tenths of that count, so trimming a few entries is fine and gutting the
-  list is not. Before any run has committed a list there is nothing to
-  compare against, and the message is the other shape, "below the bootstrap
-  floor of 20 (minAllowlist)". Either way, if the list really is that short
-  now, put `minAllowlist` in the config file with the number you have; commit
-  the trimmed `allowlist.txt` and the next run's floor follows it on its own.
-  `minAllowlist` set to 0 switches the floor off entirely, which means a list
-  truncated to nothing would be backed up as nothing: prefer the number you
-  have. A third wording, "set by OMABACKUP\_MIN\_ALLOWLIST", only appears
-  inside the test suite, where that variable is honoured.
+  and it is derived from the list the last successful run committed: at least
+  nine tenths of that count, rounded up, so trimming a few entries is fine and
+  gutting the list is not. Before any run has committed a list there is
+  nothing to compare against, and the message is the other shape, "below the
+  bootstrap floor of 20 (minAllowlist)". Either way, if the list really is
+  that short now, put `minAllowlist` in the config file with the number of
+  entries you actually have, which has to be at least 1; commit the trimmed
+  `allowlist.txt` and the next run's floor follows it on its own. A third
+  wording, "set by OMABACKUP\_MIN\_ALLOWLIST", only appears inside the test
+  suite, where that variable is honoured.
 * **"data repo marker has no usable format field"**: `.omabackup` is the file
   that says the repo is OmaBackup's and what format it is in, and a marker
   that is not readable JSON is refused rather than overwritten, because

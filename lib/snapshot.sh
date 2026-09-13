@@ -25,8 +25,9 @@
 # once the last commit's list held 20 or more entries, and the bootstrap 20
 # applied below that: a machine whose config genuinely lives in 15 paths was
 # refused on every single run, with a message about damage and nothing but a
-# suite-only variable to get past it. Nine tenths of the last committed count,
-# never below 1, says the same thing at 15 entries as it does at 200. A repo
+# suite-only variable to get past it. At least nine tenths of the last
+# committed count, rounded up, says the same thing at 15 entries as it does at
+# 200. A repo
 # whose HEAD carries no list with anything in it has nothing to compare
 # against, so it gets the bootstrap floor, which is the minAllowlist config
 # key (default 20); minAllowlist WRITTEN DOWN in the config overrides both,
@@ -73,7 +74,16 @@ snapshot_floors_from_history() {
   PREV_ENTRIES=$prev_entries
   local floor
   if [[ "${prev_entries:-0}" -ge 1 ]]; then
-    floor=$(( prev_entries * 9 / 10 ))
+    # ROUNDED UP, not down. `prev * 9 / 10` truncates, and on a short list the
+    # remainder it throws away is most of the guard: two entries gave a floor
+    # of one, so half the list could go with the run still committing, and if
+    # the entry that went covered about as many files as the one left standing
+    # then MIN_FILES (half the previous tree) passed too and the mass
+    # disappearance was backed up over the good copy. At least nine tenths of
+    # the previous entries have to remain: 2 -> 2, 3 -> 3, 10 -> 9, 15 -> 14,
+    # 20 -> 18. The clamp below is now belt and braces, since the ceiling of a
+    # ninth of anything at all is already 1 (Codex, PR 20).
+    floor=$(( (prev_entries * 9 + 9) / 10 ))
     [[ "$floor" -ge 1 ]] || floor=1
     MIN_ALLOWLIST_SOURCE=history
   else
