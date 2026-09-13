@@ -685,21 +685,27 @@ drift_optional_load() {
 # drift_parse FILE: emit JSON items from a saved report file, honouring the sentinel.
 drift_parse() { drift_items_json < "$1"; }
 
-# drift_count_actionable FILE: the number of drift report rows a human can act
-# on -- NEW, MODIFIED, GONE, TOOBIG and EXCLUDED all offer a button
-# (ui/DriftRow.qml: Allow, Ignore, or Ignore alone for the last two); an ERROR
-# row has none, and is not counted here, the same way health_collect never
-# counted one as drift.
+# drift_count_actionable: reads a parsed drift-items JSON ARRAY on stdin --
+# the shape drift_parse/drift_items_json produce, wrapped in "[...]", exactly
+# what health_collect and manifests_drift_counts already build for their own
+# purposes -- and prints the number of rows a human can act on. NEW,
+# MODIFIED, GONE, TOOBIG and EXCLUDED all offer a button (ui/DriftRow.qml:
+# Allow, Ignore, or Ignore alone for the last two); an ERROR row has none,
+# and is not counted.
 #
-# THE ONE COUNTER. `status --json .drift_count` (lib/health.sh) and
-# `snapshot --json .drift_count` (lib/manifests.sh, manifests_drift_counts)
-# both call this instead of deriving their own answer. They used to disagree
-# on any report holding a TOOBIG or EXCLUDED row: health counted every row
-# `drift_items_json` produced except ERROR, while the snapshot counted only
-# rows matching DRIFT_CLASSES (MODIFIED, NEW, GONE), a regex TOOBIG and
-# EXCLUDED never matched at all. The popup and the badge could show two
-# different numbers for the same report.
+# TAKES PARSED DATA, NEVER A PATH. `status --json .drift_count` (lib/health.sh)
+# and `snapshot --json .drift_count` (lib/manifests.sh, manifests_drift_counts)
+# both call this so the two can never disagree about what counts -- that was
+# the whole point of the shared function -- but a first version took a FILE
+# and reopened it, and health_collect had already parsed the very same file
+# for status.json's `.drift` array a few lines above. cmd_status takes no
+# repo lock, so a concurrent snapshot could replace manifests/drift.txt
+# between those two reads: `.drift` and `.drift_count` would then describe
+# two different reports, and a report that went clean on the second read
+# could publish `state:"ok"` beside rows still sitting in `.drift` from the
+# first (Codex, PR 14, round 2). Every caller now parses the report exactly
+# once and hands those same parsed bytes to both the `.drift` array and this
+# count.
 drift_count_actionable() {
-  [[ -f "$1" ]] || { echo 0; return 0; }
-  jq '[.[] | select(.type != "ERROR")] | length' <<<"[$(drift_parse "$1")]"
+  jq '[.[] | select(.type != "ERROR")] | length'
 }

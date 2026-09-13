@@ -279,7 +279,15 @@ manifests_drift_counts() {
   # made `snapshot --json` under-report what `status --json` and the popup
   # showed for the same report (Task 1, 0.8.0). TOOBIG_N and EXCLUDED_N below
   # are a separate, narrower tally kept only for the snapshot's own log line.
-  DRIFT_N=$(drift_count_actionable "$1")
+  #
+  # ONE PARSE. drift_count_actionable takes already-parsed items, not a file
+  # path, so the report is read here exactly once (drift_parse) and the same
+  # parsed bytes are handed to the counter -- the same discipline
+  # health_collect follows for status.json's `.drift` array, so the two can
+  # never read two different reports for one answer (Codex, PR 14, round 2).
+  local items
+  items=$(drift_parse "$1")
+  DRIFT_N=$(drift_count_actionable <<<"[$items]")
   TOOBIG_N=$(grep -c '^TOOBIG' "$1" 2>/dev/null || true)
   EXCLUDED_N=$(grep -c '^EXCLUDED' "$1" 2>/dev/null || true)
   DRIFT_N=${DRIFT_N:-0}; TOOBIG_N=${TOOBIG_N:-0}; EXCLUDED_N=${EXCLUDED_N:-0}

@@ -173,12 +173,20 @@ health_collect() {
     items=$(drift_parse "$drift_file")
     arr="[${items}]"
     total=$(jq -r 'length' <<<"$arr")
-    # drift_count_actionable (lib/drift.sh) is the one counter: it and
-    # manifests_drift_counts (lib/manifests.sh, `snapshot --json`) both count
-    # every row a drift report can hold except ERROR, which has no button
+    # drift_count_actionable (lib/drift.sh) is the one counter, shared with
+    # manifests_drift_counts (lib/manifests.sh, `snapshot --json`): every row
+    # a drift report can hold except ERROR, which has no button
     # (Allow/Ignore, ui/DriftRow.qml) and so is a fault below, not a path to
     # triage. The row itself stays in the list, to be read.
-    H_DRIFT_COUNT=$(drift_count_actionable "$drift_file")
+    #
+    # FED $arr, NOT $drift_file. A first version of drift_count_actionable
+    # took the file path and reopened it, so this line read the report a
+    # SECOND time -- cmd_status takes no repo lock, so a concurrent snapshot
+    # could replace the file between drift_parse above and that second read,
+    # and .drift/.drift_count could then describe two different reports
+    # (Codex, PR 14, round 2). $arr is already the one parse of this report;
+    # every count and list below comes from it and nothing reopens the file.
+    H_DRIFT_COUNT=$(drift_count_actionable <<<"$arr")
     # An ERROR row means a detector did not run: a missing stock tree, a pacman
     # this scan could not parse, an unreadable drop-in directory. Counting it
     # as one more drift item made "the biggest detector is switched off" render
