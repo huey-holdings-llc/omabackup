@@ -65,7 +65,12 @@ Panel {
   property real snapshotSeenRun: 0
   property real snapshotSeenAttempt: 0
 
-  readonly property string sysState: helperError ? "fault" : (st && st.state ? st.state : "unknown")
+  // Service.qml already derives this from the same status.json; the panel's
+  // only addition is helperError, which also stands in for "no service at all"
+  // and so has to be asked first. When it is empty the service is there and
+  // its answer is the answer, rather than a second copy of the same ternary
+  // that has to be kept in step by hand.
+  readonly property string sysState: helperError ? "fault" : svc.sysState
   readonly property var drift: st && st.drift ? st.drift : []
   readonly property int driftCount: st && st.drift_count ? st.drift_count : 0
   readonly property var problems: st && st.problems ? st.problems : []
