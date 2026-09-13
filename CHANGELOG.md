@@ -20,8 +20,8 @@ included, so the popup sees no change at all. Exit codes did not move.
 strings from `status` and `health` and `{code, path, note}` objects from
 `lint`, and the popup renders whatever it finds there as text, so one shape
 had to win. `lint --json` keeps its records under a new `findings` key, with
-the same contents as before, and its `problems` now holds the same lines the
-plain `omabackup lint` prints. The human output of `lint` is unchanged.
+the same contents as before, and its `problems` now holds the same findings,
+one sentence each. The human output of `lint` is unchanged.
 
 `omabackup self-test` takes a few minutes instead of twelve. Its fixture
 snapshots ran the real machine-fact tools (pacman, systemctl, npm, fprintd

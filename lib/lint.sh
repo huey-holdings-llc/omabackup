@@ -290,8 +290,10 @@ lint_normalize() {
 # every entry as text and Service.qml puts problems[0] in the error line, so an
 # object reached the user as "[object Object]" the moment a lint reply got
 # there. The records are still the useful thing for a program, so they keep
-# their own key, findings[], unchanged; the sentence built from each one is
-# exactly what the non-JSON rendering prints.
+# their own key, findings[], unchanged, and each one also becomes one sentence
+# in problems[], out of the same code, path and note. Not a transcript of the
+# non-JSON rendering: BADSED prints its note after an arrow rather than in
+# brackets, and this mapping does not special-case it.
 lint_emit() {
   [[ $JSON == 1 ]] || return 0
   local ok=true

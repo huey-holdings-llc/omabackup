@@ -4679,6 +4679,51 @@ if group 101 "the triage verbs honour --json: one human line without it, one obj
   eq "open --json: unchanged" \
     "$(env PATH="$T/fakebin:$PATH" HOME="$FH" "$CLI" open --json 2>/dev/null | jq -r .ok)" "true"
 
+  # --report is a different destination and says so. The pager is faked like
+  # group 59's: CI's container has no less, and the line is the subject here.
+  printf '#!/bin/sh\nexit 0\n' > "$T/fakebin/less"; chmod +x "$T/fakebin/less"
+  : > "$T/open101.cwd"
+  or101=$(env PATH="$T/fakebin:$PATH" HOME="$FH" "$CLI" open --report 2>/dev/null); or101rc=$?
+  eq "open --report: its own human line" "$or101" "opened the drift report in a terminal"
+  eq "open --report: exit 0" "$or101rc" "0"
+
+  # The lint gate's rollback is a reply too. Break the lists first, then make
+  # an edit that clears every pre-check and cannot survive lint --no-walk.
+  mkdir -p "$FH/.config/appr"; printf 'r=1\n' > "$FH/.config/appr/r.toml"
+  printf '.config/no-such-thing-101\n' >> "$FR/allowlist.txt"
+  printf 'NEW        ~/.config/appr/r.toml\n# drift-scan-complete\n' > "$FR/manifests/drift.txt"
+  lg101=$(obh allow "$(tp101 .config/appr/r.toml)"); lg101rc=$?
+  eq "the lint gate refuses in one human line" "$lg101" \
+    "refused: lint rejected the edit (rolled back): MISSING .config/no-such-thing-101"
+  eq "and exits 1" "$lg101rc" "1"
+  grep -qx '.config/appr/r.toml' "$FR/allowlist.txt" && bad "the lint-gate refusal did not roll back" \
+    || ok "and the edit was rolled back"
+  eq "the same refusal under --json still carries lint_ok:false" \
+    "$(obj allow "$(tp101 .config/appr/r.toml)" | jq -c '[.ok,.lint_ok]')" '[false,false]'
+  sed -i '/no-such-thing-101/d' "$FR/allowlist.txt"
+
+  # timer pause/resume and both run branches, against a systemctl that says
+  # yes to everything. OMABACKUP_SKIP_TIMERS=0 is what lets the unit branch
+  # run at all; the rest of this suite sets it to 1.
+  printf '#!/bin/sh\necho "$@" >> "%s/sysctl101.log"\nexit 0\n' "$T" > "$T/fakebin/systemctl"
+  chmod +x "$T/fakebin/systemctl"
+  : > "$T/sysctl101.log"
+  tw101() { env PATH="$T/fakebin:$PATH" HOME="$FH" OMABACKUP_SKIP_TIMERS=0 "$CLI" "$@" 2>/dev/null; }
+  eq "timer pause: one human line" "$(tw101 timer pause)" "timer paused"
+  eq "timer resume: one human line" "$(tw101 timer resume)" "timer resumed"
+  eq "timer run: the unit branch names the unit" "$(tw101 timer run)" "snapshot started (the systemd unit)"
+  # The wording and the branch, not just the wording: this one really did ask
+  # systemd, which is what makes the next assertion a different branch.
+  grep -qx -- '--user start --no-block omabackup-snapshot.service' "$T/sysctl101.log" \
+    && ok "timer run: and really asked systemd for it" || bad "timer run never reached systemctl"
+  # Last in this fixture on purpose: the fallback really does detach a snapshot.
+  : > "$T/sysctl101.log"
+  eq "timer run: the detached fallback says that instead" \
+    "$(env PATH="$T/fakebin:$PATH" HOME="$FH" OMABACKUP_SKIP_TIMERS=1 "$CLI" timer run 2>/dev/null)" \
+    "snapshot started (detached, no unit loaded)"
+  [[ -s "$T/sysctl101.log" ]] && bad "the detached fallback still called systemctl" \
+    || ok "timer run: and the fallback did not touch systemctl"
+
   # A usage error is still a usage error in both modes: exit 2, and under
   # --json one object carrying usage:true, not a widget-shaped refusal.
   eq "open: an unknown flag exits 2 without --json" \
@@ -4686,6 +4731,41 @@ if group 101 "the triage verbs honour --json: one human line without it, one obj
   u101=$(obj open --bogus); u101rc=$?
   eq "open --json: an unknown flag exits 2" "$u101rc" "2"
   eq "open --json: and is one usage object" "$(jq -c '[.ok,.usage]' <<<"$u101")" '[false,true]'
+
+  # push's SUCCESS lines need a repo with nothing dirty and a push the gate
+  # will allow, which the fixture above no longer is: its own fixture, last.
+  mk_fixture g101p; seed_home; commit_baseline
+  if command -v gitleaks >/dev/null 2>&1; then
+    git -C "$FR" add -A >/dev/null 2>&1; git -C "$FR" commit -qm "settle before the push lines" >/dev/null 2>&1
+    # THE LAST LINE, not the whole of stdout. Without --json the engine's own
+    # progress log speaks too ("==> Pushed to origin.", log() in lib/common.sh,
+    # which has always printed on this path); the reply is what the verb ends
+    # on. Under --json log() is silent and stdout is the one object, which the
+    # last assertion in this block pins.
+    pu101() { env HOME="$FH" "$CLI" push "$@" 2>/dev/null | tail -1; }
+    # Nothing dirty, commits waiting: the reply the verb ends on, count zero.
+    eq "push: a plain push reports what it committed" "$(pu101)" "committed 0 edit(s)"
+    # One list edit, confirmed: the same line with a count.
+    printf '\n# an edit for the Commit button\n' >> "$FR/drift-ignore.txt"
+    eq "push --confirm: the count is in the line" "$(pu101 --confirm)" "committed 1 edit(s)"
+    # An edit that only ever lived in the index (added, then deleted from the
+    # working tree) is gone after the unstage, so there is nothing left to
+    # stage and the verb takes its own early exit.
+    printf 'x\n' > "$FR/ghost101.txt"
+    git -C "$FR" add ghost101.txt
+    rm -f "$FR/ghost101.txt"
+    head101=$(git -C "$FR" rev-parse HEAD)
+    eq "push --confirm: an edit that vanished before staging commits nothing" \
+      "$(pu101 --confirm)" "committed 0 edit(s)"
+    eq "and it really did commit nothing" "$(git -C "$FR" rev-parse HEAD)" "$head101"
+    # And the invariant the popup depends on: under --json, stdout is that one
+    # object and nothing else, log line included.
+    jp101=$(env HOME="$FH" "$CLI" push --confirm --json 2>/dev/null)
+    eq "push --json: stdout is one line" "$(wc -l <<<"$jp101")" "1"
+    eq "push --json: and it is one JSON object" "$(jq -sc length <<<"$jp101")" "1"
+  else
+    echo "  (gitleaks not installed: skipping push's success lines)"
+  fi
 fi
 
 if group 102 "lint --json: problems[] are strings, findings[] keeps the objects"; then
@@ -4761,9 +4841,16 @@ if group 103 "status on a data repo it cannot read records the fault, instead of
   eq "and its refusal is one JSON object" "$(jq -sc length <<<"$h103")" "1"
   eq "health recorded the fault as well" "$(jq -r .state "$OMABACKUP_STATE_DIR/status.json")" "fault"
 
-  # A write verb must NOT be weakened by any of this: it still refuses outright.
+  # A write verb must NOT be weakened by any of this: it still refuses outright,
+  # and from data_repo_require itself, not from some later gate that happens to
+  # say no too. `error` (not `problems`) is what die() emits, and the reason is
+  # the marker's.
   # shellcheck disable=SC2088  # the literal "~/" prefix the drift report emits, not a path to expand
-  eq "a write verb still refuses a repo with no marker" "$(obj allow '~/x' | jq -r .ok)" "false"
+  w103=$(obj allow '~/x'); w103rc=$?
+  eq "a write verb still refuses a repo with no marker" "$(jq -r .ok <<<"$w103")" "false"
+  eq "and it exits 1" "$w103rc" "1"
+  has "and the refusal is data_repo_require's own" "$(jq -r '.error // empty' <<<"$w103")" \
+    "no .omabackup marker"
 fi
 
 group_close

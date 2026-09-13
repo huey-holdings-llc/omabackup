@@ -90,6 +90,12 @@ health_require_repo_or_fault() {
 # this engine cannot read. Same writer the not-configured case uses (so the
 # two can never drift apart, and `repo` and `setup` read the same way), with
 # the state and the one problem that say what happened.
+#
+# When the marker is still there and something else refused (a format newer
+# than this version, a root that is not a git repository), `setup` can come out
+# "ready" beside `repo: ""` and `state: "fault"`. Nothing outside SetupCard
+# reads either field, and Panel.qml hides SetupCard on "fault", so the popup
+# renders the problem and not the pair.
 health_fault_json() {
   health_not_configured_json | jq -c --arg r "$1" '.state = "fault" | .problems = [$r]'
 }
