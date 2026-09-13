@@ -49,6 +49,25 @@ fake_tool systemctl 'for a in "$@"; do
   [ "$a" = list-unit-files ] && { echo "fake-unit.service enabled enabled"; exit 0; }
 done
 echo "fake systemctl: $*" >&2; exit 1'
+# setup_units and setup_check both fork `systemd-analyze calendar -- VALUE`
+# and `systemd-analyze timespan -- VALUE` (lib/setup.sh) to validate
+# timer.calendar/timer.jitter, and a container with no systemd-analyze at
+# all (an Arch container missing the `systemd` package, for one) would
+# otherwise put every ordinary `setup` run in this suite on the "absent"
+# branch, which now refuses (fail closed) rather than warns -- so every
+# fixture needs a systemd-analyze on PATH exactly the way it needs a real
+# Omarchy box's, or nothing here would ever finish `setup` at all. Accepts
+# anything an OnCalendar/timespan value in this suite's fixtures actually
+# is; refuses the two shapes a real systemd-analyze refuses that the tests
+# rely on: a `;` in a calendar (the sed-delimiter injection payload) and a
+# jitter that is not digits-then-a-unit-letter ("every other tuesday"). A
+# group that needs systemd-analyze reported ABSENT builds its own PATH
+# without this stub, the way group 105 builds a PATH without one tool.
+fake_tool systemd-analyze 'case "$1" in
+  calendar) case "$3" in *";"*) exit 1 ;; esac ;;
+  timespan) case "$3" in [0-9]*[a-zA-Z]) : ;; *) exit 1 ;; esac ;;
+esac
+exit 0'
 fake_tool dconf 'printf "[org/fake]\nkey=1\n"'
 fake_tool lpstat 'case "$1" in -p) echo "printer fake is idle.";; -v) echo "device for fake: ipp://fake";; esac'
 fake_tool timedatectl 'echo Etc/UTC'
@@ -5090,9 +5109,13 @@ if group 105 "setup check is a doctor: three line shapes, and a missing tool nam
     p105=$(command -v "$b105" 2>/dev/null) || continue
     ln -sf "$p105" "$D105/$b105"
   done
-  # gum, gitleaks and systemctl only have to EXIST for the doctor's probe, and
-  # none of the three is installed everywhere this suite runs.
-  for b105 in gum gitleaks systemctl; do printf '#!/bin/sh\nexit 0\n' > "$D105/$b105"; chmod +x "$D105/$b105"; done
+  # gum, gitleaks, systemctl and systemd-analyze only have to EXIST for the
+  # doctor's probe (this fixture's timer.calendar/timer.jitter are the
+  # unedited "daily"/"30m" defaults, so systemd-analyze answering yes to
+  # everything is enough); none of the four is installed everywhere this
+  # suite runs, and a missing systemd-analyze is now its own FAIL, not
+  # something this group is testing.
+  for b105 in gum gitleaks systemctl systemd-analyze; do printf '#!/bin/sh\nexit 0\n' > "$D105/$b105"; chmod +x "$D105/$b105"; done
   # A PATH with one binary left out. Built by copying the links rather than by
   # deleting from a shared directory, so the groups below cannot race or leak.
   mk_path105() {
