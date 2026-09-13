@@ -52,6 +52,7 @@ health_not_configured_json() {
       remote_label:"", remote_linkable:false,
       push_verifiable:false, push_reason:"unprobed", uncommitted:[],
       uncommitted_count:0, uncommitted_truncated:false, uncommitted_sig:"",
+      last_attempt_at:0, last_attempt_ok:null,
       timers_checked:false, timer_enabled:false, timer_active:false, timer_next:"",
       selftest_enabled:false, selftest_active:false, problems:[]}'
 }
@@ -137,6 +138,10 @@ health_collect() {
   # comes from the refusal itself, so the problem names what to fix rather
   # than sending the operator to the journal.
   local lr_ok lr_reason lr_at
+  # The same record, published: the popup's Snapshot button starts the unit
+  # and returns at once, so the panel learns from these two when the run it
+  # asked for has landed. null is a run under way, or no record at all.
+  H_ATTEMPT_OK=null; H_ATTEMPT_AT=0
   if [[ -r "$STATE_DIR/last-run.json" ]]; then
     # NOT `.ok // empty`: jq's alternative operator treats false exactly like
     # null, so the one value this field exists to carry read back as absent.
@@ -144,6 +149,8 @@ health_collect() {
     lr_reason=$(jq -r '.reason // ""' "$STATE_DIR/last-run.json" 2>/dev/null) || lr_reason=""
     lr_at=$(jq -r '.at // 0' "$STATE_DIR/last-run.json" 2>/dev/null) || lr_at=0
     case "$lr_at" in ''|*[!0-9]*) lr_at=0 ;; esac
+    case "$lr_ok" in true|false) H_ATTEMPT_OK=$lr_ok ;; esac
+    H_ATTEMPT_AT=$lr_at
     # `>= H_LAST`: a record older than the last successful run is a leftover
     # from a version that did not clear it, and must not nag forever.
     if [[ "$lr_ok" == false && "$lr_at" -ge "$H_LAST" ]]; then
@@ -156,7 +163,7 @@ health_collect() {
   fi
 
   # --- drift report: a scan that never finished is a FAULT, never "clean".
-  local drift_file="$DATA_REPO/manifests/drift.txt" items arr count
+  local drift_file="$DATA_REPO/manifests/drift.txt" items arr count total
   H_SCAN_COMPLETE=false; H_DRIFT_COUNT=0; H_DRIFT_TRUNCATED=false; H_DRIFT_JSON="[]"
   if [[ ! -f "$drift_file" ]]; then
     H_PROBLEMS+=("no drift report -- the snapshot timer may not be running")
@@ -165,7 +172,10 @@ health_collect() {
     [[ "$H_SCAN_COMPLETE" == true ]] || H_PROBLEMS+=("drift report is incomplete -- the scan did not finish")
     items=$(drift_parse "$drift_file")
     arr="[${items}]"
-    count=$(jq 'length' <<<"$arr")
+    # An ERROR row is a fault below, not a path to triage: it has no buttons,
+    # so counting it put a number on the badge nothing in the popup could
+    # bring down. The row itself stays in the list, to be read.
+    read -r total count < <(jq -r '[length, ([.[] | select(.type != "ERROR")] | length)] | @tsv' <<<"$arr")
     H_DRIFT_COUNT=$count
     # An ERROR row means a detector did not run: a missing stock tree, a pacman
     # this scan could not parse, an unreadable drop-in directory. Counting it
@@ -187,7 +197,7 @@ health_collect() {
         *) H_PROBLEMS+=("drift scan could not complete a check: $err") ;;
       esac
     done < <(jq -r '.[] | select(.type == "ERROR") | .path' <<<"$arr")
-    if (( count > WIDGET_DRIFT_LIMIT )); then
+    if (( total > WIDGET_DRIFT_LIMIT )); then
       H_DRIFT_TRUNCATED=true
       H_DRIFT_JSON=$(jq -c ".[0:${WIDGET_DRIFT_LIMIT}]" <<<"$arr")
     else
@@ -440,6 +450,8 @@ health_status_json() {
     --argjson uncommitted_count "$H_UNCOMMITTED_COUNT" \
     --argjson uncommitted_truncated "$H_UNCOMMITTED_TRUNCATED" \
     --arg uncommitted_sig "$H_UNCOMMITTED_SIG" \
+    --argjson last_attempt_at "${H_ATTEMPT_AT:-0}" \
+    --argjson last_attempt_ok "${H_ATTEMPT_OK:-null}" \
     --argjson timers_checked "$H_TIMERS_CHECKED" \
     --argjson timer_enabled "$H_TIMER_ENABLED" \
     --argjson timer_active "$H_TIMER_ACTIVE" \
@@ -449,6 +461,7 @@ health_status_json() {
     --argjson problems "[$(jjoin ${probs_j[@]+"${probs_j[@]}"})]" \
     'input as $drift | input as $uncommitted | {state:$state, setup:$setup, repo:$repo, generated:$generated,
       last_run:$last_run, last_run_age_days:$age,
+      last_attempt_at:$last_attempt_at, last_attempt_ok:$last_attempt_ok,
       drift_scan_complete:$scan_complete, drift_count:$drift_count,
       drift_truncated:$drift_truncated, drift:$drift,
       unpushed:$unpushed, diverged:$diverged, upstream_readable:$upstream_readable,

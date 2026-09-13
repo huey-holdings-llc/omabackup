@@ -59,6 +59,11 @@ Panel {
   property var handledPaths: ({})
   property var handledPrefixes: []
   property int handledRev: 0
+  // A snapshot this panel started and has not yet seen land (see runSnapshot).
+  property bool snapshotRunning: false
+  property real snapshotPressedAt: 0
+  property real snapshotSeenRun: 0
+  property real snapshotSeenAttempt: 0
 
   readonly property string sysState: helperError ? "fault" : (st && st.state ? st.state : "unknown")
   readonly property var drift: st && st.drift ? st.drift : []
@@ -163,9 +168,17 @@ Panel {
         : "Repo edits pending commit")
     : "Healthy · snapshot " + ageText()
 
-  // Quiet glyph when healthy, a count while there is drift to triage, and the
-  // alert triangle in the urgent colour for anything fail-closed would flag.
-  readonly property string barGlyph: sysState === "fault" ? "󰀦" : "󰆓"
+  // One glyph per state, so the bar alone tells them apart: the alert triangle
+  // in the urgent colour for anything fail-closed would flag, the disk with an
+  // alert mark while something waits on you (drift to triage, a snapshot to
+  // apply it, edits to commit), the plain disk when all is well, and the
+  // outline before setup or before the first status answers. Healthy,
+  // "attention with nothing left to triage" and "not configured" used to
+  // share the plain disk. The count label still rides along with drift.
+  readonly property string barGlyph: sysState === "fault" ? "󰀦"
+    : (!st || root.setupState === "not-configured") ? "󰠘"
+    : sysState === "attention" ? "󰽂"
+    : "󰆓"
   readonly property string barLabel: sysState === "attention" && remainingDrift > 0 && !vertical ? " " + remainingDrift : ""
 
   implicitWidth: button.implicitWidth
@@ -228,12 +241,44 @@ Panel {
       if (root.reportAction(rep, "resolve failed")) root.markHandled(path)
     })
   }
+  // Snapshot keeps this session's triage on screen until the run it started
+  // has landed. `timer run` returns as soon as systemd has the unit, and the
+  // report on disk is the old one until the run writes a new one, so clearing
+  // the handled set on the press brought every row just dealt with straight
+  // back, with nothing on screen to say a run was even going.
   function runSnapshot() {
+    // busy: Service.act drops a call while another is in flight (the button
+    // is disabled then, the s key is not), and a "Running…" over a run that
+    // was never asked for would sit until the backstop.
+    if (root.snapshotRunning || root.busy || !root.svc) return
     root.actionError = ""; root.actionNote = ""
-    if (root.svc) root.svc.snapshotNow()
-    // The next report is ground truth for what the decisions actually silenced.
-    handledPaths = {}; handledPrefixes = []; handledRev++
+    root.snapshotPressedAt = Math.floor(Date.now() / 1000)
+    // What status said at the press, so a record from the same wall second
+    // (a refusal seconds old, retried at once) cannot pass for this run's.
+    root.snapshotSeenRun = st && st.last_run ? st.last_run : 0
+    root.snapshotSeenAttempt = st && st.last_attempt_at ? st.last_attempt_at : 0
+    root.snapshotRunning = true
+    if (root.svc) root.svc.snapshotNow(function() { root.snapshotLanded() })
+    snapshotPoll.restart()
     snapshotSettle.restart()
+  }
+  function snapshotLanded() {
+    root.snapshotRunning = false
+    snapshotPoll.stop()
+    snapshotSettle.stop()
+    // The new report is ground truth for what the decisions actually silenced.
+    handledPaths = {}; handledPrefixes = []; handledRev++
+  }
+  // The run has landed when status.json says so. last_run is a run's START,
+  // so a run already under way when the button was pressed (and finishing
+  // with a drift scan older than this session's triage) does not count; a
+  // refusal is dated when it happens, so any refusal after the press does.
+  onStChanged: {
+    if (!root.snapshotRunning || !st) return
+    var t = root.snapshotPressedAt
+    var run = st.last_run || 0, at = st.last_attempt_at || 0
+    if (run >= t && run !== root.snapshotSeenRun) root.snapshotLanded()
+    else if (st.last_attempt_ok === false && at >= t && at !== root.snapshotSeenAttempt) root.snapshotLanded()
   }
   function pushOrConfirm() {
     if (root.uncommitted.length > 0) { confirmOpen = !confirmOpen; return }
@@ -299,7 +344,13 @@ Panel {
     interval: 600000; repeat: true; running: true
     onTriggered: root.refresh()
   }
-  Timer { id: snapshotSettle; interval: 45000; onTriggered: root.refresh() }
+  // While a snapshot runs, ask every 15s: the unit writes status.json when it
+  // finishes, but a detached run on a machine with no systemd session writes
+  // it only through its next `status`. snapshotSettle is the backstop, as long
+  // as the unit's own TimeoutStartSec, for a run that never reports at all (a
+  // manual run killed by Ctrl-C leaves its verdict at null).
+  Timer { id: snapshotPoll; interval: 15000; repeat: true; onTriggered: root.refresh() }
+  Timer { id: snapshotSettle; interval: 600000; onTriggered: { root.refresh(); root.snapshotLanded() } }
 
   IpcHandler {
     target: root.ipcTarget
@@ -372,7 +423,7 @@ Panel {
             readonly property string heroState: root.sysState
             width: parent.width
             title: "OmaBackup"
-            meta: root.stateText
+            meta: root.snapshotRunning ? "Snapshot running…" : root.stateText
             foreground: root.foreground
             fontFamily: root.fontFamily
             iconComponent: Component {
@@ -679,11 +730,11 @@ Panel {
             spacing: Style.spacing.sm
             Button {
               width: (parent.width - parent.spacing * 2) * 0.34
-              text: "Snapshot  (s)"
+              text: root.snapshotRunning ? "Running…" : "Snapshot  (s)"
               iconText: "󰆓"
               foreground: root.foreground
               fontFamily: root.fontFamily
-              enabled: !root.busy
+              enabled: !root.busy && !root.snapshotRunning
               onClicked: root.runSnapshot()
             }
             Button {
