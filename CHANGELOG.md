@@ -24,14 +24,19 @@ the same contents as before, and its `problems` now holds the same findings,
 one sentence each. The human output of `lint` is unchanged.
 
 `omabackup setup check` is a doctor rather than a dump of the JSON object
-`--json` prints. It reports one line per check, either `ok    <check>` or
-`FAIL  <check>: <what is wrong>. Fix: <command>`, and the tools, units and
-remote no longer arrive as raw JSON in the middle of it. Every failing line
-carries the command that fixes it: its own `pacman -S <package>` for a missing
-tool (it used to name a package for `gitleaks` and nothing else),
+`--json` prints. It reports one line per check, in one of three shapes:
+`ok    <check>`, `warn  <check>: <what is wrong>. Fix: <command>` for
+something wrong that OmaBackup still runs through, and `FAIL  <check>: ...`
+for something that stops it. `FAIL` is exactly the set of checks that decide
+the exit code, so a `FAIL` line means the verb exits 1 and an exit of 0 means
+there was no `FAIL` line. The tools, units and remote no longer arrive as raw
+JSON in the middle of the report. Every line that is not `ok` carries the
+command that fixes it: its own `pacman -S <package>` for a missing tool (it
+used to name a package for `gitleaks` and nothing else),
 `systemctl --user enable --now` for a timer that is not armed,
-`omabackup setup` for a config or a marker that is not there. The `--json`
-shape and the exit code are unchanged.
+`omabackup setup` for a config or a marker that is not there. The data repo
+line carries the repo's path whether or not it is healthy. The `--json` shape
+and the exit code are unchanged.
 
 Every verb answers `--help` (or `-h`) with its own lines from
 `omabackup help`, and exits 0. `restore`, `lint`, `snapshot`, `self-test`,

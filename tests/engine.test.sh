@@ -5028,7 +5028,7 @@ if group 104 "an inconclusive probe keeps the date of the last conclusive answer
   eq "and status still answers" "$(jq -r .push_reason <<<"$s104")" "probe-403"
 fi
 
-if group 105 "setup check is a doctor: one line per check, and a missing tool names its own package"; then
+if group 105 "setup check is a doctor: three line shapes, and a missing tool names its own package"; then
   # The human branch used to be `jq to_entries` over the same object --json
   # prints, so a nested object (tools, units, remote) arrived as raw JSON and
   # the only package it ever named was gitleaks. A doctor that cannot say
@@ -5062,20 +5062,43 @@ if group 105 "setup check is a doctor: one line per check, and a missing tool na
   }
 
   base105=$(env HOME="$FH" PATH="$D105" "$CLI" setup check 2>/dev/null)
-  bad105=$(grep -cvE '^(ok    |FAIL  )' <<<"$base105" || true)
-  eq "every line is an ok or a FAIL line" "$bad105" "0"
+  bad105=$(grep -cvE '^(ok    |warn  |FAIL  )' <<<"$base105" || true)
+  eq "every line is an ok, a warn or a FAIL line" "$bad105" "0"
   eq "no nested object reaches the human output as raw JSON" \
     "$(grep -c '[{}]' <<<"$base105" || true)" "0"
   has "and the checks that pass say so" "$base105" "^ok    git$"
+  # The README tells anyone recovering a diverged remote to read their data
+  # repo path off this report, so the PASSING line has to carry it: the path
+  # used to appear only on the branch a healthy machine never takes.
+  has "the data repo line carries the path even when it is fine" "$base105" "^ok    data repo ($FR)$"
 
-  for pair105 in git:git rsync:rsync flock:util-linux gum:gum gitleaks:gitleaks; do
-    t105=${pair105%%:*}; pkg105=${pair105##*:}
+  # Severity is the exit code, said out loud: FAIL is exactly the set of
+  # checks that refuse (the four required tools and the marker), warn is
+  # everything else that is wrong. So a FAIL line means exit 1, and exit 0
+  # means there was no FAIL line.
+  for row105 in git:git:FAIL:1 rsync:rsync:FAIL:1 flock:util-linux:FAIL:1 \
+                gum:gum:warn:0 gitleaks:gitleaks:warn:0; do
+    IFS=: read -r t105 pkg105 sev105 rc105 <<<"$row105"
     d105=$(mk_path105 "$t105")
-    o105=$(env HOME="$FH" PATH="$d105" "$CLI" setup check 2>/dev/null)
-    l105=$(grep -E "^FAIL  $t105:" <<<"$o105" || true)
-    [[ -n "$l105" ]] && ok "a missing $t105 is one FAIL line" || bad "a missing $t105 is not one FAIL line" "$o105"
+    o105=$(env HOME="$FH" PATH="$d105" "$CLI" setup check 2>/dev/null); orc105=$?
+    l105=$(grep -E "^$sev105  $t105:" <<<"$o105" || true)
+    [[ -n "$l105" ]] && ok "a missing $t105 is one $sev105 line" || bad "a missing $t105 is not one $sev105 line" "$o105"
     has "and the $t105 line names its own package" "$l105" "pacman -S $pkg105"
+    eq "and a missing $t105 exits $rc105" "$orc105" "$rc105"
   done
+
+  # The two timer checks are rendered from the same two values --json reports.
+  # They used to be gated on OMABACKUP_SKIP_TIMERS, which the suite exports, so
+  # the human report silently dropped two checks --json was still answering.
+  has "a timer that is not armed is a warn line" "$base105" "^warn  snapshot timer:"
+  has "and it names the systemctl line that arms it" "$base105" \
+    "systemctl --user enable --now omabackup-snapshot.timer"
+  has "the self-test timer too" "$base105" "^warn  self-test timer:"
+  # ...and an armed one says ok. OMABACKUP_SKIP_TIMERS=0 lets the probe run,
+  # against the stub systemctl in $D105, which answers yes to is-enabled.
+  on105=$(env HOME="$FH" PATH="$D105" OMABACKUP_SKIP_TIMERS=0 "$CLI" setup check 2>/dev/null)
+  has "an armed snapshot timer says ok" "$on105" "^ok    snapshot timer$"
+  has "an armed self-test timer says ok" "$on105" "^ok    self-test timer$"
 
   # The --json shape is the widget's and it is additive only: the keys that
   # were there before are still there, still with the same types.

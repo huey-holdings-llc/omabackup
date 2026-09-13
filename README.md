@@ -244,12 +244,21 @@ packages, and prompts you the way those tools normally do. Nothing else in
 OmaBackup ever uses `sudo`; the dry run (no `--apply`) only prints what it
 would install.
 
-`omabackup setup check` is the doctor: one line per check, either
-`ok    <check>` or `FAIL  <check>: <what is wrong>. Fix: <command>`. It covers
-the tools in the first two tables, the config, the data repo and its marker,
-the two timers and the remote, and every failing line carries the command that
-fixes it, its own `pacman -S <package>` included. `setup check --json` prints
-the same answers as one object for the widget.
+`omabackup setup check` is the doctor: one line per check, in one of three
+shapes.
+
+| Shape | Means |
+|---|---|
+| `ok    <check>` | nothing to do |
+| `warn  <check>: <what is wrong>. Fix: <command>` | something is wrong and OmaBackup still runs |
+| `FAIL  <check>: <what is wrong>. Fix: <command>` | something is wrong that stops it |
+
+A `FAIL` line is what makes the verb exit 1, so an exit of 0 means there was
+no `FAIL` line. It covers the tools in the first two tables, the config, the
+data repo (with its path) and its marker, the two timers and the remote, and
+every line that is not `ok` carries the command that fixes it, its own
+`pacman -S <package>` included. `setup check --json` prints the same answers
+as one object for the widget.
 
 ## Install
 
@@ -588,7 +597,8 @@ actually broken.
   ```
 
   (Use your own data repo path if it is somewhere else; `omabackup setup
-  check` prints it.) If the rebase stops on a conflict, git names the files.
+  check` prints it on the `data repo` line.) If the rebase stops on a
+  conflict, git names the files.
   Edit each one so it reads the way you want, `git add` it, then run
   `git rebase --continue`, repeating until the rebase finishes, and then
   `omabackup push`. To back out and think about it later, `git rebase --abort`
