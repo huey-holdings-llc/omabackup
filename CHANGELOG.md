@@ -121,18 +121,21 @@ The widget's status refresh forks two fewer processes. `timer.calendar` and
 (`systemd-analyze calendar` and `systemd-analyze timespan`) on every verb
 that loads config, including that refresh, for a pair of values only `setup`
 ever consumes. The check now happens where the value is used: in `setup`,
-before it writes the unit files, with the same refusal as before for a value
-systemd cannot parse, and `setup check` reports it as a doctor line (`ok`,
-or `warn` when `systemd-analyze` itself is missing, or `FAIL` naming the
-fix) instead. `status` still catches the cheap, unconditional part of the
-same guard, the backslash, newline and percent sign a value must never
-carry, which forks nothing.
+after the data repo is seeded, right before it writes the unit files, with
+the same refusal as before for a value systemd cannot parse; `setup
+--no-timers` writes no unit and so skips the check entirely, same as it
+always skipped writing the timer it would have checked. `setup check`
+reports it as a doctor line (`ok`, or `warn` when `systemd-analyze` itself
+is missing, or `FAIL` naming the fix) instead. A machine with no
+`systemd-analyze` no longer shows a fault in the popup for it either; the
+doctor is where that gap is reported now. `status` still catches the cheap,
+unconditional part of the same guard, the backslash, newline and percent
+sign a value must never carry, which forks nothing.
 
 Content scanning remembers which `gitleaks` subcommand family it is talking
 to. Choosing between the modern and the pre-8.19 spelling of a scan means
-asking `gitleaks ... --help`, once for the staging scan and once for the
-staged one; the answer for each is now kept for the rest of the process
-instead of being asked for again by a second caller in the same run.
+asking `gitleaks ... --help`; the answer is now kept for the rest of the
+process, so a second caller in the same process cannot re-fork it.
 
 ### Fixed
 

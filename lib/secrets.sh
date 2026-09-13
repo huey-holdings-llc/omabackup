@@ -86,11 +86,17 @@ gitleaks_available() { have gitleaks; }
 # pair (engine: snapshot.sh:495-499)? Each probe is a fork (`gitleaks ...
 # --help`), and a snapshot asks both -- staging scan, then staged scan -- so
 # the answer is memoised in a process-global variable, set on first use and
-# read on every call after. Unset (not empty-string) means "not probed yet",
-# so a build that fails the probe still memoises false rather than probing
-# again on every subsequent call. Never exported: the answer is only ever
-# good for the process that just asked gitleaks, never cached across a
-# process boundary where a different gitleaks could be on PATH.
+# read on every call after. Initialised empty here, at library scope, rather
+# than left to spring into existence on first use: an unrelated exported
+# GITLEAKS_HAS_DIR/GITLEAKS_HAS_GIT in the calling environment would
+# otherwise read as "already probed" and pick a scan command gitleaks was
+# never asked whether it supports. Empty (not merely unset) means "not
+# probed yet", so a build that fails the probe still memoises false rather
+# than probing again on every subsequent call. Never exported: the answer is
+# only ever good for the process that just asked gitleaks, never cached
+# across a process boundary where a different gitleaks could be on PATH.
+GITLEAKS_HAS_DIR=""
+GITLEAKS_HAS_GIT=""
 gitleaks_has_dir() {
   if [[ -z "${GITLEAKS_HAS_DIR:-}" ]]; then
     if gitleaks dir --help >/dev/null 2>&1; then GITLEAKS_HAS_DIR=1; else GITLEAKS_HAS_DIR=0; fi

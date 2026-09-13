@@ -583,7 +583,12 @@ setup_check() {
   # setup_units, so this doctor is where their systemd grammar is checked:
   # config_load's job is just the character class that guards unit-file
   # injection (lib/config.sh), which runs on every verb and forks nothing.
-  local have_sysd_analyze=false cal_ok=true jit_ok=true
+  # cal_ok/jit_ok are tri-state JSON literals, not booleans: "null" (nothing
+  # checked -- no config, or no systemd-analyze to check it with), or
+  # "true"/"false" once systemd-analyze has actually answered. A consumer of
+  # --json can then tell "checked and fine" from "not checked at all"
+  # without also reading timer.systemdAnalyze to disambiguate a bare true.
+  local have_sysd_analyze=false cal_ok=null jit_ok=null
   if config_exists; then
     cfg=true
     config_load
@@ -591,8 +596,10 @@ setup_check() {
     if [[ -f "$DATA_REPO/.omabackup" ]]; then marker=true; else ok=false; fi
     if have systemd-analyze; then
       have_sysd_analyze=true
-      systemd-analyze calendar -- "$CFG_TIMER_CALENDAR" >/dev/null 2>&1 || { cal_ok=false; ok=false; }
-      systemd-analyze timespan -- "$CFG_TIMER_JITTER" >/dev/null 2>&1 || { jit_ok=false; ok=false; }
+      systemd-analyze calendar -- "$CFG_TIMER_CALENDAR" >/dev/null 2>&1 \
+        && cal_ok=true || { cal_ok=false; ok=false; }
+      systemd-analyze timespan -- "$CFG_TIMER_JITTER" >/dev/null 2>&1 \
+        && jit_ok=true || { jit_ok=false; ok=false; }
     fi
     url=$(remote_origin_url)
     # cfg()'s "getpath(...) // empty" treats a JSON false the same as

@@ -5603,6 +5603,15 @@ EOF
   printf 'export FOO112=bar\n' >> "$FH/.bashrc"
   check "a snapshot runs with the fake gitleaks installed" \
     env HOME="$FH" PATH="$GLBIN112:$PATH" "$CLI" snapshot --no-push
+  # This pins one probe per subcommand family for the SNAPSHOT path only:
+  # `snapshot` runs both scans (staging tree, then staged commit) in one
+  # process, so the memo set by the first is read by the second. The
+  # widget's push --confirm path is not covered here -- it runs
+  # secrets_scan_staged in a subshell (lib/widget.sh:537), so any memo it
+  # sets dies with that subshell and cannot be read back by a caller outside
+  # it. That is fine for this process's own probe count (still one fork,
+  # since nothing else in that subshell asks again), but it means the memo
+  # never crosses the subshell boundary either way.
   eq "one dir --help probe for the whole snapshot" \
     "$(grep -c '^dir --help$' "$GLLOG112" || true)" "1"
   eq "one git --help probe for the whole snapshot" \

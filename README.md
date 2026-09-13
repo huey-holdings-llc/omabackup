@@ -337,8 +337,11 @@ setupPhase       setup's own resume marker, not something to edit
 
 Edits take effect on the next run, with two exceptions that only setup reads.
 `timer.*` is written into the unit files, so rerun `omabackup setup --yes`
-after changing it; nothing else reads it, so a bad value is only ever caught
-there, and by `omabackup setup check`, never by another verb along the way.
+after changing it; no other verb validates it, so a bad value is only ever
+caught there, and by `omabackup setup check`, never by another verb along
+the way (`status` still reads `timer.calendar` back out of config to compare
+it against the installed unit, just without checking it against systemd's
+grammar).
 `shellNag` set to true adds the login check the next time
 setup runs; set back to false it removes nothing, so take the two lines under
 the OmaBackup comment out of `~/.bashrc` yourself (`setup --remove` does,
