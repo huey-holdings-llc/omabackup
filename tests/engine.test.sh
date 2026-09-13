@@ -6113,6 +6113,12 @@ case " \$* " in
       echo "fake gitleaks: anthropic-api-key found in a staged file"
       exit 1
     fi
+    # The race: a clean answer, and the worktree file rewritten behind it
+    # before this scan returns. cwd is the data repo, because
+    # secrets_scan_staged cd's there to run the scan.
+    if [ -f "$T/gl-race-line" ]; then
+      cat "$T/gl-race-line" >> allowlist.txt
+    fi
     ;;
 esac
 exit 0
@@ -6150,6 +6156,54 @@ EOF
     "$(git -C "$FR" log --format=%s -n 3 | grep -c '^omabackup: allowlist accepted at ' || true)" "1"
   eq "one staged scan for that commit, one for the snapshot's own, and no more" \
     "$(grep -c -- '--staged' "$GLLOG114" || true)" "2"
+
+  # WHAT THE SCAN CLEARED IS WHAT GETS COMMITTED. The commit used to name its
+  # path (`git commit -- allowlist.txt`), and git documents that files given
+  # on the command line make it ignore their STAGED contents and record their
+  # current worktree contents instead. A file rewritten while gitleaks was
+  # running, or between its clean answer and the commit, was therefore
+  # committed unscanned and pushed by the same run: the exact hole the helper
+  # exists to close (Codex on PR #23). The stand-in plays that race, appending
+  # a matching line to the worktree file after it has answered clean.
+  printf '# appended behind the scan: sk-ant-api03-%sAA\n' "$(rand_body 90)" > "$T/gl-race-line"
+  printf '.config/t114/b.conf\n' >> "$FR/allowlist.txt"
+  printf 'setting=2\n' > "$FH/.config/t114/b.conf"
+  staged114=$(cat "$FR/allowlist.txt")
+  check "the run still finishes" \
+    env HOME="$FH" PATH="$GL114:$PATH" "$CLI" snapshot --no-push --accept-allowlist
+  eq "the commit carries what the scan cleared, not what the worktree became" \
+    "$(git -C "$FR" show HEAD:allowlist.txt)" "$staged114"
+  eq "so the line appended behind the scan is in no commit at all" \
+    "$(git -C "$FR" log -p --format= -- allowlist.txt | grep -c 'appended behind the scan' || true)" "0"
+  eq "and it is left in the worktree, as an edit for a human" \
+    "$(( $(grep -c 'appended behind the scan' "$FR/allowlist.txt" || true) >= 1 ))" "1"
+  eq "which git reports as an unstaged modification" \
+    "$(git -C "$FR" status --porcelain -- allowlist.txt)" " M allowlist.txt"
+  rm -f "$T/gl-race-line"
+  cp "$T/al114.bak" "$FR/allowlist.txt"
+  printf '.config/t114/a.conf\n.config/t114/b.conf\n' >> "$FR/allowlist.txt"
+  # Quiet: the restore above reproduces exactly what HEAD carries, so git has
+  # nothing to do and says so on stdout.
+  git -C "$FR" commit -qam "back to the list the run scanned" >/dev/null 2>&1 || true
+
+  # ...and the empty index the pathspec-free commit rests on is a
+  # precondition, not an assumption. With an unrelated path staged by hand the
+  # acceptance stands down rather than committing an index that holds more
+  # than it staged and scanned.
+  printf 'scratch\n' > "$FR/handstaged114.txt"
+  git -C "$FR" add handstaged114.txt
+  printf '.config/t114/c.conf\n' >> "$FR/allowlist.txt"
+  printf 'setting=3\n' > "$FH/.config/t114/c.conf"
+  n114=$(git -C "$FR" log --format=%s | grep -c '^omabackup: allowlist accepted at ' || true)
+  s114=$(ob114 snapshot --no-push --accept-allowlist)
+  has "a pre-staged path stands the acceptance down instead of riding along" \
+    "$s114" "something is already staged in the data repo"
+  eq "so no acceptance commit was made" \
+    "$(git -C "$FR" log --format=%s | grep -c '^omabackup: allowlist accepted at ' || true)" "$n114"
+  eq "and no commit carries the hand-staged path" \
+    "$(git -C "$FR" log --format= --name-only | grep -cx 'handstaged114.txt' || true)" "0"
+  git -C "$FR" reset -q -- handstaged114.txt
+  rm -f "$FR/handstaged114.txt"
 
   # THE .gitignore SYNC IS THE SAME SHAPE. It appends the patterns this
   # version ships to an adopted repo and commits them inside the same run.

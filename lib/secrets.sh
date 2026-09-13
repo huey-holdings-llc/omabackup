@@ -241,15 +241,31 @@ secrets_scan_staged() {
 #
 # secrets_scan_staged is called the way cmd_push calls it (lib/widget.sh): in
 # a command substitution, because it die()s on a hit and the die may only take
-# THAT subshell down, never the run's own reporting. Its `git reset -q` has
-# already undone the staging in the real repo by then (a git command, not
-# shell state, so the subshell boundary does not contain it); the reset below
-# is the belt to that braces, and it names the paths this call staged so a
-# refusal cannot unstage anything else.
+# THAT subshell down, never the run's own reporting. The undo on a hit is
+# secrets_scan_staged's OWN `git reset -q`, which runs before its die (a git
+# command, not shell state, so the subshell boundary does not contain it); the
+# reset below repeats it narrowed to the paths this call staged, and is there
+# only for a future non-zero status that does not come through that die. It is
+# not what unstages the refused file.
+#
+# THE COMMIT TAKES NO PATHSPEC. `git commit -- <paths>` does not commit the
+# index for those paths: git documents that when files are given on the
+# command line it ignores their staged contents and records their CURRENT
+# worktree contents instead. A file rewritten while gitleaks was running, or
+# in the window between its clean answer and this line, would then be
+# committed unscanned and pushed by the same run, which is the whole hole this
+# helper exists to close (Codex on PR #23). Committing the index commits
+# exactly the tree that was scanned.
+#
+# What makes a bare `git commit` safe here is the empty-index precondition
+# below: with nothing else staged, the index IS these paths and nothing more,
+# so no pathspec is needed to keep the commit narrow and the mutation rule
+# holds. Both callers already stand down when something is staged; the check
+# is repeated here because the no-pathspec commit is what depends on it.
 #
 # Returns 0 committed, 2 the scan refused (nothing committed, index reset, and
-# it is the caller's job to refuse the run), 1 the add or the commit itself
-# failed.
+# it is the caller's job to refuse the run), 1 the precondition, the add or
+# the commit itself failed.
 repo_commit_scanned() {
   local -a paths=()
   while (( $# )); do
@@ -259,6 +275,11 @@ repo_commit_scanned() {
   local msg=${1:-}
   (( ${#paths[@]} > 0 )) || die "repo_commit_scanned was given no paths to commit"
   [[ -n "$msg" ]] || die "repo_commit_scanned was given no commit message"
+
+  if ! git -C "$DATA_REPO" diff --cached --quiet; then
+    warn "something is already staged in the data repo, so nothing was committed: a commit this tool signs must carry only what it staged and scanned"
+    return 1
+  fi
 
   git -C "$DATA_REPO" add -- "${paths[@]}" || return 1
 
@@ -277,5 +298,5 @@ repo_commit_scanned() {
   # ~/.gitconfig cannot commit at all without it.
   git_ident_args
   git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} \
-    commit -q -m "$msg" -- "${paths[@]}" || return 1
+    commit -q -m "$msg" || return 1
 }

@@ -360,7 +360,10 @@ snapshot's own scan covers only `home/`, `etc/`, `manifests/` and
 into a comment beside an allowlist entry could be committed and pushed with
 no gate in front of it. Both now stage, scan and commit through the same
 helper, and a scan that says no undoes the staging and refuses the run
-rather than warning.
+rather than warning. What gets committed is the index, never the file as
+the worktree holds it at that moment, so a list rewritten while the scan was
+running cannot slip in behind its clean answer; the edit is left for you to
+commit, like any other.
 
 The filename gate refuses the run when its walk of the staging tree fails.
 The walk sat in one pipeline ending in `|| true`, put there for grep's
