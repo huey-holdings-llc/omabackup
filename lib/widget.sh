@@ -362,33 +362,45 @@ push_nothing_ahead() {
   [[ "$ahead" == 0 ]]
 }
 
-# cmd_push [--confirm]: the dynamic push button. Plain push when only commits
-# are waiting; when a watched file is dirty, report the files and require
-# --confirm, then stage EXACTLY those paths (never -A) and commit with a
-# message naming them.
+# cmd_push [--confirm [SIG]]: the dynamic push button. Plain push when only
+# commits are waiting. When the data repo has edits of its own (anything
+# outside the snapshot's home/, etc/, manifests/ and modes.txt), report them
+# and require --confirm, then stage EXACTLY those paths, literally (never -A,
+# never a glob), and commit them.
 #
-# `.gitleaks.toml` used to be watched here, which told the user an edit to it
-# was a live rules change worth a second look; lib/secrets.sh has always
-# scanned with the plugin's own share/gitleaks.toml and never with a copy in
-# the repo, so the confirmation was about a file that does nothing.
+# The set is repo_own_edits (lib/health.sh), the same list status counts as
+# uncommitted. It used to be five named list files while status counted
+# everything, so an edit outside the five was an "N uncommitted" the button
+# ran against and never moved. Every file status reports as an uncommitted
+# edit needs a button that commits it; one producer makes that true by
+# construction instead of by keeping two lists in step.
 #
-# `.gitignore` IS watched, for the opposite reason: it is a rules file this
-# repo really uses, and data_repo_gitignore_sync (lib/config.sh) can now
-# append to it. Every file status reports as an uncommitted edit needs a
-# button that commits it, or the widget shows a count nothing can clear.
+# SIG is status.json's uncommitted_sig. The popup passes the one it drew the
+# dialog from, and a list that changed since (a file saved between the dialog
+# and the click) is answered with needs_confirm and the new list, never
+# committed unseen. `--confirm` alone, typed after a plain `push` printed the
+# list, still works.
 cmd_push() {
   data_repo_require
-  local confirm=${1:-} dirty=() line p files_json=() out
+  local confirm=${1:-} want_sig=${2:-} p files_json=() out sig
+  local -a dirty=() stage=()
   [[ -n "$confirm" ]] && assert_argv_safe "$confirm"
-  local -a watch=(allowlist.txt drift-ignore.txt etc-allowlist.txt normalize.txt .gitignore)
-  while IFS= read -r -d '' line; do
-    p=${line:3}
-    [[ -n "$p" ]] && dirty+=("$p")
-  done < <(git -C "$DATA_REPO" status --porcelain -z -- "${watch[@]}" 2>/dev/null)
+  if [[ -n "$want_sig" ]]; then
+    [[ "$confirm" == --confirm && "$want_sig" =~ ^[0-9]+$ ]] \
+      || usage_die "push --confirm takes one optional SIGNATURE: the number status reports as uncommitted_sig"
+  fi
+  mapfile -d '' -t dirty < <(repo_own_edits | LC_ALL=C sort -zu)
+  sig=$(own_edits_sig ${dirty[@]+"${dirty[@]}"})
 
-  if [[ ${#dirty[@]} -gt 0 && "$confirm" != "--confirm" ]]; then
+  # A list the popup cannot show in full is not one this button may commit.
+  if (( ${#dirty[@]} > UNCOMMITTED_LIMIT )); then
+    widget_reply_fail "${#dirty[@]} uncommitted edits in the data repo is more than the Commit button commits at once ($UNCOMMITTED_LIMIT); look at them with git -C $DATA_REPO status and commit them by hand"
+    return 1
+  fi
+
+  if [[ ${#dirty[@]} -gt 0 ]] && { [[ "$confirm" != --confirm ]] || [[ -n "$want_sig" && "$want_sig" != "$sig" ]]; }; then
     for p in "${dirty[@]}"; do files_json+=("$(jstr "$p")"); done
-    printf '{"ok":false,"needs_confirm":true,"files":[%s]}\n' "$(jjoin "${files_json[@]}")"
+    printf '{"ok":false,"needs_confirm":true,"files":[%s],"sig":"%s"}\n' "$(jjoin "${files_json[@]}")" "$sig"
     return 1
   fi
 
@@ -428,12 +440,31 @@ cmd_push() {
     if ! git -C "$DATA_REPO" diff --cached --quiet; then
       local pre
       pre=$( { git -C "$DATA_REPO" diff --cached --name-only || true; } | awk 'NR<=5' | paste -sd' ' )
-      warn "unstaging edits that were staged before this push (they stay as uncommitted changes): $pre"
+      warn "unstaging what was staged before this push; anything in the confirmed list is staged again, the rest stays an uncommitted change: $pre"
       git -C "$DATA_REPO" reset -q \
         || { drop_lock; widget_reply_fail "could not unstage pre-existing staged changes"; return 1; }
     fi
-    git -C "$DATA_REPO" add -- "${dirty[@]}" \
-      || { drop_lock; widget_reply_fail "git add failed for the listed files"; return 1; }
+    # The reset can shrink the list: an edit that only ever lived in the index
+    # (added, then deleted from the working tree) is gone, and so is a staged
+    # change the working tree already undid. Stage what is still an edit AND
+    # was confirmed; never something that appeared since. The "k" prefix keeps
+    # a file named `@` or `*` from being read as a subscript.
+    local -A still=()
+    while IFS= read -r -d '' p; do still["k$p"]=1; done < <(repo_own_edits)
+    for p in "${dirty[@]}"; do [[ -n "${still["k$p"]:-}" ]] && stage+=("$p"); done
+    if (( ${#stage[@]} == 0 )); then
+      drop_lock
+      remote_push_if_ahead
+      health_write_status
+      printf '{"ok":true,"committed":0}\n'
+      return 0
+    fi
+    # --literal-pathspecs: a file named `m*.txt` or `a[1].txt`, or one that
+    # starts with `:`, is that file, not a pattern that also matches the
+    # snapshot's manifests/drift.txt. From stdin, not argv: no length limit.
+    printf '%s\0' "${stage[@]}" \
+      | git -C "$DATA_REPO" --literal-pathspecs add --pathspec-from-file=- --pathspec-file-nul \
+      || { git -C "$DATA_REPO" reset -q 2>/dev/null || true; drop_lock; widget_reply_fail "git add failed for the listed files"; return 1; }
     # AUTHORITATIVE GATE, the same one the snapshot pipeline runs before its
     # own commit (lib/snapshot.sh). This path stages list files a human just
     # edited and committed them with no
@@ -457,13 +488,14 @@ cmd_push() {
     # identity unknown" and left the lists staged behind it. The reset on
     # failure is what keeps a refusal from leaving that mess.
     git_ident_args
-    out=$(git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -q -m "lists: update ${dirty[*]} via widget" 2>&1) \
+    out=$( { printf 'omabackup: commit %d edit(s) from the Commit button\n\n' "${#stage[@]}"; printf '%s\n' "${stage[@]}"; } \
+      | git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -q -F - 2>&1) \
       || { git -C "$DATA_REPO" reset -q 2>/dev/null || true; drop_lock; widget_reply_fail "commit failed: $out"; return 1; }
     drop_lock
   fi
   remote_push_if_ahead
   health_write_status
-  printf '{"ok":true,"committed":%s}\n' "${#dirty[@]}"
+  printf '{"ok":true,"committed":%s}\n' "${#stage[@]}"
 }
 
 # cmd_timer pause|resume|status|run: drive the daily unit.

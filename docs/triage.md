@@ -70,12 +70,12 @@ just that it was.
 
 7. **Push the list changes.** The snapshot above commits the backed-up files
    and the manifests, and pushes them under the same gate, but it never
-   touches the four lists you just edited (allow, ignore and resolve-gone
-   only change your working copy). Run `omabackup push` on its own first: with
-   list edits waiting it refuses and prints exactly which files it would
-   stage, since a list edit is worth a second look before it leaves the
-   machine. Then `omabackup push --confirm` commits and pushes them, again
-   only as far as the gate allows.
+   touches the lists you just edited (allow, ignore and resolve-gone only
+   change your working copy), nor any other edit in the data repo outside its
+   own paths. Run `omabackup push` on its own first: with such edits waiting
+   it refuses and prints exactly which files it would stage, since an edit is
+   worth a second look before it leaves the machine. Then `omabackup push
+   --confirm` commits and pushes them, again only as far as the gate allows.
 
 ## Classification
 

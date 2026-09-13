@@ -51,14 +51,52 @@ health_not_configured_json() {
       unpushed:0, diverged:false, upstream_readable:false, remote:"none",
       remote_label:"", remote_linkable:false,
       push_verifiable:false, push_reason:"unprobed", uncommitted:[],
+      uncommitted_count:0, uncommitted_truncated:false, uncommitted_sig:"",
       timers_checked:false, timer_enabled:false, timer_active:false, timer_next:"",
       selftest_enabled:false, selftest_active:false, problems:[]}'
+}
+
+# repo_own_edits: every edit in the data repo that is not the snapshot's own
+# output, one NUL-terminated path each, unsorted. This is THE list: `status`
+# counts it as uncommitted and the Commit button (cmd_push) commits it. They
+# used to be two lists, status counting everything outside the snapshot's
+# paths and the button staging five named files, and an edit in the first and
+# not the second was a count nothing on screen could clear.
+#
+# --untracked-files=all names an untracked directory file by file, which is
+# what a confirm dialog has to show. In -z porcelain a rename or copy carries
+# its source as a second record, whichever column says R or C; both paths are
+# the edit. A path under the snapshot's own turf (the source of a `git mv` out
+# of home/) is dropped: the button must never stage the snapshot's output.
+repo_own_edits() {
+  local rec p src=0
+  while IFS= read -r -d '' rec; do
+    if (( src )); then
+      src=0; p=$rec
+    else
+      p=${rec:3}
+      [[ "${rec:0:2}" == *[RC]* ]] && src=1
+    fi
+    case "$p" in home/*|etc/*|manifests/*|modes.txt|'') continue ;; esac
+    printf '%s\0' "$p"
+  done < <(git -C "$DATA_REPO" status --porcelain -z --untracked-files=all \
+             -- . ':!home' ':!etc' ':!manifests' ':!modes.txt' 2>/dev/null)
+}
+
+# own_edits_sig PATH...: the signature of one sorted list of own edits.
+# status.json carries it and the popup hands it back with --confirm, so the
+# button commits the list the person saw or nothing. It is computed from the
+# list already in hand, never from a second git call: a file saved between
+# two calls would be in the signature and not on screen.
+own_edits_sig() {
+  if (( $# )); then printf '%s\0' "$@"; fi | cksum | cut -d' ' -f1
 }
 
 # health_collect: fills the H_* globals below. Callers must have DATA_REPO
 # set (config_load) and the repo validated (data_repo_require) first.
 health_collect() {
   H_PROBLEMS=()
+  H_UNCOMMITTED_JSON=""; H_UNCOMMITTED_COUNT=0; H_UNCOMMITTED_TRUNCATED=false; H_UNCOMMITTED_SIG=""
   local now last
   now=$(date +%s)
 
@@ -283,14 +321,18 @@ health_collect() {
     fi
   fi
 
-  # --- edits the timer will not commit (bin/, lists, README -- deliberately
-  # left for a human; home/etc/manifests/modes.txt are the timer's own turf).
-  local -a unc=()
-  local line
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && unc+=("$(jstr "$line")")
-  done < <(git -C "$DATA_REPO" status --porcelain -- . ':!home' ':!etc' ':!manifests' ':!modes.txt' 2>/dev/null)
+  # --- edits the timer will not commit: everything outside its own turf
+  # (home/etc/manifests/modes.txt), which is what the Commit button commits.
+  # Bare paths, capped like drift with the true count kept; the button refuses
+  # a list the popup could not show in full.
+  local -a own=() unc=()
+  local p
+  mapfile -d '' -t own < <(repo_own_edits | LC_ALL=C sort -zu)
+  H_UNCOMMITTED_COUNT=${#own[@]}
+  (( H_UNCOMMITTED_COUNT > UNCOMMITTED_LIMIT )) && H_UNCOMMITTED_TRUNCATED=true
+  for p in ${own[@]+"${own[@]:0:UNCOMMITTED_LIMIT}"}; do unc+=("$(jstr "$p")"); done
   H_UNCOMMITTED_JSON=$(jjoin ${unc[@]+"${unc[@]}"})
+  H_UNCOMMITTED_SIG=$(own_edits_sig ${own[@]+"${own[@]}"})
 
   # --- timers armed. systemctl --user always sees the REAL machine, so
   # fixtures set OMABACKUP_SKIP_TIMERS=1 to keep real timer state out of tests.
@@ -374,9 +416,10 @@ health_status_json() {
   for p in "${H_PROBLEMS[@]}"; do probs_j+=("$(jstr "$p")"); done
   # H_DRIFT_JSON can hold thousands of long paths -- passing it as an
   # --argjson exceeds the exec ARG_MAX (Argument list too long) on a real
-  # home, so it goes in on stdin instead (a here-string, not argv) and
-  # everything else stays a small --arg/--argjson.
-  jq -c \
+  # home, so it goes in on stdin instead, not argv, and everything else stays
+  # a small --arg/--argjson. The uncommitted list goes the same way, for the
+  # same reason: an untracked directory is listed file by file.
+  jq -cn \
     --arg state "$state" \
     --arg setup "$H_SETUP" \
     --arg repo "$DATA_REPO" \
@@ -394,7 +437,9 @@ health_status_json() {
     --argjson remote_linkable "$H_REMOTE_LINKABLE" \
     --argjson push_verifiable "$H_PUSH_VERIFIABLE" \
     --arg push_reason "$H_PUSH_REASON" \
-    --argjson uncommitted "[$H_UNCOMMITTED_JSON]" \
+    --argjson uncommitted_count "$H_UNCOMMITTED_COUNT" \
+    --argjson uncommitted_truncated "$H_UNCOMMITTED_TRUNCATED" \
+    --arg uncommitted_sig "$H_UNCOMMITTED_SIG" \
     --argjson timers_checked "$H_TIMERS_CHECKED" \
     --argjson timer_enabled "$H_TIMER_ENABLED" \
     --argjson timer_active "$H_TIMER_ACTIVE" \
@@ -402,17 +447,18 @@ health_status_json() {
     --argjson selftest_enabled "$H_SELFTEST_ENABLED" \
     --argjson selftest_active "$H_SELFTEST_ACTIVE" \
     --argjson problems "[$(jjoin ${probs_j[@]+"${probs_j[@]}"})]" \
-    '. as $drift | {state:$state, setup:$setup, repo:$repo, generated:$generated,
+    'input as $drift | input as $uncommitted | {state:$state, setup:$setup, repo:$repo, generated:$generated,
       last_run:$last_run, last_run_age_days:$age,
       drift_scan_complete:$scan_complete, drift_count:$drift_count,
       drift_truncated:$drift_truncated, drift:$drift,
       unpushed:$unpushed, diverged:$diverged, upstream_readable:$upstream_readable,
       remote:$remote, remote_label:$remote_label, remote_linkable:$remote_linkable,
       push_verifiable:$push_verifiable, push_reason:$push_reason,
-      uncommitted:$uncommitted,
+      uncommitted:$uncommitted, uncommitted_count:$uncommitted_count,
+      uncommitted_truncated:$uncommitted_truncated, uncommitted_sig:$uncommitted_sig,
       timers_checked:$timers_checked, timer_enabled:$timer_enabled, timer_active:$timer_active,
       timer_next:$timer_next, selftest_enabled:$selftest_enabled, selftest_active:$selftest_active,
-      problems:$problems}' <<<"$H_DRIFT_JSON"
+      problems:$problems}' < <(printf '%s\n[%s]\n' "${H_DRIFT_JSON:-[]}" "$H_UNCOMMITTED_JSON")
 }
 
 # health_write_status: collect fresh and persist, for callers (snapshot_result)
@@ -471,22 +517,19 @@ cmd_health() {
     lines+=("$H_DRIFT_COUNT config path(s) need attention (NEW = unbacked, GONE = vanished). Run: omabackup drift")
   fi
 
-  local -a unc=()
-  local line
-  if [[ -n "$H_UNCOMMITTED_JSON" ]]; then
-    while IFS= read -r line; do [[ -n "$line" ]] && unc+=("$line"); done < <(jq -r '.[]' <<<"[$H_UNCOMMITTED_JSON]")
-  fi
-  if (( ${#unc[@]} > 0 )); then
-    local sig now stamp="$STATE_DIR/nag.stamp" last_at=0 last_sig="" days
+  if (( H_UNCOMMITTED_COUNT > 0 )); then
+    local sig=$H_UNCOMMITTED_SIG now stamp="$STATE_DIR/nag.stamp" last_at=0 last_sig="" days
     now=$(date +%s)
-    sig=$(printf '%s\n' "${unc[@]}" | cksum | cut -d' ' -f1)
     if [[ -r "$stamp" ]]; then
       read -r last_at last_sig < "$stamp" || true
     fi
     case "$last_at" in ''|*[!0-9]*) last_at=0 ;; esac
     days=$(( (now - last_at) / 86400 ))
     if [[ "$sig" != "$last_sig" || "$days" -ge "$NAG_DAYS" ]]; then
-      lines+=("reminder: ${#unc[@]} uncommitted edit(s) to the repo's own lists/scripts. Run: git -C $DATA_REPO add -A && git -C $DATA_REPO commit")
+      # Not `git add -A`: that would sweep up the snapshot's own output too.
+      # Where pushing is off, push --confirm refuses before it commits, so
+      # the by-hand route stays in the line.
+      lines+=("reminder: $H_UNCOMMITTED_COUNT uncommitted edit(s) in the data repo, outside what the snapshot commits. Commit them with the popup's Commit button, or run: omabackup push --confirm (where pushing is off: git -C $DATA_REPO add FILE && git -C $DATA_REPO commit)")
       # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
       # WARN AND SKIP, not die: the reminder has already been decided and
       # added above, and a state directory that cannot be written must not
