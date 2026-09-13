@@ -209,6 +209,16 @@ if group 00 "baseline: version, help, config validation"; then
   # and report "not-configured" instead of dying, so this die()-refusal probe
   # uses a verb that still requires config unconditionally.
   eq "missing config refused with setup hint" "$(OMABACKUP_CONFIG=/nonexistent ob drift; true)" "$(printf '\033[1;31m[FAIL]\033[0m no config at /nonexistent. Run: omabackup setup')"
+  # A THRESHOLD THAT CANNOT REFUSE IS NOT A THRESHOLD, and config load is the
+  # one place every verb passes through, so that is where a value which would
+  # switch a guard off is caught. minAllowlist 0 would let allowlist.txt be
+  # truncated to nothing with the floor still reporting a healthy run.
+  jq '.minAllowlist=0' "$OMABACKUP_CONFIG" > "$T/zero.json"
+  eq "a config value that would disable a guard is refused" \
+    "$(OMABACKUP_CONFIG=$T/zero.json obj status | jq -r .ok)" "false"
+  has "and the refusal names the key and what it wants" \
+    "$(OMABACKUP_CONFIG=$T/zero.json obj status | jq -r .error)" \
+    "minAllowlist must be a positive integer"
 
   # self-test: --help is answered by the dispatcher, before any lib/ parser
   # sees the flag, so it prints the verb's own usage line and exits 0 (it used
