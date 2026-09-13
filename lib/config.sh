@@ -82,8 +82,17 @@ NAG_DAYS=7
 [[ -n "${OMABACKUP_MIN_FILES:-}" ]] || unset OMABACKUP_MIN_FILES
 [[ -n "${OMABACKUP_MIN_ALLOWLIST:-}" ]] || unset OMABACKUP_MIN_ALLOWLIST
 
-CONFIG_KNOWN='["dataRepo","remote","maxFileSize","staleDays","maxMissingPct","maxScanFiles","notify","shellNag","timer","setupPhase"]'
+CONFIG_KNOWN='["dataRepo","remote","maxFileSize","staleDays","maxMissingPct","maxScanFiles","minAllowlist","notify","shellNag","timer","setupPhase"]'
 CONFIG_KNOWN_DOTTED='["remote.url","remote.trusted","timer.calendar","timer.jitter"]'
+# minAllowlist is KNOWN but deliberately NOT in CONFIG_DEFAULTS, and it is the
+# only key like that. setup writes CONFIG_DEFAULTS into the config file
+# verbatim, so a default here would land in every config setup ever wrote, and
+# the allowlist floor reads the key's PRESENCE as "the user decided what this
+# machine's floor is". A defaulted 20 in every file would pin the floor at 20
+# on every install and take the derived floor (nine tenths of the last
+# committed list) away from exactly the large lists it protects. Absent means
+# "derive it", which is what the tool should do unless told otherwise; the
+# bootstrap 20 lives in lib/snapshot.sh and the README documents both.
 CONFIG_DEFAULTS='{"remote":{"url":"","trusted":false},"maxFileSize":"8m","staleDays":2,"maxMissingPct":25,"maxScanFiles":2000,"notify":true,"shellNag":false,"timer":{"calendar":"daily","jitter":"30m"},"setupPhase":""}'
 
 # logf LINE: append to the tool's own log. Never fatal, and never noisy about
@@ -141,8 +150,14 @@ config_key_near_miss() {
   '
 }
 
-# config_load: parse, reject unknown keys, apply defaults, export CFG_* and paths.
+# config_load [VERB]: parse, reject unknown keys, apply defaults, export CFG_*
+# and paths. VERB is the verb about to run, and it decides only whether the
+# "minAllowlist does nothing here" notice is worth saying (see below);
+# everything config_load validates or refuses is the same for every caller.
+# Callers that are not a verb (setup's own wizard steps, the notify-failure
+# hook) pass nothing and get the quiet form.
 config_load() {
+  local ctx=${1:-}
   config_exists || die "no config at $CONFIG_FILE. Run: omabackup setup"
   jq -e . "$CONFIG_FILE" >/dev/null 2>&1 || die "config is not valid JSON: $CONFIG_FILE"
   jq -e 'type == "object"' "$CONFIG_FILE" >/dev/null 2>&1 || die "config is not a JSON object: $CONFIG_FILE"
@@ -194,8 +209,60 @@ config_load() {
   CFG_REMOTE_URL=$(cfg remote.url); CFG_REMOTE_TRUSTED=$(cfg remote.trusted)
   CFG_MAX_FILE_SIZE=$(cfg maxFileSize); CFG_STALE_DAYS=$(cfg staleDays)
   CFG_MAX_MISSING_PCT=$(cfg maxMissingPct); CFG_MAX_SCAN_FILES=$(cfg maxScanFiles)
+  CFG_MIN_ALLOWLIST=$(cfg minAllowlist)
   CFG_NOTIFY=$(cfg notify); CFG_SHELL_NAG=$(cfg shellNag)
   CFG_TIMER_CALENDAR=$(cfg timer.calendar); CFG_TIMER_JITTER=$(cfg timer.jitter)
+  # WRITTEN DOWN, not defaulted. minAllowlist in the config is the user saying
+  # "this many paths is what my machine has BEFORE anything has been backed
+  # up": it is the allowlist floor for a repo with no committed list to derive
+  # one from, and nothing else. Once a run has committed a list the floor
+  # follows that list and this key is ignored, because a standing override is
+  # the guard switched off rather than an escape hatch; the one-shot
+  # `snapshot --accept-allowlist` is the way to accept a deliberate trim after
+  # that (snapshot_floors_from_history has the argument in full). The block
+  # below the validation says so out loud when the key is set on a repo that
+  # has history.
+  #
+  # Because the key is out of CONFIG_DEFAULTS (see above), an empty
+  # CFG_MIN_ALLOWLIST is exactly "absent or null": cfg's `select(. != null)`
+  # is the test, so a value of 0 still reads as set, where jq's `//` would
+  # have folded it into "missing".
+  #
+  # A POSITIVE integer, and that is not pedantry about types. 0 is not a
+  # floor: it would let the allowlist be truncated to nothing on a bootstrap
+  # run with this guard still reporting healthy, and one broad glob left
+  # standing can carry enough files past the separate file-count floor to
+  # commit the result. A fail-closed guard must not be switchable off, so 0
+  # and anything negative are refused here, at config load, where every verb
+  # passes (Codex, PR 20).
+  if [[ -n "$CFG_MIN_ALLOWLIST" ]]; then
+    [[ "$CFG_MIN_ALLOWLIST" =~ ^[0-9]+$ && "$CFG_MIN_ALLOWLIST" -ge 1 ]] \
+      || die "config: minAllowlist must be a positive integer, the number of allowlist entries this machine has (at least 1); got: $CFG_MIN_ALLOWLIST"
+    CFG_MIN_ALLOWLIST_SET=1
+  else
+    CFG_MIN_ALLOWLIST_SET=0
+  fi
+  # A KEY THAT DOES NOTHING SHOULD SAY SO, but only where somebody asked about
+  # the floor. This warn used to fire from every verb, which put a line in
+  # front of `health` -- the login check whose whole contract is silence when
+  # all is well -- at every new shell, for a config that is merely out of date.
+  # CTX is the verb the dispatcher is about to run, and only the three that
+  # consult the allowlist floor hear about it: the snapshot that enforces it,
+  # the status that reports on it, and `setup check`, the doctor. drift, lint,
+  # health, restore, verify and the triage verbs stay quiet.
+  #
+  # Cheap by construction: no key in the config, no git call at all, which is
+  # every config setup ever wrote.
+  case "$ctx" in
+    snapshot|status|setup-check)
+      if [[ "$CFG_MIN_ALLOWLIST_SET" == 1 ]]; then
+        local prev_al
+        prev_al=$(list_entry_count <(git -C "$DATA_REPO" show HEAD:allowlist.txt 2>/dev/null))
+        if [[ "${prev_al:-0}" -ge 1 ]]; then
+          warn "minAllowlist is only read before the first snapshot; the floor now follows your history. To accept a trim, run once: omabackup snapshot --accept-allowlist"
+        fi
+      fi ;;
+  esac
   for n in "$CFG_STALE_DAYS" "$CFG_MAX_MISSING_PCT" "$CFG_MAX_SCAN_FILES"; do
     [[ "$n" =~ ^[0-9]+$ ]] || die "config: staleDays, maxMissingPct and maxScanFiles must be integers"
   done

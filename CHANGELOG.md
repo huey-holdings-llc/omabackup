@@ -68,6 +68,32 @@ work and then listed it under `--json` alone, so the human dry run of the
 three stages that install and enable things said nothing about what they
 would install or enable.
 
+The allowlist floor now follows the list your last successful run committed
+at every size, instead of only once that list held twenty entries or more.
+Below twenty a flat bootstrap floor of twenty applied, so a machine whose
+config genuinely lives in fifteen paths was refused on every run, with a
+message about damage and nothing but a test-only variable to get past it.
+The floor is at least nine tenths of the last committed count, rounded up,
+and the refusal says both counts and the arithmetic between them.
+
+A repo that has never committed a list has nothing to compare against, and
+there a new config key sets the floor: `minAllowlist`, default 20, a
+positive integer, since a floor of nothing is not a floor. It is read before
+the first snapshot and only then. Once a list has been committed the floor
+follows that list, the key is ignored, and the tool says so once per run
+while it is still in the config. It is also the one key `setup` never writes
+for you: its being there at all is what says you chose the number.
+
+`omabackup snapshot --accept-allowlist` is the way to trim the list on
+purpose once the floor is following your history. That run takes
+`allowlist.txt` as it stands, commits it in a commit of its own, and
+finishes; the next run's floor is derived from the list it finds committed,
+so the flag is needed once and not again. One run, not a setting: the
+shipped timer runs plain `snapshot`, and the flag is refused outright with
+`--dry-run`, which commits nothing and so cannot record the trim. Every
+other guard still applies to that run, the file-count floor, the
+vanished-entry check and both secret gates included. The refusal names it.
+
 `omabackup self-test` takes a few minutes instead of twelve. Its fixture
 snapshots ran the real machine-fact tools (pacman, systemctl, npm, fprintd
 and the rest) around 180 times; they now run stubs that print something
@@ -150,6 +176,27 @@ for as long as the repo stayed broken. `status` and `health` now write a
 status object with `"state": "fault"` and the reason in `problems` before they
 exit, so the popup shows what broke. Both still exit 1, and no write verb is
 any more willing to touch a repo in that state.
+
+The drift scan and `verify` no longer install an EXIT trap each for their
+own scratch directory. An EXIT trap replaces the one before it rather than
+adding to it, so whichever ran second disarmed the first and would have left
+its directory in the state directory for good. Both register with one
+handler now, and a Ctrl-C or a unit stop cleans up after `verify` too.
+
+The vanish guard no longer writes a scratch file. It wrote the repo's
+history listing to a temporary file under the state directory and refused
+the run when it could not, so a state directory that takes no new files
+stopped a backup over a file the guard did not need. A `git log` that cannot
+walk the history still refuses the run, as it must.
+
+A `[` in a filename is no longer a file the popup cannot triage. Allow and
+Ignore refused any name holding `*`, `?` or `[`, because both lists are
+matched as globs and an entry carrying one of those would have claimed every
+sibling it matched. A bracket has a spelling the matchers accept, `[[]`, and
+the write path uses it, so the entry matches that file and no other through
+the snapshot, the drift scan and `lint` alike. `*` and `?` have no such
+spelling and are still refused, with a message that no longer names the
+bracket.
 
 The popup's Commit button now commits every edit it counts. `status`
 counted every uncommitted change in the data repo outside the snapshot's own

@@ -36,6 +36,46 @@ usage_die() {
   exit 2
 }
 
+# ---- scratch cleanup ------------------------------------------------------
+# cleanup_add PATH: remove PATH when this process exits, however it exits.
+#
+# ONE REGISTRY, ONE TRAP. `trap ... EXIT` REPLACES whatever EXIT trap is
+# already installed; it does not add to it. Two libraries each installing
+# their own (the drift scan's listing directory, verify's throwaway restore
+# tree) meant that whichever ran second silently disarmed the first, and the
+# first one's directory would have been left in $STATE_DIR for good. Nothing
+# runs both in one process today, which is exactly why it was worth fixing
+# before something does.
+#
+# The paths registered here are ones this tool made itself, under its own
+# 0700 scratch, so `rm -rf` is removing what it created and nothing else.
+# INT and TERM route through the same handler and then exit with the
+# conventional code for the signal, or a Ctrl-C would leave the scratch
+# behind. Every step is best effort: this runs on the way out, and a removal
+# that fails must not replace the reason the process is exiting.
+CLEANUP_PATHS=()
+CLEANUP_TRAP_INSTALLED=0
+cleanup_run() {
+  local p
+  for p in ${CLEANUP_PATHS[@]+"${CLEANUP_PATHS[@]}"}; do
+    [[ -n "$p" ]] || continue
+    rm -rf "$p" 2>/dev/null || true
+  done
+  CLEANUP_PATHS=()
+  return 0
+}
+cleanup_add() {
+  [[ -n "${1:-}" ]] || return 0
+  CLEANUP_PATHS+=("$1")
+  if [[ "$CLEANUP_TRAP_INSTALLED" != 1 ]]; then
+    trap cleanup_run EXIT
+    trap 'cleanup_run; exit 130' INT
+    trap 'cleanup_run; exit 143' TERM
+    CLEANUP_TRAP_INSTALLED=1
+  fi
+  return 0
+}
+
 # ---- json -----------------------------------------------------------------
 # Drift paths are arbitrary filenames: escape, and strip control bytes.
 json_escape() {
@@ -51,6 +91,15 @@ emit_json() { local f=$1; shift; jq -cn "$@" "$f"; }
 # ---- lists ----------------------------------------------------------------
 # Strip comments and blank lines; keep a leading '?' (optional marker).
 read_list() { grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null | sed -E -e 's/[[:space:]]+#.*$//' -e 's/[[:space:]]*$//'; }
+# list_entry_count FILE: how many real entries FILE holds, counted the way
+# every reader of these files counts them (read_list, then non-empty lines).
+# ONE COUNTER, because the allowlist floor compares two of them: the list the
+# last successful run committed and the list on disk now. Those were counted
+# by two different expressions, a bare `grep -vE` over `git show` and this
+# one, and a line that read_list strips to nothing was an entry to one and
+# not to the other. FILE may be a process substitution, which is how the
+# committed copy is counted without a scratch file.
+list_entry_count() { read_list "$1" | grep -c . || true; }
 
 # ---- argv hygiene ---------------------------------------------------------
 # Refuse values that could smuggle a second line or tab into a list file.

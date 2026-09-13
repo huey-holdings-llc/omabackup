@@ -315,6 +315,8 @@ repo and its remote are never touched by either command.
 The config file is plain JSON and every key has a default, so a file that
 names only `dataRepo` is complete. A key this version does not know is
 warned about; one close enough to a known key to be a typo is refused.
+`minAllowlist` is the one key `setup` never writes for you, because its
+being there at all is what tells the allowlist floor you chose a number.
 
 ```
 dataRepo         absolute path of the data repo (written by setup)
@@ -328,6 +330,12 @@ maxMissingPct    25; this share of allowlist entries or more vanishing at
                  once refuses the run
 maxScanFiles     2000; a folder with more files than this is one collapsed
                  row in the drift report
+minAllowlist     20; the allowlist floor BEFORE the first snapshot, and only
+                 then. A positive integer (0 is refused: a floor of nothing
+                 is not a floor). Once a run has committed a list the floor
+                 is at least nine tenths of it, rounded up, this key is
+                 ignored, and `snapshot`, `status` and `setup check` say so
+                 while it is still in the config
 notify           true; false silences the desktop notifications
 shellNag         false; true makes setup add the login check to ~/.bashrc
 timer.calendar   daily; the snapshot timer's OnCalendar
@@ -425,7 +433,7 @@ omabackup <verb> [args] [--json]
         [--trust-remote] [--no-timers] [--yes]      first-run wizard
   setup check                                       doctor
   setup --remove [--yes]                            remove units, symlink, config
-  snapshot [--dry-run] [--no-push]                  the daily pipeline
+  snapshot [--dry-run] [--no-push] [--accept-allowlist] the daily pipeline
   drift                                             report unbacked config
   status                                            health (writes status.json)
   allow PATH | ignore PATH [REASON]                 triage a drift entry
@@ -631,6 +639,27 @@ actually broken.
   gone for good, `omabackup resolve-gone <path> remove` for each one, or edit
   `allowlist.txt` by hand and commit it. An entry for something that is
   simply not on this machine belongs in the list with a leading `?`.
+* **"allowlist has N entries ... so the floor is K"**: the allowlist floor,
+  and it is derived from the list the last successful run committed: at least
+  nine tenths of that count, rounded up, so trimming a few entries is fine and
+  gutting the list is not. If you trimmed it on purpose, run once:
+  `omabackup snapshot --accept-allowlist`. That run takes the list as it
+  stands, commits it, and because the next run's floor is derived from the
+  list it finds committed, the flag is not needed again. It is one run, not a
+  setting: nothing in the config and nothing in the timer's unit turns the
+  floor off, and every other guard (the file floor, the vanished-entry check,
+  both secret gates) still applies to that run. It cannot be combined with
+  `--dry-run`, which commits nothing and so cannot record the trim.
+  Before any run has committed a list there is nothing to compare against, and
+  the message is the other shape, "below the bootstrap floor of 20
+  (minAllowlist)"; that one is the config key's whole job, and setting it to
+  the number of entries you have (at least 1) is the answer. Once a list has
+  been committed the key is ignored, and the three verbs that consult the
+  floor say so while it is still there: `snapshot`, `status` and
+  `setup check`. `health` stays silent, because a login check that is quiet
+  when all is well has to stay quiet over a config that is merely out of
+  date. A third wording, "set by OMABACKUP\_MIN\_ALLOWLIST",
+  only appears inside the test suite, where that variable is honoured.
 * **"data repo marker has no usable format field"**: `.omabackup` is the file
   that says the repo is OmaBackup's and what format it is in, and a marker
   that is not readable JSON is refused rather than overwritten, because
@@ -645,11 +674,14 @@ actually broken.
   re-cloned `.git`, and every commit since has gone nowhere. Re-run
   `omabackup setup` (or add origin back by hand). Having no remote at all is
   a different, supported state: `remote: none`, and the widget stays green.
-* **"a file whose name contains `*` `?` or `[` cannot be backed up by
-  name"**: `allow` and `ignore` refuse such a path. Both lists are matched as
-  globs and neither format has an escape, so writing the name into one would
-  silently claim every sibling it matches. There is no hand edit that fixes
-  it: rename the file, or ignore the folder it is in.
+* **"a file whose name contains `*` or `?` cannot be backed up by name"**:
+  `allow` and `ignore` refuse such a path. Both lists are matched as globs
+  and neither character has a spelling that resolves back to itself, so
+  writing the name into a list would silently claim every sibling it
+  matches. There is no hand edit that fixes it: rename the file, or ignore
+  the folder it is in. A `[` in a name is fine and needs nothing from you:
+  the entry is written as `[[]`, a one-character class holding a literal
+  bracket, which matches that file and no other.
 * **"OMABACKUP_IN_SUITE is set outside a test run"**: the marker that lets the
   test suite weaken its own guards is set in your environment. It does
   nothing on its own (see Development below), but nothing legitimate sets it,

@@ -255,19 +255,19 @@ drift_scan() {
   # already where verify puts its throwaway. One code path, no "which caller
   # am I" question to get wrong later.
   #
-  # DRIFT_TMP is deliberately NOT `local`: the trap below fires when the whole
-  # process exits, by which point this call frame is gone, and referencing a
-  # local under `set -u` would be an unbound-variable error (the same lesson
-  # as VERIFY_R in lib/verify.sh). bin/omabackup runs one verb per process, so
-  # a plain global is exactly as scoped as the trap is.
+  # DRIFT_TMP is deliberately NOT `local`: the nested walk functions below
+  # read it, and bin/omabackup runs one verb per process, so a plain global is
+  # exactly as scoped as this scan is.
+  #
+  # The removal goes through cleanup_add (lib/common.sh), which owns the one
+  # EXIT trap this process has. A bare `trap ... EXIT` here used to replace
+  # whatever was already installed, and verify installs one of its own.
   local _dscratch="$STATE_DIR"
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
   mkdir -m 700 -p "$_dscratch" || { echo "# ERROR drift: cannot create scratch under $_dscratch"; return 1; }
   DRIFT_TMP=$(mktemp -d "$_dscratch/.drift.XXXXXX") \
     || { echo "# ERROR drift: cannot create a scratch directory under $_dscratch"; return 1; }
-  trap 'rm -rf "${DRIFT_TMP:-}" 2>/dev/null || true' EXIT
-  trap 'rm -rf "${DRIFT_TMP:-}" 2>/dev/null; exit 130' INT
-  trap 'rm -rf "${DRIFT_TMP:-}" 2>/dev/null; exit 143' TERM
+  cleanup_add "$DRIFT_TMP"
   local _dtmp="$DRIFT_TMP"
 
   # Reads absolute file paths from $1, writes the prefixes to exclude to $2

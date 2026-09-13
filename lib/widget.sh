@@ -75,22 +75,40 @@ rel_from_tilde() {
 DRIFT_TARGET_DIR=0
 
 # widget_no_glob_chars PATH: 0 when PATH holds none of the glob characters an
-# allowlist or drift-ignore entry is MATCHED with.
+# allowlist or drift-ignore entry is MATCHED with AND cannot be spelled as a
+# literal.
 #
 # The lists are globs, not literal paths: lists_load expands every allowlist
 # entry against $HOME and is_ignored runs each ignore entry as a `case`
-# pattern. A file genuinely named `*` (or holding `?` or `[`) is a legal
-# filename the scan will report, and one Allow click would then have written
-# an entry matching every sibling it has. Refusing here rather than escaping
-# is the honest answer: there is no escaping syntax in these file formats to
-# escape it INTO -- which is also why neither refusal below sends the user to
-# a hand edit any more. There is no allowlist spelling that resolves to a
-# literal `[`, so "edit allowlist.txt by hand" named an action nobody can
-# take. The two that exist are renaming the file and ignoring the folder it
-# sits in, and the messages say so.
+# pattern. A file genuinely named `*` (or holding `?`) is a legal filename the
+# scan will report, and one Allow click would then have written an entry
+# matching every sibling it has. There is no spelling of either that resolves
+# back to the character, so both stay refused, and the refusal names the two
+# actions that do exist: rename the file, or ignore the folder it sits in.
+# "Edit allowlist.txt by hand" is not one of them.
+#
+# `[` USED TO BE REFUSED WITH THEM, and it does not have to be. A bracket has
+# a spelling every reader here agrees on: `[[]`, a class holding one literal
+# bracket. A backslash does not work and was the obvious thing to try: a
+# `\[` coming out of a variable leaves the word with no unquoted glob
+# character in it at all, so bash never treats it as a pattern, never removes
+# the backslash, and the entry matches nothing anywhere. `[[]` is a pattern,
+# so pathname expansion, `[[ ]]` and `case` all match the one real file, and
+# nullglob still drops it when there is none. widget_escape_glob writes it.
 widget_no_glob_chars() {
-  case "$1" in *'*'*|*'?'*|*'['*) return 1 ;; esac
+  case "$1" in *'*'*|*'?'*) return 1 ;; esac
   return 0
+}
+
+# widget_escape_glob PATH: PATH as a list entry that matches itself and
+# nothing else. Each `[` becomes `[[]`; every other character in a path is
+# already literal to the matchers, `*` and `?` having been refused above.
+# Applied ONCE, at the point of writing, so the escaped form is what the
+# duplicate check compares and what the reply reports: the entry in the file
+# is the thing that matters, not the path it came from.
+widget_escape_glob() {
+  local p=$1
+  printf '%s' "${p//\[/[[]}"
 }
 
 # drift_has WANT TYPES: does the current drift report name this exact path
@@ -210,7 +228,7 @@ cmd_allow() {
   assert_argv_safe "$raw"
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
   widget_no_glob_chars "$rel" \
-    || { widget_reply_fail "a file whose name contains * ? or [ cannot be backed up by name; rename it, or ignore the folder it is in"; return 1; }
+    || { widget_reply_fail "a file whose name contains * or ? cannot be backed up by name; rename it, or ignore the folder it is in"; return 1; }
   # ALLOW IS NOT OFFERED FOR TOOBIG OR EXCLUDED, and the engine has to say so
   # too. Both classes are paths the allowlist ALREADY covers: one is held back
   # by maxFileSize, the other by .gitignore. Taking the click wrote an entry
@@ -230,14 +248,19 @@ cmd_allow() {
     widget_reply_fail "$msg" || return 1
   fi
   rel=${rel%/}
-  if grep -qxF -e "$rel" -e "?$rel" "$DATA_REPO/allowlist.txt"; then
-    widget_reply_fail "already allowlisted: $rel"; return 1
+  local entry; entry=$(widget_escape_glob "$rel")
+  if grep -qxF -e "$entry" -e "?$entry" "$DATA_REPO/allowlist.txt"; then
+    widget_reply_fail "already allowlisted: $entry"; return 1
   fi
-  _widget_edit_allow() { printf '%s\n' "$rel" >> "$DATA_REPO/allowlist.txt"; }
+  _widget_edit_allow() { printf '%s\n' "$entry" >> "$DATA_REPO/allowlist.txt"; }
   edited_with_lint_gate "allowlist.txt" _widget_edit_allow || return 1
   health_write_status
+  # Both halves name the ENTRY, not the argument. They are the same string for
+  # every path without a `[` in it, and where they differ the entry is the
+  # useful one: it is the line now in allowlist.txt, the thing a reader would
+  # go looking for. One fact, not two.
   # shellcheck disable=SC2088  # the literal "~/" the report and the popup use, not a path to expand
-  widget_reply "{\"ok\":true,\"lint_ok\":true,\"added\":$(jstr "$rel")}" "allowed ~/$rel"
+  widget_reply "{\"ok\":true,\"lint_ok\":true,\"added\":$(jstr "$entry")}" "allowed ~/$entry"
 }
 
 # cmd_ignore PATH [REASON]: append a dated entry to drift-ignore.txt,
@@ -250,7 +273,7 @@ cmd_ignore() {
   [[ -n "${2:-}" ]] && assert_argv_safe "$2"
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
   widget_no_glob_chars "$rel" \
-    || { widget_reply_fail "a file whose name contains * ? or [ cannot be ignored by name; rename it, or ignore the folder it is in"; return 1; }
+    || { widget_reply_fail "a file whose name contains * or ? cannot be ignored by name; rename it, or ignore the folder it is in"; return 1; }
   drift_names_target "$raw" 'MODIFIED|NEW|EXCLUDED|TOOBIG' \
     || { widget_reply_fail "the drift report does not name that path (or the folder is too broad); refresh and retry"; return 1; }
   # A directory becomes the explicit /** subtree form drift-ignore.txt
@@ -259,7 +282,23 @@ cmd_ignore() {
   # means "silence the directory, keep checking its children" (lib/lists.sh),
   # which on a collapsed ">2000 files" row would replace one row with
   # thousands.
-  if [[ "$DRIFT_TARGET_DIR" == 1 ]]; then entry="${rel%/}/**"; else entry=$rel; fi
+  # THE SUBTREE FORM CANNOT CARRY THE ESCAPE, so a bracket is refused there
+  # and only there. Both readers of a `/**` entry strip the suffix and compare
+  # the base QUOTED (is_ignored_subtree and is_ignored, lib/lists.sh), so an
+  # escaped base is matched as literal text and never equals the directory it
+  # came from: the entry would be written, the reply would say ok, and the row
+  # would come back on every scan with nothing to catch it. Unquoting that
+  # comparison is not the fix either, because a `*` in an existing base would
+  # become a glob. The single-file form has no such problem: it is matched as
+  # a pattern, which is what the escape is for.
+  if [[ "$DRIFT_TARGET_DIR" == 1 ]]; then
+    case "$rel" in
+      *'['*) widget_reply_fail "a folder whose name contains [ cannot be ignored as a whole yet; ignore the files inside it one at a time"; return 1 ;;
+    esac
+    entry="${rel%/}/**"
+  else
+    entry=$(widget_escape_glob "$rel")
+  fi
   reason=${reason:-"triaged from widget"}
   # Exact-entry comparison (comments stripped), not a regex: ignore entries
   # are globs, and escaping them for grep -E is exactly the kind of code that
@@ -278,21 +317,44 @@ cmd_ignore() {
     "ignored ~/$entry (reason: $reason)"
 }
 
-# widget_entry_vanished REL: 0 when allowlist.txt carries an entry for REL
-# (optional or not) that does not resolve in $HOME at this moment. The entry
-# is compared whole, comments stripped, because an entry is a glob and
-# building a regex out of one is the kind of code that rots.
-widget_entry_vanished() {
-  local rel=$1
-  awk -v rel="$rel" '
+# widget_allowlist_has REL: 0 when allowlist.txt carries REL as a whole
+# entry, with or without the optional marker. Compared whole, comments
+# stripped, because an entry is a glob and building a regex out of one is the
+# kind of code that rots. Three callers, one comparison.
+widget_allowlist_has() {
+  awk -v rel="$1" '
     { line=$0; sub(/[ \t]+#.*$/,"",line); sub(/[ \t]+$/,"",line) }
     line==rel || line=="?"rel { found=1; exit }
-    END { exit !found }' "$DATA_REPO/allowlist.txt" 2>/dev/null || return 1
+    END { exit !found }' "$DATA_REPO/allowlist.txt" 2>/dev/null
+}
+# widget_entry_vanished REL: 0 when allowlist.txt carries an entry for REL
+# (optional or not) that does not resolve in $HOME at this moment.
+widget_entry_vanished() {
+  local rel=$1
+  widget_allowlist_has "$rel" || return 1
   # snapshot_entry_exists (lib/snapshot.sh) is the one matcher that knows an
   # entry may be a glob, may hold a space, and may be a literal path that
   # nullglob leaves standing.
   snapshot_entry_exists "$rel" && return 1
   return 0
+}
+
+# widget_entry_spelling REL: the allowlist's OWN spelling of REL. A path
+# holding a `[` has two: the filename a person types (`note[1].conf`) and the
+# entry Allow wrote for it (`note[[]1].conf`). Every comparison below this
+# point is whole-line text, so the two reached different lines and
+# `resolve-gone` typed by hand was refused on an entry that was plainly
+# there. Prefer what the file actually carries, and fall back to the argument
+# unchanged so the message about a path with no entry is still about the path
+# the user named.
+widget_entry_spelling() {
+  local rel=$1 esc
+  widget_allowlist_has "$rel" && { printf '%s' "$rel"; return 0; }
+  esc=$(widget_escape_glob "$rel")
+  if [[ "$esc" != "$rel" ]] && widget_allowlist_has "$esc"; then
+    printf '%s' "$esc"; return 0
+  fi
+  printf '%s' "$rel"
 }
 
 # cmd_resolve_gone PATH remove|optional: edit exactly the one matching
@@ -304,6 +366,10 @@ cmd_resolve_gone() {
   [[ -n "${2:-}" ]] && assert_argv_safe "$2"
   rel=$(rel_from_tilde "$raw") || { widget_reply_fail "not a clean ~/-relative path: $raw"; return 1; }
   case "$verb" in remove|optional) ;; *) widget_reply_fail "usage: resolve-gone <path> remove|optional"; return 1 ;; esac
+  # Take the allowlist's own spelling before anything compares against it: the
+  # popup sends the entry as written and a person types the filename, and for
+  # a path holding a `[` those are two different strings for one line.
+  rel=$(widget_entry_spelling "$rel")
   # THE GATE HAS TWO HALVES, and it needs both. The mass-disappearance refusal
   # names this verb as the way out, and that run DIES before it writes a drift
   # report: the entries that caused the refusal are precisely the ones the last
@@ -331,10 +397,7 @@ cmd_resolve_gone() {
   # GONE row survives in yesterday's report after the entry behind it was
   # deleted by hand. The edit would then rewrite the file unchanged and reply
   # ok, and the popup would strike the row off for a decision nobody recorded.
-  if ! awk -v rel="$rel" '
-      { line=$0; sub(/[ \t]+#.*$/,"",line); sub(/[ \t]+$/,"",line) }
-      line==rel || line=="?"rel { found=1; exit }
-      END { exit !found }' "$DATA_REPO/allowlist.txt" 2>/dev/null; then
+  if ! widget_allowlist_has "$rel"; then
     widget_reply_fail "allowlist.txt has no entry for that path; nothing to resolve"
     return 1
   fi
