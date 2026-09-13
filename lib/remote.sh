@@ -193,8 +193,9 @@ remote_display_label() {
 # has this been going on": a machine that cannot reach a verdict at all still
 # writes a fresh `at` every day. So the file also carries the answer's
 # history. `conclusive_at` is when the probe last actually settled the
-# question (200 or 404, or any reason that is not the probe shrugging), and it
-# is carried forward untouched while the answers stay inconclusive.
+# question (200 or 404, or any other reason that is an answer ABOUT THE
+# REMOTE: see remote_reason_class), and it is carried forward untouched while
+# the answers stay inconclusive.
 # `inconclusive_since` dates the current streak for a machine that has never
 # had a conclusive answer, so a first-run 403 behind a shared address still
 # has a date to count from. Both are carried forward only when the recorded
@@ -220,11 +221,11 @@ remote_verdict_write() {
   case "$prev_conc" in ''|*[!0-9]*) prev_conc="" ;; esac
   case "$prev_since" in ''|*[!0-9]*) prev_since="" ;; esac
   local conc since
-  if remote_reason_conclusive "$2"; then
-    conc=$now; since=""
-  else
-    conc=$prev_conc; since=${prev_since:-$now}
-  fi
+  case "$(remote_reason_class "$2")" in
+    conclusive)   conc=$now;       since="" ;;
+    inconclusive) conc=$prev_conc; since=${prev_since:-$now} ;;
+    *)            conc=$prev_conc; since=$prev_since ;;
+  esac
   local tmp
   tmp=$(mktemp "$STATE_DIR/.push-verdict.XXXXXX") || return 0
   if jq -cn --argjson v "$1" --arg r "$2" --arg u "$url" --argjson at "$now" \
@@ -240,14 +241,28 @@ remote_verdict_write() {
   return 0
 }
 
-# remote_reason_conclusive REASON: 0 when the reason is an answer, 1 when it is
-# the probe declining to give one. Only the HTTP codes that prove nothing
-# either way land here as probe-<code>; every other reason (private, trusted,
-# no-remote, remote-unverified, net-disabled, pushurl-differs,
-# gitleaks-missing) is a settled fact about this machine or this URL, even
-# when it is a fact that shuts the gate.
-remote_reason_conclusive() {
-  case "$1" in probe-*) return 1 ;; *) return 0 ;; esac
+# remote_reason_class REASON: what this reason says about the REMOTE, which is
+# the only question conclusive_at is dating.
+#
+#   conclusive    the question is settled: private, trusted, no-remote,
+#                 remote-unverified, net-disabled, pushurl-differs. The clock
+#                 restarts.
+#   inconclusive  the probe shrugged (probe-<code>). The clock keeps running,
+#                 and starts if it was not running.
+#   silent        the answer is about THIS MACHINE, not the remote:
+#                 gitleaks-missing (no scanner, so the gate shuts before the
+#                 remote is even reached) and the unknown fallback. Neither
+#                 date moves. Treating these as conclusive restarted the clock
+#                 on every run of a machine whose scanner had been uninstalled
+#                 for a month, which is exactly the streak this is meant to
+#                 measure; treating them as inconclusive would have started a
+#                 streak nothing had probed.
+remote_reason_class() {
+  case "$1" in
+    probe-*)                 printf 'inconclusive' ;;
+    gitleaks-missing|unknown|'') printf 'silent' ;;
+    *)                       printf 'conclusive' ;;
+  esac
 }
 
 # remote_probe: sets PUSH_VERIFIABLE (true|false) and PUSH_REASON. GitHub only

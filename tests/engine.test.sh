@@ -4871,11 +4871,14 @@ if group 104 "an inconclusive probe keeps the date of the last conclusive answer
   V104="$OMABACKUP_STATE_DIR/push-verdict.json"
   # run104 CODE: one real snapshot whose probe gets CODE back from the API.
   run104() {
-    fake_curl "$1"
+    fake_curl "$1" "${2:-0}"
     printf '# %s\n' "$1 $SECONDS" >> "$FH/.bashrc"   # something to commit, so each run is a real one
-    env HOME="$FH" PATH="$T/fakebin:$PATH" OMABACKUP_NET=1 NET_WAIT=1 \
+    # PATH104 overrides the WHOLE search path, so the no-gitleaks run below
+    # cannot pick the real gitleaks back up off the tail of $PATH.
+    env HOME="$FH" PATH="${PATH104:-$T/fakebin:$PATH}" OMABACKUP_NET=1 NET_WAIT=1 \
       "$CLI" snapshot --no-push --json >/dev/null 2>&1 || true
   }
+  PATH104=""
 
   run104 404
   eq "a 404 is a conclusive answer" "$(jq -r .reason "$V104")" "private"
@@ -4915,6 +4918,63 @@ if group 104 "an inconclusive probe keeps the date of the last conclusive answer
     "push has been unverifiable for 9 days (probe-403)"
   has "...and why a 403 can last" "$(jq -r '.problems[]' <<<"$s104")" \
     "rate limited per address"
+
+  # ...and the rate-limit sentence belongs to 403 ALONE. probe-000 is no
+  # network: curl prints 000 and exits non-zero on a connection failure, which
+  # is what a laptop that has been shut in a bag for a week produces. Telling
+  # that user their address is rate limited is a confident wrong answer.
+  run104 000 7
+  eq "a connection failure is probe-000" "$(jq -r .reason "$V104")" "probe-000"
+  eq "...and it carries the same date forward" "$(jq -r '.conclusive_at // ""' "$V104")" "$b104"
+  s104=$(obj status)
+  eq "the age is counted the same way" "$(jq -r .push_unverifiable_days <<<"$s104")" "9"
+  has "the problem names probe-000" "$(jq -r '.problems[]' <<<"$s104")" \
+    "push has been unverifiable for 9 days (probe-000)"
+  eq "...and says nothing about a rate limit" \
+    "$(jq -r '[.problems[] | select(contains("rate limited"))] | length' <<<"$s104")" "0"
+
+  # A verdict the stale check has already discarded is not an answer any more,
+  # so no streak is dated from it: one silence, one complaint.
+  jq --argjson t "$(( $(date +%s) - 40 * 86400 ))" '.at=$t' "$V104" > "$T/v104s" && mv "$T/v104s" "$V104"
+  s104=$(obj status)
+  eq "a stale verdict reads as stale, as it always did" "$(jq -r .push_reason <<<"$s104")" "stale"
+  eq "...and is not dated as a streak" "$(jq -r .push_unverifiable_days <<<"$s104")" "null"
+  eq "...and raises no unverifiable-for-N-days problem" \
+    "$(jq -r '[.problems[] | select(startswith("push has been unverifiable"))] | length' <<<"$s104")" "0"
+
+  # A clock that has gone backwards leaves the last conclusive answer in the
+  # future. Report no age rather than a negative one.
+  run104 403
+  jq --argjson t "$(( $(date +%s) + 3 * 86400 ))" '.conclusive_at=$t' "$V104" > "$T/v104f" && mv "$T/v104f" "$V104"
+  s104=$(obj status)
+  eq "a date in the future is no age" "$(jq -r .push_unverifiable_days <<<"$s104")" "null"
+  eq "...and no date for the popup either" "$(jq -r .push_unverifiable_since <<<"$s104")" ""
+  eq "...and no problem invented from it" \
+    "$(jq -r '[.problems[] | select(startswith("push has been unverifiable"))] | length' <<<"$s104")" "0"
+
+  # gitleaks-missing is an answer about THIS MACHINE, not about the remote.
+  # The gate writes it over the probe's own verdict on the same run, and
+  # treating it as conclusive restarted the clock every day on a machine whose
+  # scanner had been uninstalled for a month: the streak this exists to
+  # measure could never accumulate there. Neither date moves.
+  jq --argjson t "$b104" '.conclusive_at=$t' "$V104" > "$T/v104g" && mv "$T/v104g" "$V104"
+  mkdir -p "$T/nogl"; IFS=: read -ra pd104 <<<"$PATH"
+  for d104 in ${pd104[@]+"${pd104[@]}"}; do
+    [[ -d "$d104" ]] || continue
+    for f104 in "$d104"/*; do
+      bn104=${f104##*/}
+      [[ "$bn104" == gitleaks ]] && continue
+      [[ -x "$f104" && ! -d "$f104" ]] || continue
+      [[ -e "$T/nogl/$bn104" ]] || ln -s "$f104" "$T/nogl/$bn104"
+    done
+  done
+  if [[ -e "$T/nogl/gitleaks" ]]; then bad "the no-gitleaks PATH still carries gitleaks"; else ok "the no-gitleaks PATH carries no gitleaks"; fi
+  PATH104="$T/fakebin:$T/nogl"
+  run104 403
+  PATH104=""
+  eq "with no scanner the gate's own reason is recorded" "$(jq -r .reason "$V104")" "gitleaks-missing"
+  eq "...and it leaves the streak's date exactly where it was" \
+    "$(jq -r '.conclusive_at // ""' "$V104")" "$b104"
 
   # A conclusive answer ends the streak: the date resets to now, and the age
   # goes back to null rather than to zero.

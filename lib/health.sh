@@ -405,10 +405,17 @@ health_collect() {
   fi
   # Past staleDays, the same limit everything else here ages out on, the
   # length is a fault in its own right. The reason code is named because it is
-  # the thing to act on, and the sentence says what a user cannot guess: the
-  # API's rate limit counts per address, not per repository.
+  # the thing to act on.
   if [[ "$H_PUSH_UNVERIFIABLE_DAYS" != null && "$H_PUSH_UNVERIFIABLE_DAYS" -gt "$CFG_STALE_DAYS" ]]; then
-    H_PROBLEMS+=("push has been unverifiable for $H_PUSH_UNVERIFIABLE_DAYS days ($H_PUSH_REASON); the GitHub API is rate limited per address, so a shared or CGNAT address can answer 403 for a long time")
+    # The rate-limit sentence belongs to 403 ALONE. probe-000 is "no network"
+    # and probe-5xx is GitHub having a bad day; telling a laptop that has been
+    # offline for three days that its address is rate limited is a confident
+    # wrong answer, and the reason code is already the thing to act on.
+    local unver_why=""
+    if [[ "$H_PUSH_REASON" == "probe-403" ]]; then
+      unver_why="; the GitHub API is rate limited per address, so a shared or CGNAT address can answer 403 for a long time"
+    fi
+    H_PROBLEMS+=("push has been unverifiable for $H_PUSH_UNVERIFIABLE_DAYS days ($H_PUSH_REASON)$unver_why")
   fi
 
   # The wording deferred above. Nothing has ever been pushed to this remote,

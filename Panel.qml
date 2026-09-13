@@ -98,6 +98,10 @@ Panel {
   // is the whole condition; the date string is required too, because a row
   // reading "unverifiable since " with nothing after it would be worse than
   // the count of waiting commits it replaces.
+  // The row states this and colours nothing: the engine does not call a young
+  // inconclusive verdict a fault until it passes staleDays, and painting the
+  // row urgent from day zero would be a judgment status.json has not made.
+  // The waiting-commit count keeps the urgent colour it already had.
   readonly property bool pushUnverifiable: !!(st && typeof st.push_unverifiable_days === "number"
                                               && st.push_unverifiable_since)
   readonly property string pushUnverifiableSince: st && st.push_unverifiable_since ? st.push_unverifiable_since : ""
@@ -523,9 +527,11 @@ Panel {
               value: root.remoteMissing ? "configured, but this repo has no origin"
                    : root.remoteLocalOnly ? "none (local only)"
                    : !root.hasRemote ? "unknown"
-                   : root.pushUnverifiable ? "unverifiable since " + root.pushUnverifiableSince
+                   : root.pushUnverifiable ? (root.unpushed > 0
+                        ? "unverifiable since " + root.pushUnverifiableSince + ", " + root.unpushed + " waiting"
+                        : "unverifiable since " + root.pushUnverifiableSince)
                    : root.unpushed > 0 ? root.unpushed + " commit(s) waiting" : "up to date"
-              valueColor: root.remoteMissing || (root.hasRemote && (root.pushUnverifiable || root.unpushed > 0)) ? root.urgent : ""
+              valueColor: root.remoteMissing || (root.hasRemote && root.unpushed > 0) ? root.urgent : ""
               foreground: root.foreground; dimColor: root.dim; fontFamily: root.fontFamily
             }
             InfoRow {
