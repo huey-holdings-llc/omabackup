@@ -602,10 +602,63 @@ setup_check() {
   if [[ $JSON == 1 ]]; then
     printf '%s\n' "$j"
   else
-    jq -r 'to_entries[] | "\(.key): \(.value)"' <<<"$j"
-    [[ $have_gitleaks == true ]] || echo "gitleaks missing: snapshots commit but never push (pacman -S gitleaks)"
+    # One line per check, and every line an answer. The human branch used to
+    # be `jq to_entries` over the object above, so tools, units and remote
+    # arrived as raw JSON, and the only package it ever named was gitleaks:
+    # a doctor that cannot say which package to install is a refusal with no
+    # way out. Each check names its own package, never the whole set.
+    setup_check_line "$have_git"      "git"      "not installed" "pacman -S git"
+    setup_check_line "$have_rsync"    "rsync"    "not installed" "pacman -S rsync"
+    setup_check_line "$have_jq"       "jq"       "not installed" "pacman -S jq"
+    setup_check_line "$have_flock"    "flock"    "not installed" "pacman -S util-linux"
+    setup_check_line "$have_gum"      "gum"      "not installed, so setup takes its defaults instead of asking" "pacman -S gum"
+    setup_check_line "$have_gitleaks" "gitleaks" "not installed, so snapshots commit locally and never push" "pacman -S gitleaks"
+    setup_check_line "$have_systemd"  "systemd"  "systemctl not found, so nothing can back up on a timer" "pacman -S systemd"
+    setup_check_line "$cfg" "config" "OmaBackup is not set up on this machine yet" "omabackup setup"
+    # Everything below reads the config, so it is only asked once there is one.
+    if [[ $cfg == true ]]; then
+      setup_check_line "$repo" "data repo" "no git repo at $DATA_REPO" "omabackup setup --data-repo $DATA_REPO"
+      setup_check_line "$marker" "data repo marker" \
+        "$DATA_REPO/.omabackup is missing, so nothing will treat that directory as OmaBackup's" \
+        "omabackup setup --data-repo $DATA_REPO"
+      if [[ "${OMABACKUP_SKIP_TIMERS:-0}" != 1 ]]; then
+        setup_check_line "$units_s" "snapshot timer" "not enabled, so nothing backs up on its own" \
+          "systemctl --user enable --now omabackup-snapshot.timer"
+        setup_check_line "$units_t" "self-test timer" "not enabled, so nothing proves the pipeline still works" \
+          "systemctl --user enable --now omabackup-selftest.timer"
+      fi
+      # A repo with no remote is a supported state, not a fault: the backup
+      # is real, it just stays on this machine. A GitHub remote is decided by
+      # the visibility probe rather than by the trust flag, so only a
+      # non-GitHub remote nobody has trusted holds pushes back.
+      local rdisp; rdisp=$(remote_url_display "$url")
+      if [[ -z "$url" ]]; then
+        setup_check_line true "remote (none configured, so backups stay on this machine)"
+      elif [[ "$kind" == github ]]; then
+        setup_check_line true "remote ($rdisp, GitHub: the visibility probe decides each push)"
+      elif [[ "$trusted" == true ]]; then
+        setup_check_line true "remote ($rdisp, trusted)"
+      else
+        setup_check_line false "remote" \
+          "$rdisp is not a GitHub remote and nothing has trusted it, so pushes are held back" \
+          "omabackup setup --trust-remote"
+      fi
+    fi
   fi
   [[ $ok == true ]]
+}
+
+# setup_check_line GOOD NAME [PROBLEM] [FIX]: one doctor line, in one of two
+# shapes: "ok    <name>" for a check that passes, and
+# "FAIL  <name>: <problem>. Fix: <command>" for one that does not. Nothing
+# here ever prints a nested object; the object is what --json is for.
+setup_check_line() {
+  local good=$1 name=$2 problem=${3:-} fix=${4:-}
+  if [[ "$good" == true ]]; then
+    printf 'ok    %s\n' "$name"
+  else
+    printf 'FAIL  %s: %s. Fix: %s\n' "$name" "$problem" "$fix"
+  fi
 }
 
 # setup_remove [--yes]: undo steps 6, 7 and 8 of the wizard. Deliberately

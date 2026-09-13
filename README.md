@@ -243,9 +243,12 @@ packages, and prompts you the way those tools normally do. Nothing else in
 OmaBackup ever uses `sudo`; the dry run (no `--apply`) only prints what it
 would install.
 
-`omabackup setup check` reports each tool in the first two tables as present
-or missing. It names the package for `gitleaks` alone, since that is the one
-Omarchy does not ship; for the rest the Package column above is the answer.
+`omabackup setup check` is the doctor: one line per check, either
+`ok    <check>` or `FAIL  <check>: <what is wrong>. Fix: <command>`. It covers
+the tools in the first two tables, the config, the data repo and its marker,
+the two timers and the remote, and every failing line carries the command that
+fixes it, its own `pacman -S <package>` included. `setup check --json` prints
+the same answers as one object for the widget.
 
 ## Install
 

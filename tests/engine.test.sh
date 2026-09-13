@@ -5020,6 +5020,64 @@ if group 104 "an inconclusive probe keeps the date of the last conclusive answer
   eq "and status still answers" "$(jq -r .push_reason <<<"$s104")" "probe-403"
 fi
 
+if group 105 "setup check is a doctor: one line per check, and a missing tool names its own package"; then
+  # The human branch used to be `jq to_entries` over the same object --json
+  # prints, so a nested object (tools, units, remote) arrived as raw JSON and
+  # the only package it ever named was gitleaks. A doctor that cannot say
+  # which package to install is a refusal with no way out.
+  mk_fixture g105; seed_home
+  # A PATH holding everything the CLI needs, so one tool can be taken out of
+  # it at a time and nothing else goes missing with it (group 66 builds the
+  # same kind of PATH for its no-gitleaks proof). jq is deliberately not one
+  # of the tools taken out: bin/omabackup refuses before any verb runs
+  # without it, so there is no doctor line to read.
+  D105="$T/allbin"; mkdir -p "$D105"
+  for b105 in bash sh env jq git rsync flock date cat grep sed awk find mktemp stat chmod \
+              mv rm cp ln cut sort tr head tail wc cksum paste readlink dirname basename \
+              touch mkdir sleep comm uniq xargs diff cmp; do
+    p105=$(command -v "$b105" 2>/dev/null) || continue
+    ln -sf "$p105" "$D105/$b105"
+  done
+  # gum, gitleaks and systemctl only have to EXIST for the doctor's probe, and
+  # none of the three is installed everywhere this suite runs.
+  for b105 in gum gitleaks systemctl; do printf '#!/bin/sh\nexit 0\n' > "$D105/$b105"; chmod +x "$D105/$b105"; done
+  # A PATH with one binary left out. Built by copying the links rather than by
+  # deleting from a shared directory, so the groups below cannot race or leak.
+  mk_path105() {
+    local omit=$1
+    local d="$T/path-$omit" f
+    mkdir -p "$d"
+    for f in "$D105"/*; do
+      [[ "$(basename "$f")" == "$omit" ]] || cp -P "$f" "$d/"
+    done
+    printf '%s' "$d"
+  }
+
+  base105=$(env HOME="$FH" PATH="$D105" "$CLI" setup check 2>/dev/null)
+  bad105=$(grep -cvE '^(ok    |FAIL  )' <<<"$base105" || true)
+  eq "every line is an ok or a FAIL line" "$bad105" "0"
+  eq "no nested object reaches the human output as raw JSON" \
+    "$(grep -c '[{}]' <<<"$base105" || true)" "0"
+  has "and the checks that pass say so" "$base105" "^ok    git$"
+
+  for pair105 in git:git rsync:rsync flock:util-linux gum:gum gitleaks:gitleaks; do
+    t105=${pair105%%:*}; pkg105=${pair105##*:}
+    d105=$(mk_path105 "$t105")
+    o105=$(env HOME="$FH" PATH="$d105" "$CLI" setup check 2>/dev/null)
+    l105=$(grep -E "^FAIL  $t105:" <<<"$o105" || true)
+    [[ -n "$l105" ]] && ok "a missing $t105 is one FAIL line" || bad "a missing $t105 is not one FAIL line" "$o105"
+    has "and the $t105 line names its own package" "$l105" "pacman -S $pkg105"
+  done
+
+  # The --json shape is the widget's and it is additive only: the keys that
+  # were there before are still there, still with the same types.
+  j105=$(env HOME="$FH" PATH="$D105" "$CLI" setup check --json 2>/dev/null)
+  eq "setup check --json still prints exactly one object" "$(jq -sc 'length' <<<"$j105" 2>/dev/null || echo 0)" "1"
+  eq "and its shape is unchanged" \
+    "$(jq -r '[(.ok|type), (.tools.git|type), (.config|type), (.dataRepo|type), (.marker|type), (.units.snapshot|type), (.remote.kind|type)] | join(",")' <<<"$j105")" \
+    "boolean,boolean,boolean,boolean,boolean,boolean,string"
+fi
+
 group_close
 if (( ${#GROUP_SECS[@]} > 1 )); then
   echo; echo "slowest groups (seconds):"
