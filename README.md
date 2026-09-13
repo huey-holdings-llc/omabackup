@@ -19,8 +19,9 @@ source with that in mind, and if you know better, open an issue or a pull
 request. See [CONTRIBUTING.md](CONTRIBUTING.md) for the principles the
 project follows and a help-wanted list: other git hosts' visibility checks,
 restore proven on real fresh hardware, drift categories for tools not yet in
-the seed lists, popup accessibility, a second set of eyes on
-`share/gitleaks.toml`.
+the seed lists, popup accessibility beyond the button names (keyboard focus
+order, and someone who actually uses a screen reader trying it), a second set
+of eyes on `share/gitleaks.toml`.
 
 This is a part-time project. Issues and pull requests are handled as time
 allows, not on a schedule. If you need something sooner, fork it and make it
