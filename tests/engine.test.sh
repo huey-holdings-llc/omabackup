@@ -4487,6 +4487,20 @@ if group 56 "the last attempt reaches status.json, and a run that stands down on
   # In flight: the record a run writes as it starts.
   jq -n '{ok:null, reason:"the run has not finished", at:(now|floor)}' > "$OMABACKUP_STATE_DIR/last-run.json"
   eq "an attempt under way reads as null, not as a verdict" "$(obj status | jq -c .last_attempt_ok)" "null"
+  # Record writes are serialised on a sidecar lock. A writer that holds it
+  # for longer than the wait is wedged, and a write made without the lock
+  # would be the race the lock exists to stop, so the write is skipped and
+  # said so; the run's own outcome is unchanged (Codex, PR 13, round two).
+  jq -n '{ok:true, reason:"", at:(now|floor)}' > "$OMABACKUP_STATE_DIR/last-run.json"
+  ( flock -x 8; sleep 6 ) 8>>"$OMABACKUP_STATE_DIR/.last-run.lock" &
+  _w56=$!
+  sleep 0.3
+  printf 'x\n' > "$ghp56"
+  o56=$(ob snapshot --no-push); rc56=$?
+  eq "the run still refuses on its own terms" "$rc56" "1"
+  has "and says the record was not written" "$o56" "last-run record"
+  eq "the stalled writer's record is untouched" "$(jq -c .ok "$OMABACKUP_STATE_DIR/last-run.json")" "true"
+  rm "$ghp56"; wait "$_w56" 2>/dev/null
 fi
 
 if group 57 "omabackup drift shows GONE rows, live, before the sentinel"; then

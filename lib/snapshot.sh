@@ -776,12 +776,7 @@ cmd_snapshot() {
   # lock: a kill can land within a fraction of a second. What it replaced is
   # kept for the one case that undoes it, a run that stands down on a held
   # lock (run_record_stand_down, below the take_lock).
-  local rec_saved="" rec_mine=""
-  if [[ $dry != 1 ]]; then
-    rec_saved=$(cat "$STATE_DIR/last-run.json" 2>/dev/null || true)
-    run_record_start
-    rec_mine=$(cat "$STATE_DIR/last-run.json" 2>/dev/null || true)
-  fi
+  [[ $dry == 1 ]] || run_record_start
   # Stamped at the START of the run, not the end: anything comparing a live
   # file against this stamp treats a file newer than it as "changed since the
   # snapshot". Stamping at the end left a window where a file rewritten
@@ -816,7 +811,7 @@ cmd_snapshot() {
     exec 9>&-
     # This run never started, so it leaves no verdict: status said a run was
     # under way with none running. Put back the one it cleared.
-    [[ $dry == 1 ]] || run_record_stand_down "$rec_mine" "$rec_saved"
+    [[ $dry == 1 ]] || run_record_stand_down "$REC_MINE" "$REC_SAVED"
     warn "another run held the lock for ${OMABACKUP_LOCK_WAIT:-20}s; skipping this run"
     snapshot_result skipped
     return 0

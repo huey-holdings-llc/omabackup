@@ -303,12 +303,24 @@ state_write_status() {
 # the holder could write its real verdict between that look and the mv, and
 # lose it (Codex, PR 13). Best effort, like everything here: a lock that
 # cannot be taken in two seconds is skipped, never a reason to fail a run.
+# In the current shell, not a subshell, so the callee can hand values back
+# (run_record_start_write fills REC_SAVED and REC_MINE). A lock not taken in
+# two seconds means a wedged writer, and a write made without it would be
+# the very race this exists to stop, so the operation is skipped and said.
 run_record_locked() {
-  if have flock; then
-    ( flock -w 2 8 2>/dev/null || true; "$@" ) 8>>"$STATE_DIR/.last-run.lock" 2>/dev/null || true
-  else
-    "$@" || true
+  if ! have flock; then "$@" || true; return 0; fi
+  # The redirect is scoped to the group: on a bare `exec 8>>f 2>/dev/null`
+  # the 2> is applied to the shell itself, for good, and every later warn
+  # and the refusal's own [FAIL] line went to /dev/null.
+  if ! { exec 8>>"$STATE_DIR/.last-run.lock"; } 2>/dev/null; then "$@" || true; return 0; fi
+  if ! flock -w 2 8 2>/dev/null; then
+    exec 8>&-
+    warn "the last-run record is held by another process; not writing it this time"
+    return 0
   fi
+  "$@" || true
+  exec 8>&-
+  return 0
 }
 run_record() {
   # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
@@ -342,7 +354,25 @@ run_record_write() {
 # PREVIOUS run's failure record, so status went on naming an old gate (quite
 # possibly one already fixed) instead of saying the latest run did not finish.
 # A null verdict reads as "nothing to report" everywhere, the same as no file.
-run_record_start() { run_record null "the run has not finished"; }
+# run_record_start fills REC_SAVED (the record it replaced, or empty) and
+# REC_MINE (what it wrote) in the SAME locked operation as the write, for
+# run_record_stand_down below. Read outside the lock, a verdict the holder
+# wrote between the read and this write was neither in REC_SAVED nor left
+# alone: the stand-down restored the older record over it (Codex, PR 13).
+REC_SAVED=""; REC_MINE=""
+run_record_start() {
+  REC_SAVED=""; REC_MINE=""
+  # shellcheck disable=SC2174  # -m only needs to land on the leaf dir; parents keep the default umask
+  mkdir -m 700 -p "$STATE_DIR" 2>/dev/null || return 0
+  run_record_locked run_record_start_write
+  return 0
+}
+run_record_start_write() {
+  REC_SAVED=$(cat "$STATE_DIR/last-run.json" 2>/dev/null || true)
+  run_record_write null "the run has not finished"
+  REC_MINE=$(cat "$STATE_DIR/last-run.json" 2>/dev/null || true)
+  return 0
+}
 
 # run_record_stand_down MINE SAVED: a run that cleared the verdict as it
 # started, then stood down on a held lock, never ran and has no verdict to
