@@ -84,7 +84,16 @@ NAG_DAYS=7
 
 CONFIG_KNOWN='["dataRepo","remote","maxFileSize","staleDays","maxMissingPct","maxScanFiles","minAllowlist","notify","shellNag","timer","setupPhase"]'
 CONFIG_KNOWN_DOTTED='["remote.url","remote.trusted","timer.calendar","timer.jitter"]'
-CONFIG_DEFAULTS='{"remote":{"url":"","trusted":false},"maxFileSize":"8m","staleDays":2,"maxMissingPct":25,"maxScanFiles":2000,"minAllowlist":20,"notify":true,"shellNag":false,"timer":{"calendar":"daily","jitter":"30m"},"setupPhase":""}'
+# minAllowlist is KNOWN but deliberately NOT in CONFIG_DEFAULTS, and it is the
+# only key like that. setup writes CONFIG_DEFAULTS into the config file
+# verbatim, so a default here would land in every config setup ever wrote, and
+# the allowlist floor reads the key's PRESENCE as "the user decided what this
+# machine's floor is". A defaulted 20 in every file would pin the floor at 20
+# on every install and take the derived floor (nine tenths of the last
+# committed list) away from exactly the large lists it protects. Absent means
+# "derive it", which is what the tool should do unless told otherwise; the
+# bootstrap 20 lives in lib/snapshot.sh and the README documents both.
+CONFIG_DEFAULTS='{"remote":{"url":"","trusted":false},"maxFileSize":"8m","staleDays":2,"maxMissingPct":25,"maxScanFiles":2000,"notify":true,"shellNag":false,"timer":{"calendar":"daily","jitter":"30m"},"setupPhase":""}'
 
 # logf LINE: append to the tool's own log. Never fatal, and never noisy about
 # itself: a log line is a record of work that has already happened, so a
@@ -197,18 +206,16 @@ config_load() {
   CFG_MIN_ALLOWLIST=$(cfg minAllowlist)
   CFG_NOTIFY=$(cfg notify); CFG_SHELL_NAG=$(cfg shellNag)
   CFG_TIMER_CALENDAR=$(cfg timer.calendar); CFG_TIMER_JITTER=$(cfg timer.jitter)
-  # WRITTEN DOWN, not defaulted. minAllowlist set by hand is the user saying
+  # WRITTEN DOWN, not defaulted. minAllowlist in the config is the user saying
   # "this many paths is what my machine has", and it overrides the floor the
-  # repo's own history derives; the same number arriving from CONFIG_DEFAULTS
-  # is only the bootstrap value and must not override anything. `has()` rather
-  # than the value, because that is the one question jq can answer without
-  # `//` folding an explicit value into a missing one.
-  if jq -e 'has("minAllowlist")' "$CONFIG_FILE" >/dev/null 2>&1; then
-    CFG_MIN_ALLOWLIST_SET=1
-  else
-    CFG_MIN_ALLOWLIST_SET=0
-  fi
-  for n in "$CFG_STALE_DAYS" "$CFG_MAX_MISSING_PCT" "$CFG_MAX_SCAN_FILES" "$CFG_MIN_ALLOWLIST"; do
+  # repo's own history derives. Because the key is out of CONFIG_DEFAULTS (see
+  # above), an empty CFG_MIN_ALLOWLIST is exactly "absent or null": cfg's
+  # `select(. != null)` is the test, so a value of 0 still reads as set, where
+  # jq's `//` would have folded it into "missing".
+  if [[ -n "$CFG_MIN_ALLOWLIST" ]]; then CFG_MIN_ALLOWLIST_SET=1; else CFG_MIN_ALLOWLIST_SET=0; fi
+  # An absent minAllowlist stands in as 0 for the check alone: it is validated
+  # the same way as the other integer knobs whenever it IS there.
+  for n in "$CFG_STALE_DAYS" "$CFG_MAX_MISSING_PCT" "$CFG_MAX_SCAN_FILES" "${CFG_MIN_ALLOWLIST:-0}"; do
     [[ "$n" =~ ^[0-9]+$ ]] || die "config: staleDays, maxMissingPct, maxScanFiles and minAllowlist must be integers"
   done
   [[ "$CFG_MAX_FILE_SIZE" =~ ^[0-9]+[kmg]?$ ]] || die "config: maxFileSize must look like 8m"

@@ -5365,6 +5365,17 @@ if group 108 "the allowlist floor follows the last committed list, and minAllowl
   jq '.minAllowlist="lots"' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
   has "and a minAllowlist that is not a number is refused like the other integers" \
     "$(obj status | jq -r .error)" "must be integers"
+
+  # setup writes the default config verbatim, so a minAllowlist among the
+  # defaults would land in every config ever written and pin the floor at 20
+  # on every install: the key's PRESENCE is what says the user chose a floor,
+  # and the tool must not choose one on their behalf.
+  mk_fixture g108s
+  unset OMABACKUP_MIN_ALLOWLIST
+  check "unattended setup, local only, no timers" \
+    env HOME="$FH" "$CLI" setup --data-repo "$T/setupdata" --no-timers --yes
+  eq "the config setup writes does not pin minAllowlist" \
+    "$(jq -r 'has("minAllowlist")' "$OMABACKUP_CONFIG")" "false"
 fi
 
 if group 109 "one registry owns the scratch directories, and the vanish guard needs none"; then

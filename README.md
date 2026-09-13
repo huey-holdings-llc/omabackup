@@ -315,6 +315,8 @@ repo and its remote are never touched by either command.
 The config file is plain JSON and every key has a default, so a file that
 names only `dataRepo` is complete. A key this version does not know is
 warned about; one close enough to a known key to be a typo is refused.
+`minAllowlist` is the one key `setup` never writes for you, because its
+being there at all is what tells the allowlist floor you chose a number.
 
 ```
 dataRepo         absolute path of the data repo (written by setup)
@@ -328,9 +330,9 @@ maxMissingPct    25; this share of allowlist entries or more vanishing at
                  once refuses the run
 maxScanFiles     2000; a folder with more files than this is one collapsed
                  row in the drift report
-minAllowlist     20; the allowlist floor before any run has committed a list
-                 to compare against. Once one has, the floor is nine tenths
-                 of that run's entry count; set this key to override both
+minAllowlist     absent by default. The floor is nine tenths of the list the
+                 last successful run committed, or 20 before any run has
+                 committed one; writing this key sets the floor yourself
 notify           true; false silences the desktop notifications
 shellNag         false; true makes setup add the login check to ~/.bashrc
 timer.calendar   daily; the snapshot timer's OnCalendar
