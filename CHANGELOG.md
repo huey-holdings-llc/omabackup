@@ -91,8 +91,10 @@ finishes; the next run's floor is derived from the list it finds committed,
 so the flag is needed once and not again. One run, not a setting: the
 shipped timer runs plain `snapshot`, and the flag is refused outright with
 `--dry-run`, which commits nothing and so cannot record the trim. Every
-other guard still applies to that run, the file-count floor, the
-vanished-entry check and both secret gates included. The refusal names it.
+other guard still applies to that run: the file-count floor, the
+vanished-entry check, and the staged secret scan, which covers the list
+commit the flag itself makes exactly as it covers the snapshot's own. The
+refusal names it.
 
 `omabackup self-test` takes a few minutes instead of twelve. Its fixture
 snapshots ran the real machine-fact tools (pacman, systemctl, npm, fprintd
@@ -341,6 +343,16 @@ passed the guard entirely, and the push URL is the one a password would
 actually be used on. The warning that names a mismatched push URL redacts it
 as well. A password in a URL would otherwise sit in `.git/config`, in the
 tool's config and in the log; raised by the Codex reviews on PRs 6 and 7.
+
+Every commit a run can push is scanned, the two list commits included.
+`snapshot --accept-allowlist` commits `allowlist.txt`, and the `.gitignore`
+sync commits `.gitignore`, both inside a run that goes on to push; the
+snapshot's own scan covers only `home/`, `etc/`, `manifests/` and
+`modes.txt`, so neither of those commits was ever scanned. A value pasted
+into a comment beside an allowlist entry could be committed and pushed with
+no gate in front of it. Both now stage, scan and commit through the same
+helper, and a scan that says no undoes the staging and refuses the run
+rather than warning.
 
 The filename gate refuses the run when its walk of the staging tree fails.
 The walk sat in one pipeline ending in `|| true`, put there for grep's

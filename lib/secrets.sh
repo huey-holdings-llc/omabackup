@@ -219,3 +219,63 @@ secrets_scan_staged() {
   fi
   [[ $rc -eq 0 ]] || { git -C "$DATA_REPO" reset -q; die "gitleaks exited $rc on the staged commit; staging undone, no snapshot was committed"; }
 }
+
+# repo_commit_scanned PATH... -m MSG: stage those paths, scan exactly what the
+# staging produced, and commit them.
+#
+# THE THIRD AND FOURTH PUSHABLE COMMIT PATHS. Invariant 3 asks for gitleaks
+# over exactly what `git add` staged, before every commit that can be pushed.
+# `snapshot --accept-allowlist` and the .gitignore sync each add one file and
+# commit it inside a run that then reaches remote_push_if_ahead, and both used
+# to go straight from `git add` to `git commit` with no scan at all: a token
+# pasted onto a comment line in allowlist.txt was committed and pushed by the
+# very next line (whole-release review, SEC-C1). snapshot_commit's own staging
+# is deliberately limited to home/ etc/ manifests/ modes.txt, so the scan it
+# runs never saw either file.
+#
+# There is no filename gate here and none to add. That gate is about
+# credential-looking BASENAMES in the staging tree ($STAGE/home/..., the files
+# copied in from $HOME); the two paths this helper commits are the data repo's
+# own list files, named allowlist.txt and .gitignore, which the gate would
+# have nothing to say about. The content scan is the gate that applies.
+#
+# secrets_scan_staged is called the way cmd_push calls it (lib/widget.sh): in
+# a command substitution, because it die()s on a hit and the die may only take
+# THAT subshell down, never the run's own reporting. Its `git reset -q` has
+# already undone the staging in the real repo by then (a git command, not
+# shell state, so the subshell boundary does not contain it); the reset below
+# is the belt to that braces, and it names the paths this call staged so a
+# refusal cannot unstage anything else.
+#
+# Returns 0 committed, 2 the scan refused (nothing committed, index reset, and
+# it is the caller's job to refuse the run), 1 the add or the commit itself
+# failed.
+repo_commit_scanned() {
+  local -a paths=()
+  while (( $# )); do
+    [[ "$1" == "-m" ]] && { shift; break; }
+    paths+=("$1"); shift
+  done
+  local msg=${1:-}
+  (( ${#paths[@]} > 0 )) || die "repo_commit_scanned was given no paths to commit"
+  [[ -n "$msg" ]] || die "repo_commit_scanned was given no commit message"
+
+  git -C "$DATA_REPO" add -- "${paths[@]}" || return 1
+
+  local scan_rc=0 scan_out=""
+  scan_out=$(secrets_scan_staged 2>&1) || scan_rc=$?
+  # Always back to stderr, never stdout: the scan's own narration and
+  # gitleaks' findings (already --redact'ed) are worth keeping in both modes,
+  # and under --json stdout carries one object and nothing else.
+  [[ -z "$scan_out" ]] || printf '%s\n' "$scan_out" >&2
+  if [[ $scan_rc -ne 0 ]]; then
+    git -C "$DATA_REPO" reset -q -- "${paths[@]}" 2>/dev/null || true
+    return 2
+  fi
+
+  # Same identity fallback as every other commit path: a machine with no
+  # ~/.gitconfig cannot commit at all without it.
+  git_ident_args
+  git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} \
+    commit -q -m "$msg" -- "${paths[@]}" || return 1
+}

@@ -396,14 +396,17 @@ snapshot_accept_allowlist_commit() {
     return 0
   fi
   local n; n=$(list_entry_count "$DATA_REPO/allowlist.txt")
-  git_ident_args
-  if git -C "$DATA_REPO" add -- allowlist.txt \
-     && git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -q \
-          -m "omabackup: allowlist accepted at $n entries (--accept-allowlist)" -- allowlist.txt; then
-    log "committed the accepted allowlist.txt; the next run's floor follows it, with no flag"
-  else
-    warn "could not commit the accepted allowlist.txt; the next run needs --accept-allowlist again"
-  fi
+  # Staged, scanned and committed through the one helper both list-commit
+  # paths use (repo_commit_scanned, lib/secrets.sh): this commit can be pushed
+  # by the same run, so it is scanned like any other.
+  local rc=0
+  repo_commit_scanned allowlist.txt \
+    -m "omabackup: allowlist accepted at $n entries (--accept-allowlist)" || rc=$?
+  case $rc in
+    0) log "committed the accepted allowlist.txt; the next run's floor follows it, with no flag" ;;
+    2) die "the staged secret scan refused the accepted allowlist.txt; staging undone, nothing committed" ;;
+    *) warn "could not commit the accepted allowlist.txt; the next run needs --accept-allowlist again" ;;
+  esac
 }
 
 # ---------------------------------------------------------------- 2. stage

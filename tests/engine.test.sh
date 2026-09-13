@@ -6028,6 +6028,116 @@ EOF
     "$(grep -c '^git --help$' "$GLLOG112" || true)" "1"
 fi
 
+if group 114 "the two list commits a run signs go through the staged secret gate"; then
+  # AGENTS.md invariant 3: gitleaks over exactly what `git add` staged, before
+  # every commit that can be pushed. --accept-allowlist and the .gitignore
+  # sync each `git add` one file and commit it inside a run that then reaches
+  # remote_push_if_ahead, and neither commit was scanned at all: a token
+  # pasted onto a comment line in allowlist.txt was committed and pushed by
+  # the very next line (whole-release review, SEC-C1). Both now stage, scan
+  # and commit through one helper, and a scan that says no resets the index
+  # and refuses the run.
+  mk_fixture g114; seed_home; commit_baseline
+
+  # The PATH-shadow stand-in group 65 uses, reading the real staged diff so a
+  # planted token is still distinguished from a clean edit, plus a log of its
+  # own argv so the "one staged scan per commit" counts below are about calls
+  # that actually happened. Installed unconditionally, not only when gitleaks
+  # is absent the way group 65 does it: this group has to decide the same way
+  # on a machine with a real gitleaks and on one without.
+  GL114="$T/fakebin-gl"; mkdir -p "$GL114"
+  GLLOG114="$T/gl-calls.log"; : > "$GLLOG114"
+  cat > "$GL114/gitleaks" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$GLLOG114"
+case " \$* " in
+  *" --staged "*)
+    if [ -f "$T/gl-refuse-staged" ]; then
+      echo "fake gitleaks: refusing this staged scan"
+      exit 1
+    fi
+    if git diff --cached 2>/dev/null | grep -q 'sk-ant-'; then
+      echo "fake gitleaks: anthropic-api-key found in a staged file"
+      exit 1
+    fi
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$GL114/gitleaks"
+  ob114()  { env HOME="$FH" PATH="$GL114:$PATH" "$CLI" "$@" 2>&1; }
+  obj114() { env HOME="$FH" PATH="$GL114:$PATH" "$CLI" "$@" --json 2>/dev/null; }
+
+  # A comment line, which is the review's own failing scenario: a value a user
+  # pasted beside a path. The line is not an entry, so nothing else in the
+  # pipeline objects to it and the staged scan is the only thing standing
+  # between it and the remote.
+  cp "$FR/allowlist.txt" "$T/al114.bak"
+  before114=$(git -C "$FR" rev-parse HEAD)
+  key114="sk-ant-api03-$(rand_body 90)AA"
+  printf '# pasted by accident: %s\n' "$key114" >> "$FR/allowlist.txt"
+  a114=$(obj114 snapshot --no-push --accept-allowlist)
+  eq "--accept-allowlist refuses a secret pasted into allowlist.txt" \
+    "$(jq -r .ok <<<"$a114")" "false"
+  has "and the refusal names the staged scan" "$(jq -r .error <<<"$a114")" "staged secret scan"
+  eq "nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$before114"
+  eq "and the index is clean again" \
+    "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
+
+  # ...and a clean acceptance still commits, so the gate is not simply
+  # refusing everything. Two staged scans in that run and no more: one for
+  # the allowlist commit the flag makes, one for the snapshot's own.
+  cp "$T/al114.bak" "$FR/allowlist.txt"
+  mkdir -p "$FH/.config/t114"; printf 'setting=1\n' > "$FH/.config/t114/a.conf"
+  printf '.config/t114/a.conf\n' >> "$FR/allowlist.txt"
+  : > "$GLLOG114"
+  check "a clean acceptance still commits" \
+    env HOME="$FH" PATH="$GL114:$PATH" "$CLI" snapshot --no-push --accept-allowlist
+  eq "the accepted list is recorded in a commit of its own" \
+    "$(git -C "$FR" log --format=%s -n 3 | grep -c '^omabackup: allowlist accepted at ' || true)" "1"
+  eq "one staged scan for that commit, one for the snapshot's own, and no more" \
+    "$(grep -c -- '--staged' "$GLLOG114" || true)" "2"
+
+  # THE .gitignore SYNC IS THE SAME SHAPE. It appends the patterns this
+  # version ships to an adopted repo and commits them inside the same run.
+  # A secret cannot be planted in that block from a fixture (the block is
+  # copied from the plugin's own share/data.gitignore), so the stand-in is
+  # told to refuse the staged scan outright: what is being proved is that
+  # this commit goes through the gate at all, and that a refusal leaves HEAD
+  # and the index alone.
+  mk_fixture g114g; seed_home; commit_baseline
+  GL114g="$T/fakebin-gl"; mkdir -p "$GL114g"
+  GLLOG114g="$T/gl-calls.log"; : > "$GLLOG114g"
+  cat > "$GL114g/gitleaks" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$GLLOG114g"
+case " \$* " in
+  *" --staged "*)
+    echo "fake gitleaks: a secret in the appended block"
+    exit 1
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$GL114g/gitleaks"
+  # An adopted repo: a .gitignore missing two of the shipped patterns, and
+  # that state committed, so the sync has something to append and the file is
+  # clean before it does.
+  grep -vxF -e '.pypirc' -e 'hosts.yml' "$FR/.gitignore" > "$T/gi114" && mv "$T/gi114" "$FR/.gitignore"
+  git -C "$FR" commit -qam "an older .gitignore, two shipped patterns short"
+  before114g=$(git -C "$FR" rev-parse HEAD)
+  : > "$GLLOG114g"
+  g114=$(env HOME="$FH" PATH="$GL114g:$PATH" "$CLI" snapshot --no-push --json 2>/dev/null)
+  eq "the .gitignore sync's own commit is refused when the staged scan says no" \
+    "$(jq -r .ok <<<"$g114")" "false"
+  has "and that refusal names the staged scan too" "$(jq -r .error <<<"$g114")" "staged secret scan"
+  eq "nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$before114g"
+  eq "and the index is clean again" \
+    "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
+  eq "the run stopped at the sync's own staged scan, before the snapshot's" \
+    "$(grep -c -- '--staged' "$GLLOG114g" || true)" "1"
+fi
+
 group_close
 if (( ${#GROUP_SECS[@]} > 1 )); then
   echo; echo "slowest groups (seconds):"

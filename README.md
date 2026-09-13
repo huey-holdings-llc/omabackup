@@ -647,8 +647,11 @@ actually broken.
   stands, commits it, and because the next run's floor is derived from the
   list it finds committed, the flag is not needed again. It is one run, not a
   setting: nothing in the config and nothing in the timer's unit turns the
-  floor off, and every other guard (the file floor, the vanished-entry check,
-  both secret gates) still applies to that run. It cannot be combined with
+  floor off, and every other guard still applies to that run: the file floor,
+  the vanished-entry check, and the secret gates, which scan the list commit
+  the flag makes exactly as they scan the snapshot's own, so a value pasted
+  into `allowlist.txt` refuses the run instead of riding out with it. It
+  cannot be combined with
   `--dry-run`, which commits nothing and so cannot record the trim.
   Before any run has committed a list there is nothing to compare against, and
   the message is the other shape, "below the bootstrap floor of 20
