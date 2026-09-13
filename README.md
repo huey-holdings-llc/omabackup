@@ -332,7 +332,8 @@ maxScanFiles     2000; a folder with more files than this is one collapsed
                  row in the drift report
 minAllowlist     absent by default. The floor is nine tenths of the list the
                  last successful run committed, or 20 before any run has
-                 committed one; writing this key sets the floor yourself
+                 committed one; writing this key sets the floor yourself,
+                 and 0 switches the floor off entirely
 notify           true; false silences the desktop notifications
 shellNag         false; true makes setup add the login check to ~/.bashrc
 timer.calendar   daily; the snapshot timer's OnCalendar
@@ -644,6 +645,10 @@ actually broken.
   floor of 20 (minAllowlist)". Either way, if the list really is that short
   now, put `minAllowlist` in the config file with the number you have; commit
   the trimmed `allowlist.txt` and the next run's floor follows it on its own.
+  `minAllowlist` set to 0 switches the floor off entirely, which means a list
+  truncated to nothing would be backed up as nothing: prefer the number you
+  have. A third wording, "set by OMABACKUP\_MIN\_ALLOWLIST", only appears
+  inside the test suite, where that variable is honoured.
 * **"data repo marker has no usable format field"**: `.omabackup` is the file
   that says the repo is OmaBackup's and what format it is in, and a marker
   that is not readable JSON is refused rather than overwritten, because

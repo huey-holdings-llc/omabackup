@@ -91,6 +91,15 @@ emit_json() { local f=$1; shift; jq -cn "$@" "$f"; }
 # ---- lists ----------------------------------------------------------------
 # Strip comments and blank lines; keep a leading '?' (optional marker).
 read_list() { grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null | sed -E -e 's/[[:space:]]+#.*$//' -e 's/[[:space:]]*$//'; }
+# list_entry_count FILE: how many real entries FILE holds, counted the way
+# every reader of these files counts them (read_list, then non-empty lines).
+# ONE COUNTER, because the allowlist floor compares two of them: the list the
+# last successful run committed and the list on disk now. Those were counted
+# by two different expressions, a bare `grep -vE` over `git show` and this
+# one, and a line that read_list strips to nothing was an entry to one and
+# not to the other. FILE may be a process substitution, which is how the
+# committed copy is counted without a scratch file.
+list_entry_count() { read_list "$1" | grep -c . || true; }
 
 # ---- argv hygiene ---------------------------------------------------------
 # Refuse values that could smuggle a second line or tab into a list file.

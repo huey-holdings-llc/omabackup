@@ -51,7 +51,10 @@ snapshot_floors_from_history() {
     prev_tracked=$(grep -c . <<<"$listing" || true)
     # This one IS allowed to fail: a repo whose first commit predates
     # allowlist.txt has no such path in HEAD, which is bootstrap, not damage.
-    prev_entries=$(git -C "$DATA_REPO" show HEAD:allowlist.txt 2>/dev/null | grep -cvE '^[[:space:]]*(#|$)' || true)
+    # Counted through list_entry_count, the same function the current list
+    # goes through below, or the floor compares two different definitions of
+    # "an entry".
+    prev_entries=$(list_entry_count <(git -C "$DATA_REPO" show HEAD:allowlist.txt 2>/dev/null))
   fi
   # Also the gate on the mass-disappearance check below: "does a real backup
   # exist to compare against". It comes from the repo's own history, so it is
@@ -62,25 +65,28 @@ snapshot_floors_from_history() {
   else
     MIN_FILES="${OMABACKUP_MIN_FILES:-20}"      # bootstrap: no meaningful history yet
   fi
-  # PREV_ENTRIES and MIN_ALLOWLIST_DERIVED are read by snapshot_assert_allowlist,
-  # which is the only thing that can say what the refusal should sound like.
+  # PREV_ENTRIES and MIN_ALLOWLIST_SOURCE are read by
+  # snapshot_assert_allowlist, which is the only thing that can say what the
+  # refusal should sound like. A floor is worth nothing if the message about
+  # it names the wrong reason: "history", "minAllowlist" and "override" get
+  # three different sentences, and each one names what a user could change.
   PREV_ENTRIES=$prev_entries
-  MIN_ALLOWLIST_DERIVED=0
   local floor
   if [[ "${prev_entries:-0}" -ge 1 ]]; then
     floor=$(( prev_entries * 9 / 10 ))
     [[ "$floor" -ge 1 ]] || floor=1
-    MIN_ALLOWLIST_DERIVED=1
+    MIN_ALLOWLIST_SOURCE=history
   else
     floor="${CFG_MIN_ALLOWLIST:-20}"
+    MIN_ALLOWLIST_SOURCE=minallowlist
   fi
   if [[ "${CFG_MIN_ALLOWLIST_SET:-0}" == 1 ]]; then
     floor="${CFG_MIN_ALLOWLIST:-20}"
-    MIN_ALLOWLIST_DERIVED=0
+    MIN_ALLOWLIST_SOURCE=minallowlist
   fi
   MIN_ALLOWLIST="${OMABACKUP_MIN_ALLOWLIST:-$floor}"
-  # The suite's own override wins, and it is not the history's answer either.
-  [[ "$MIN_ALLOWLIST" == "$floor" ]] || MIN_ALLOWLIST_DERIVED=0
+  # The suite's own override wins, and it is neither of the other two.
+  [[ "$MIN_ALLOWLIST" == "$floor" ]] || MIN_ALLOWLIST_SOURCE=override
 }
 
 # snapshot_entry_exists ENTRY: true when at least one live path matches.
@@ -223,13 +229,21 @@ snapshot_assert_allowlist() {
   # refuses to honour outside its own test suite. Both shapes below say what
   # the floor is, where it came from, and which key changes it.
   local entry_count
-  entry_count=$(read_list "$al" | grep -c . || true)
+  entry_count=$(list_entry_count "$al")
   if [[ "${entry_count:-0}" -lt "${MIN_ALLOWLIST:-20}" ]]; then
     local trim_hint="If you trimmed the list on purpose, set minAllowlist in $CONFIG_FILE to the number you now have"
-    if [[ "${MIN_ALLOWLIST_DERIVED:-0}" == 1 ]]; then
-      die "allowlist has ${entry_count:-0} entries; the last successful run had ${PREV_ENTRIES:-0}, so the floor is ${MIN_ALLOWLIST:-20}. $trim_hint"
-    fi
-    die "allowlist has ${entry_count:-0} entries, below the bootstrap floor of ${MIN_ALLOWLIST:-20} (minAllowlist). $trim_hint"
+    case "${MIN_ALLOWLIST_SOURCE:-minallowlist}" in
+      history)
+        die "allowlist has ${entry_count:-0} entries; the last successful run had ${PREV_ENTRIES:-0}, so the floor is ${MIN_ALLOWLIST:-20}. $trim_hint" ;;
+      override)
+        # No minAllowlist hint here: the config key cannot lift a floor the
+        # environment forced, and sending a user to edit a file that will not
+        # change the answer is the kind of message this whole refusal is
+        # being rewritten to stop giving.
+        die "allowlist has ${entry_count:-0} entries, below the floor of ${MIN_ALLOWLIST:-20} set by OMABACKUP_MIN_ALLOWLIST (a suite-only override)" ;;
+      *)
+        die "allowlist has ${entry_count:-0} entries, below the bootstrap floor of ${MIN_ALLOWLIST:-20} (minAllowlist). $trim_hint" ;;
+    esac
   fi
 
   # Second look. Omarchy migrations move a file aside and rewrite it, so a
