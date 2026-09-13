@@ -5344,14 +5344,55 @@ if group 108 "the allowlist floor follows the last committed list, and minAllowl
   eq "12 against a committed 15 is below it" "$(jq -r .ok <<<"$f108")" "false"
   has "the refusal counts both lists and shows its arithmetic" "$(jq -r .error <<<"$f108")" \
     "allowlist has 12 entries; the last successful run had 15, so the floor is 14"
-  has "and names the key that lifts it, in the file it goes in" "$(jq -r .error <<<"$f108")" \
-    "set minAllowlist in $OMABACKUP_CONFIG"
+  has "and names the one-shot flag, not a setting" "$(jq -r .error <<<"$f108")" \
+    "run once: omabackup snapshot --accept-allowlist"
   eq "nothing was committed by the refused run" \
     "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c 'f108' || true)" "14"
 
-  jq '.minAllowlist=5' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
-  check "an explicit minAllowlist is the escape hatch, and a known key" \
+  # THE ESCAPE HATCH IS ONE RUN, NOT A STANDING PERMISSION. A minAllowlist
+  # that overrode the derived floor stayed open forever: set it to permit a
+  # trim to 12, grow the list to 200 over a year, and an accidental
+  # truncation back to 12 walked through the gate the override was still
+  # holding (Codex, PR 20 round two).
+  check "--accept-allowlist takes the list as it stands, once" \
+    env HOME="$FH" "$CLI" snapshot --no-push --accept-allowlist
+  eq "the accepted list is what HEAD now carries, so it is the next baseline" \
+    "$(git -C "$FR" show HEAD:allowlist.txt | grep -c '^\.config/f108/' || true)" "12"
+  eq "recorded in a commit of its own, not swept into the snapshot commit" \
+    "$(git -C "$FR" log --format=%s -n 5 | grep -c '^omabackup: allowlist accepted at 12 entries' || true)" "1"
+  eq "the 12 entries are backed up" \
+    "$(git -C "$FR" ls-tree -r --name-only HEAD home/ | grep -c 'f108' || true)" "12"
+  check "and the next plain run needs no flag: the floor is 11 now" \
     env HOME="$FH" "$CLI" snapshot --no-push
+
+  # ...and the floor is a floor again straight away.
+  sed -i -e '/^\.config\/f108\/e12\.conf$/d' -e '/^\.config\/f108\/e11\.conf$/d' "$FR/allowlist.txt"
+  rm -f "$FH/.config/f108/e12.conf" "$FH/.config/f108/e11.conf"
+  d108=$(obj snapshot --no-push)
+  eq "10 against a committed 12 is refused, with no flag left standing" \
+    "$(jq -r .ok <<<"$d108")" "false"
+  has "and the floor came from the accepted list" "$(jq -r .error <<<"$d108")" \
+    "the last successful run had 12, so the floor is 11"
+
+  # A dry run commits nothing, so it cannot record the trim: honouring half
+  # the flag would lift the floor for a run that leaves no baseline behind.
+  eq "--accept-allowlist with --dry-run is a usage error" \
+    "$(env HOME="$FH" "$CLI" snapshot --dry-run --accept-allowlist >/dev/null 2>&1; echo $?)" "2"
+  has "and says why the two cannot go together" \
+    "$(env HOME="$FH" "$CLI" snapshot --dry-run --accept-allowlist 2>&1)" \
+    "a dry run commits nothing"
+
+  # minAllowlist is the BOOTSTRAP floor and nothing else. On a repo with
+  # history it changes no answer, and a key that silently does nothing is
+  # exactly what the config reader exists to speak up about.
+  jq '.minAllowlist=5' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
+  m108=$(ob snapshot --no-push)
+  eq "minAllowlist does not lift a floor derived from history" \
+    "$(obj snapshot --no-push | jq -r .ok)" "false"
+  has "and the tool says the key is doing nothing here" "$m108" \
+    "minAllowlist is only read before the first snapshot"
+  has "naming the flag that does work" "$m108" "snapshot --accept-allowlist"
+  jq 'del(.minAllowlist)' "$OMABACKUP_CONFIG" > "$T/c108" && mv "$T/c108" "$OMABACKUP_CONFIG"
 
   # A SHORT LIST IS WHERE ROUNDING DECIDES THE GUARD. `prev * 9 / 10`
   # truncates, so two entries gave a floor of one and half the list could go

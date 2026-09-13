@@ -42,7 +42,7 @@ VERB_TABLE=(
 [--trust-remote] [--no-timers] [--yes]" "first-run wizard"
   "setup" "setup check" "doctor"
   "setup" "setup --remove [--yes]" "remove units, symlink, config"
-  "snapshot" "snapshot [--dry-run] [--no-push]" "the daily pipeline"
+  "snapshot" "snapshot [--dry-run] [--no-push] [--accept-allowlist]" "the daily pipeline"
   "drift" "drift" "report unbacked config"
   "status" "status" "health (writes status.json)"
   "allow ignore" "allow PATH | ignore PATH [REASON]" "triage a drift entry"

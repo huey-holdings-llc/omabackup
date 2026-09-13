@@ -226,6 +226,19 @@ config_load() {
   else
     CFG_MIN_ALLOWLIST_SET=0
   fi
+  # ...and it is the BOOTSTRAP floor only. Once a run has committed a list,
+  # the floor follows that list and this key does nothing, because a standing
+  # override is the guard switched off rather than an escape hatch (see
+  # snapshot_floors_from_history). A key that silently does nothing is exactly
+  # what the unknown-key check above exists to prevent, so say it, once per
+  # run, and only when it is actually set: no key, no git call.
+  if [[ "$CFG_MIN_ALLOWLIST_SET" == 1 ]]; then
+    local prev_al
+    prev_al=$(list_entry_count <(git -C "$DATA_REPO" show HEAD:allowlist.txt 2>/dev/null))
+    if [[ "${prev_al:-0}" -ge 1 ]]; then
+      warn "minAllowlist is only read before the first snapshot; the floor now follows your history. To accept a trim, run once: omabackup snapshot --accept-allowlist"
+    fi
+  fi
   for n in "$CFG_STALE_DAYS" "$CFG_MAX_MISSING_PCT" "$CFG_MAX_SCAN_FILES"; do
     [[ "$n" =~ ^[0-9]+$ ]] || die "config: staleDays, maxMissingPct and maxScanFiles must be integers"
   done

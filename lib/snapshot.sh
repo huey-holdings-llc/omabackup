@@ -29,8 +29,19 @@
 # committed count, rounded up, says the same thing at 15 entries as it does at
 # 200. A repo whose HEAD carries no list with anything in it has nothing to
 # compare against, so it gets the bootstrap floor, which is the minAllowlist
-# config key (default 20); minAllowlist WRITTEN DOWN in the config overrides
-# both, and is the answer to "I trimmed the list on purpose".
+# config key (default 20).
+#
+# MINALLOWLIST IS THE BOOTSTRAP FLOOR AND NOTHING ELSE. It used to override
+# the derived floor too, and a standing override is not an escape hatch, it is
+# the guard switched off: set it to 12 to permit one intentional trim, grow
+# the list to 200 over a year, and an accidental truncation back to 12 walks
+# through the gate the override is still holding open. If what is left covers
+# half the tracked files, MIN_FILES passes as well, and the vanish check never
+# sees entries that are gone from the working list. So with history the key is
+# ignored (lib/config.sh says so, once, when it is set on a repo that has
+# any), and the escape hatch is one-shot instead: `snapshot --accept-allowlist`
+# takes the list as it stands for that run only and commits it, so the next
+# run's floor comes from the trim the user meant (Codex, PR 20 round two).
 #
 # A committed allowlist.txt holding only comments is bootstrap, not history:
 # it is what setup leaves before the first list is written, and treating it as
@@ -86,10 +97,6 @@ snapshot_floors_from_history() {
     [[ "$floor" -ge 1 ]] || floor=1
     MIN_ALLOWLIST_SOURCE=history
   else
-    floor="${CFG_MIN_ALLOWLIST:-20}"
-    MIN_ALLOWLIST_SOURCE=minallowlist
-  fi
-  if [[ "${CFG_MIN_ALLOWLIST_SET:-0}" == 1 ]]; then
     floor="${CFG_MIN_ALLOWLIST:-20}"
     MIN_ALLOWLIST_SOURCE=minallowlist
   fi
@@ -235,23 +242,34 @@ snapshot_assert_allowlist() {
   # THE FLOOR, and a refusal that names the way out. This used to read as
   # damage detection ("only N entries, floor 20") on a machine whose list was
   # simply small, and the only thing that lifted it was a variable the tool
-  # refuses to honour outside its own test suite. Both shapes below say what
-  # the floor is, where it came from, and which key changes it.
+  # refuses to honour outside its own test suite. Each shape below says what
+  # the floor is, where it came from, and the one thing that moves it.
   local entry_count
   entry_count=$(list_entry_count "$al")
+  # --accept-allowlist: THIS RUN takes the list as it stands. One run, not a
+  # setting: the run commits the list it accepted, so the next run's floor is
+  # derived from the trim the user meant and the flag is not needed again. The
+  # floor is still 1, because "accept the list" cannot mean accepting no list
+  # at all, and every other guard (the file floor, the vanish check, both
+  # secret gates) is untouched.
+  if [[ "${SNAP_ACCEPT_ALLOWLIST:-0}" == 1 ]]; then
+    MIN_ALLOWLIST=$(( entry_count >= 1 ? entry_count : 1 ))
+    MIN_ALLOWLIST_SOURCE=accept
+  fi
   if [[ "${entry_count:-0}" -lt "${MIN_ALLOWLIST:-20}" ]]; then
-    local trim_hint="If you trimmed the list on purpose, set minAllowlist in $CONFIG_FILE to the number you now have"
     case "${MIN_ALLOWLIST_SOURCE:-minallowlist}" in
       history)
-        die "allowlist has ${entry_count:-0} entries; the last successful run had ${PREV_ENTRIES:-0}, so the floor is ${MIN_ALLOWLIST:-20}. $trim_hint" ;;
+        die "allowlist has ${entry_count:-0} entries; the last successful run had ${PREV_ENTRIES:-0}, so the floor is ${MIN_ALLOWLIST:-20}. If you trimmed the list on purpose, run once: omabackup snapshot --accept-allowlist" ;;
+      accept)
+        die "allowlist has no entries; --accept-allowlist takes the list as it stands, and there is nothing in it to take" ;;
       override)
-        # No minAllowlist hint here: the config key cannot lift a floor the
-        # environment forced, and sending a user to edit a file that will not
-        # change the answer is the kind of message this whole refusal is
-        # being rewritten to stop giving.
+        # No hint here: neither the config key nor the flag can lift a floor
+        # the environment forced, and sending a user somewhere that will not
+        # change the answer is the kind of message this refusal is being
+        # rewritten to stop giving.
         die "allowlist has ${entry_count:-0} entries, below the floor of ${MIN_ALLOWLIST:-20} set by OMABACKUP_MIN_ALLOWLIST (a suite-only override)" ;;
       *)
-        die "allowlist has ${entry_count:-0} entries, below the bootstrap floor of ${MIN_ALLOWLIST:-20} (minAllowlist). $trim_hint" ;;
+        die "allowlist has ${entry_count:-0} entries, below the bootstrap floor of ${MIN_ALLOWLIST:-20} (minAllowlist). If you trimmed the list on purpose, set minAllowlist in $CONFIG_FILE to the number you now have" ;;
     esac
   fi
 
@@ -347,6 +365,37 @@ snapshot_assert_allowlist() {
   fi
 
   [[ "$nullglob_was_on" = 1 ]] || shopt -u nullglob
+}
+
+# snapshot_accept_allowlist_commit: record the trim --accept-allowlist was
+# given for, as its own commit.
+#
+# WITHOUT THIS THE FLAG IS NOT ONE-SHOT. The next run's floor comes from
+# HEAD's allowlist.txt, and the snapshot commits only its own output (the
+# mutation rule), so a trim left uncommitted would need the flag again every
+# single day, which is a standing override wearing a different hat. The flag
+# is the user saying this trim is deliberate; committing it is what makes that
+# statement stick, and it goes in a commit of its own, with its own message,
+# rather than being swept into "snapshot: <date>".
+#
+# It stands down when something is already staged, the same way the .gitignore
+# sync does: a commit this tool signs must never carry an edit the user had
+# not finished.
+snapshot_accept_allowlist_commit() {
+  if git -C "$DATA_REPO" diff --quiet HEAD -- allowlist.txt 2>/dev/null; then return 0; fi
+  if ! git -C "$DATA_REPO" diff --cached --quiet; then
+    warn "something is already staged in the data repo, so the accepted allowlist.txt was not committed; the next run needs --accept-allowlist again unless you commit it yourself"
+    return 0
+  fi
+  local n; n=$(list_entry_count "$DATA_REPO/allowlist.txt")
+  git_ident_args
+  if git -C "$DATA_REPO" add -- allowlist.txt \
+     && git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -q \
+          -m "omabackup: allowlist accepted at $n entries (--accept-allowlist)" -- allowlist.txt; then
+    log "committed the accepted allowlist.txt; the next run's floor follows it, with no flag"
+  else
+    warn "could not commit the accepted allowlist.txt; the next run needs --accept-allowlist again"
+  fi
 }
 
 # ---------------------------------------------------------------- 2. stage
@@ -828,15 +877,27 @@ snapshot_result() {
 
 # ---------------------------------------------------------------------------
 cmd_snapshot() {
-  local a dry=0 nopush=0
+  local a dry=0 nopush=0 accept=0
   for a in "$@"; do
     case "$a" in
       --dry-run) dry=1 ;;
       --no-push) nopush=1 ;;
+      --accept-allowlist) accept=1 ;;
       *) usage_die "snapshot: unknown flag $a" ;;
     esac
   done
+  # A DRY RUN CANNOT ACCEPT ANYTHING. The flag's whole effect beyond this one
+  # run is the commit that moves the baseline the next run's floor comes from,
+  # and a dry run promises the repo is not modified: the two together would
+  # lift the floor for a run that then leaves nothing behind, so tomorrow asks
+  # again. Refuse the combination rather than quietly honouring half of it.
+  if [[ $accept == 1 && $dry == 1 ]]; then
+    usage_die "snapshot: --accept-allowlist cannot be combined with --dry-run; a dry run commits nothing, so it cannot record the trim the next run's floor reads"
+  fi
   SNAP_DRY=$dry
+  # Read by snapshot_assert_allowlist. Not a setting and not in the shipped
+  # unit (it runs plain `snapshot`): one run, typed by a person.
+  SNAP_ACCEPT_ALLOWLIST=$accept
   # From here every refusal is recorded as a failed run. A dry run is an
   # inspection, not a backup attempt, so it records nothing either way.
   [[ $dry == 1 ]] || RUN_RECORDING=1
@@ -893,6 +954,10 @@ cmd_snapshot() {
   [[ $dry == 1 ]] || data_repo_gitignore_sync_commit
   snapshot_floors_from_history
   snapshot_assert_allowlist
+  # Under the lock, and only once the assert above has passed on the list this
+  # run accepted. A dry run never gets here: the flag and --dry-run refuse each
+  # other at the top of this function.
+  if [[ $accept == 1 ]]; then snapshot_accept_allowlist_commit; fi
   snapshot_stage
   lists_load
   manifests_generate "$STAGE"

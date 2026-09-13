@@ -74,14 +74,25 @@ Below twenty a flat bootstrap floor of twenty applied, so a machine whose
 config genuinely lives in fifteen paths was refused on every run, with a
 message about damage and nothing but a test-only variable to get past it.
 The floor is at least nine tenths of the last committed count, rounded up,
-and the bootstrap floor still applies to a repo that has never committed a
-list. A new config key, `minAllowlist`, overrides both and is the answer to
-"I trimmed the list on purpose"; set it to the number of entries you
-actually have, which has to be at least 1, since a floor of nothing is not a
-floor. The refusal names the key, and the config file to put it in,
-alongside the two counts it compared. It is the one key `setup` never writes
-for you: its being there at all is what says you chose the number, so a
-config that does not mention it gets the derived floor.
+and the refusal says both counts and the arithmetic between them.
+
+A repo that has never committed a list has nothing to compare against, and
+there a new config key sets the floor: `minAllowlist`, default 20, a
+positive integer, since a floor of nothing is not a floor. It is read before
+the first snapshot and only then. Once a list has been committed the floor
+follows that list, the key is ignored, and the tool says so once per run
+while it is still in the config. It is also the one key `setup` never writes
+for you: its being there at all is what says you chose the number.
+
+`omabackup snapshot --accept-allowlist` is the way to trim the list on
+purpose once the floor is following your history. That run takes
+`allowlist.txt` as it stands, commits it in a commit of its own, and
+finishes; the next run's floor is derived from the list it finds committed,
+so the flag is needed once and not again. One run, not a setting: the
+shipped timer runs plain `snapshot`, and the flag is refused outright with
+`--dry-run`, which commits nothing and so cannot record the trim. Every
+other guard still applies to that run, the file-count floor, the
+vanished-entry check and both secret gates included. The refusal names it.
 
 `omabackup self-test` takes a few minutes instead of twelve. Its fixture
 snapshots ran the real machine-fact tools (pacman, systemctl, npm, fprintd
