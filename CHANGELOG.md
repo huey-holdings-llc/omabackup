@@ -239,6 +239,16 @@ is copied as a symlink instead of being followed to whatever it points at.
 The validator step now sees the same tree a clone would, and it names the
 file it could not copy instead of only saying the assembly failed.
 
+The `/etc` scan no longer trusts a path straight out of pacman's own prose.
+Neither `pacman -Qii`'s "Backup Files" list nor `pacman -Qqo`'s "No package
+owns" stderr has a NUL-delimited form, so a real newline inside a reported
+path split one entry into two lines, and the fragment that still carried the
+parser's marker read as a whole path of its own, naming a file that was
+never on disk while the real path it was cut from went unreported. Both
+sections now check a parsed candidate against the filesystem and pacman's
+own ownership answer before it can become a row; one that fails either check
+is a single `# ERROR: unparseable /etc path from pacman output` row instead.
+
 ### Security
 
 `setup` refuses a remote URL that carries a password, whether it arrives
