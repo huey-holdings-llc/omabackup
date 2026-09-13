@@ -162,6 +162,22 @@ if grep -rn -- $'\xe2\x80\x94' README.md CHANGELOG.md CONTRIBUTING.md SECURITY.m
 if grep -nE '\beval\b' bin/omabackup lib/*.sh; then bad "eval in the engine"; else ok "no eval"; fi
 
 step "docs"
+# README's CLI block is a verbatim copy of what `omabackup help` prints, minus
+# the shared footer line, and until now nothing checked that. The verb table in
+# bin/omabackup is the source of truth; this is the one copy of it that lives
+# somewhere the table cannot reach, so it is the one that can drift.
+readme_cli_block() {
+  awk '
+    /^### CLI$/       { want = 1; next }
+    want && /^```/    { if (inblock) exit; inblock = 1; next }
+    inblock           { print }
+  ' README.md
+}
+if diff -u <(readme_cli_block) <(bin/omabackup help | head -n -1); then
+  ok "README's CLI block matches omabackup help"
+else
+  bad "README's CLI block has drifted from omabackup help"
+fi
 grep -q '## Remove' README.md && ok "README has a Remove section" || bad "README lacks Remove"
 grep -q '## Update' README.md && ok "README has an Update section" || bad "README lacks Update"
 grep -q 'omarchy plugin add' README.md && ok "README has the install command" || bad "README lacks install command"
