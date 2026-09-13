@@ -22,6 +22,14 @@ restore_warn() { warn "$*"; RESTORE_FAILURES=$((RESTORE_FAILURES+1)); }
 # restore_skip PATH REASON: record a stage (or an item within one) that was
 # not attempted.
 restore_skip() { RESTORE_SKIPPED+=("{\"path\":$(jstr "$1"),\"reason\":$(jstr "$2")}"); }
+# restore_reset_accumulators: start the five RESTORE_* globals the stages
+# append to from empty. cmd_restore calls it before its own stages, and
+# verify.sh calls it before borrowing restore_stage_configs for the throwaway
+# copy. Both used to spell the list out, which meant lib/verify.sh declared
+# four globals it never reads, with four SC2034 disables explaining why.
+restore_reset_accumulators() {
+  RESTORE_WOULD=(); RESTORE_WROTE=(); RESTORE_BACKED_UP=(); RESTORE_SKIPPED=(); RESTORE_FAILURES=0
+}
 # restore_stage_failed NAME BEFORE: a stage returned non-zero. Count it, unless
 # it already counted a failure of its own on the way out -- one problem is one
 # problem, and the generic line used to add a second, so a single unreadable
@@ -568,7 +576,7 @@ cmd_restore() {
   done
   [[ "$any" == 1 ]] || usage_die "restore: choose at least one of --configs --etc --packages --plugins --services --all"
 
-  RESTORE_WOULD=(); RESTORE_WROTE=(); RESTORE_BACKED_UP=(); RESTORE_SKIPPED=(); RESTORE_FAILURES=0
+  restore_reset_accumulators
 
   if ! take_lock; then
     restore_warn "the repo lock is held (a snapshot may be running); try again shortly"
