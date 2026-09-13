@@ -152,12 +152,8 @@ setup_data_repo() {
   # says this directory is ours, never before.
   # A rerun MERGES into whatever config already exists (remote.trusted,
   # shellNag, timer.* and setupPhase must all survive); only a first-ever
-  # setup starts clean from CONFIG_DEFAULTS.
-  if config_exists; then
-    config_write "$(jq -c --argjson d "$CONFIG_DEFAULTS" --arg r "$dir" '$d * . + {dataRepo:$r}' "$CONFIG_FILE")"
-  else
-    config_write "$(jq -cn --arg r "$dir" --argjson d "$CONFIG_DEFAULTS" '$d + {dataRepo:$r}')"
-  fi
+  # setup starts clean from CONFIG_DEFAULTS. config_merge_write is both cases.
+  config_merge_write "$(jq -cn --arg r "$dir" '{dataRepo:$r}')"
   # shellcheck disable=SC2034  # CFG_JSON: read by cfg() (lib/config.sh), not this file
   CFG_JSON=$(cat "$CONFIG_FILE")
   DATA_REPO=$dir
@@ -294,11 +290,8 @@ setup_import() {
   # An imported repo was cloned by someone else, under whatever umask they
   # had, and this path chmod'd nothing at all, so all of .git stayed readable.
   # setup_marker below tightens it, once the marker says the repo is ours.
-  if config_exists; then
-    config_write "$(jq -c --argjson d "$CONFIG_DEFAULTS" --arg r "$dir" '$d * . + {dataRepo:$r}' "$CONFIG_FILE")"
-  else
-    config_write "$(jq -cn --arg r "$dir" --argjson d "$CONFIG_DEFAULTS" '$d + {dataRepo:$r}')"
-  fi
+  # Same merge-or-seed as setup_data_repo, and the same one helper.
+  config_merge_write "$(jq -cn --arg r "$dir" '{dataRepo:$r}')"
   # shellcheck disable=SC2034  # CFG_JSON: read by cfg() (lib/config.sh), not this file
   CFG_JSON=$(cat "$CONFIG_FILE")
   DATA_REPO=$dir

@@ -317,6 +317,34 @@ config_write() {
   jq . <<<"$1" > "$tmp" && chmod 600 "$tmp" && mv -f "$tmp" "$CONFIG_FILE"
 }
 
+# config_merge_write PATCH_JSON: write the config with PATCH_JSON applied on
+# top, defaults underneath, whether or not a config exists yet.
+#
+# Both of setup's repo paths (setup_data_repo and setup_import) had the same
+# five-line if/else, and getting either half wrong is quiet: a rerun that
+# replaces instead of merging loses remote.trusted, shellNag, timer.* and
+# setupPhase, and a first run that merges into a file that is not there writes
+# nothing but the patch.
+#
+# THE TWO OPERATORS ARE DIFFERENT ON PURPOSE. `$d * .` is a DEEP merge, so a
+# config carrying only timer.calendar keeps the shipped timer.jitter beside it.
+# The patch goes on with a SHALLOW `+`, so a patch naming an object replaces
+# that object outright. Every caller today patches one scalar; the operator is
+# the one setup_remote would need if it ever came through here, which is why
+# it stays the way it is rather than deepening to match the line before it.
+#
+# It is the WRITE side only. The bare `jq '.key=...' "$CONFIG_FILE"` patches
+# elsewhere in setup.sh are deliberately not folded in: they never apply
+# CONFIG_DEFAULTS, and routing them here would materialise every default into
+# the file the first time one of them ran.
+config_merge_write() {
+  if config_exists; then
+    config_write "$(jq -c --argjson d "$CONFIG_DEFAULTS" --argjson p "$1" '$d * . + $p' "$CONFIG_FILE")"
+  else
+    config_write "$(jq -cn --argjson d "$CONFIG_DEFAULTS" --argjson p "$1" '$d + $p')"
+  fi
+}
+
 # state_write_status JSON: atomic rename so the widget's FileView never sees a torn file.
 #
 # WARN AND SKIP on every step. This runs AFTER the verb has done its work and
