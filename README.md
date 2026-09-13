@@ -334,7 +334,8 @@ minAllowlist     20; the allowlist floor BEFORE the first snapshot, and only
                  then. A positive integer (0 is refused: a floor of nothing
                  is not a floor). Once a run has committed a list the floor
                  is at least nine tenths of it, rounded up, this key is
-                 ignored, and the tool says so once per run while it is set
+                 ignored, and `snapshot`, `status` and `setup check` say so
+                 while it is still in the config
 notify           true; false silences the desktop notifications
 shellNag         false; true makes setup add the login check to ~/.bashrc
 timer.calendar   daily; the snapshot timer's OnCalendar
@@ -653,8 +654,11 @@ actually broken.
   the message is the other shape, "below the bootstrap floor of 20
   (minAllowlist)"; that one is the config key's whole job, and setting it to
   the number of entries you have (at least 1) is the answer. Once a list has
-  been committed the key is ignored, and the tool says so once per run while
-  it is still there. A third wording, "set by OMABACKUP\_MIN\_ALLOWLIST",
+  been committed the key is ignored, and the three verbs that consult the
+  floor say so while it is still there: `snapshot`, `status` and
+  `setup check`. `health` stays silent, because a login check that is quiet
+  when all is well has to stay quiet over a config that is merely out of
+  date. A third wording, "set by OMABACKUP\_MIN\_ALLOWLIST",
   only appears inside the test suite, where that variable is honoured.
 * **"data repo marker has no usable format field"**: `.omabackup` is the file
   that says the repo is OmaBackup's and what format it is in, and a marker
