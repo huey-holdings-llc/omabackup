@@ -354,9 +354,12 @@ snapshot_stage() {
     # 0600 or 0640 file the user can read on disk for everyone, and modes.txt
     # recorded the wider mode as the real one; an exec bit would flip git to
     # 100755. -L: -r and install follow a symlink, so the mode is the
-    # target's, not the link's 777.
+    # target's, not the link's 777. Owner-read is always kept: the copy is
+    # owned by this user, who could read the source (the -r above), and a
+    # root-owned 0040 the user reads through its group would otherwise land
+    # as a user-owned 0040 that its own owner cannot read (Codex, PR 12).
     m=$(stat -L -c %a "$src" 2>/dev/null) || { warn "cannot read the mode of $f, skipping"; continue; }
-    install -Dm"$(printf '%o' $(( 8#$m & 8#644 )))" "$src" "$STAGE/etc/${f#/etc/}" || warn "could not stage $f"
+    install -Dm"$(printf '%o' $(( (8#$m & 8#644) | 8#400 )))" "$src" "$STAGE/etc/${f#/etc/}" || warn "could not stage $f"
   done < <(read_list "$DATA_REPO/etc-allowlist.txt")
 
   # Anything the size guard skipped. A silently dropped config is the exact
