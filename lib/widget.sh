@@ -317,16 +317,18 @@ cmd_ignore() {
     "ignored ~/$entry (reason: $reason)"
 }
 
-# widget_entry_vanished REL: 0 when allowlist.txt carries an entry for REL
-# (optional or not) that does not resolve in $HOME at this moment. The entry
-# is compared whole, comments stripped, because an entry is a glob and
-# building a regex out of one is the kind of code that rots.
+# widget_allowlist_has REL: 0 when allowlist.txt carries REL as a whole
+# entry, with or without the optional marker. Compared whole, comments
+# stripped, because an entry is a glob and building a regex out of one is the
+# kind of code that rots. Three callers, one comparison.
 widget_allowlist_has() {
   awk -v rel="$1" '
     { line=$0; sub(/[ \t]+#.*$/,"",line); sub(/[ \t]+$/,"",line) }
     line==rel || line=="?"rel { found=1; exit }
     END { exit !found }' "$DATA_REPO/allowlist.txt" 2>/dev/null
 }
+# widget_entry_vanished REL: 0 when allowlist.txt carries an entry for REL
+# (optional or not) that does not resolve in $HOME at this moment.
 widget_entry_vanished() {
   local rel=$1
   widget_allowlist_has "$rel" || return 1
