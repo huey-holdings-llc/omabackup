@@ -5128,9 +5128,13 @@ if group 106 "every verb answers --help, --remove says how to confirm, and diver
     "$(env HOME="$FH" "$CLI" restore --help --json 2>/dev/null | jq -sc 'length')" "1"
   has "and the object carries the verb's usage" \
     "$(env HOME="$FH" "$CLI" restore --help --json 2>/dev/null | jq -r .usage)" "restore"
-  # An unknown verb is still an unknown verb, --help or no --help.
+  # An unknown verb is still an unknown verb, --help or no --help. The verb
+  # is DATA: looked up with a case pattern it was glob text, so a bare "*"
+  # matched every row in the table and answered with the whole usage, exit 0.
   eq "a verb that does not exist is still usage (exit 2)" \
     "$(env HOME="$FH" "$CLI" bogus --help >/dev/null 2>&1; echo $?)" "2"
+  eq "and a verb that is a glob is not read as one (exit 2)" \
+    "$(env HOME="$FH" "$CLI" '*' --help >/dev/null 2>&1; echo $?)" "2"
 
   # setup --remove with nothing that can ask: the answer is no, and the
   # message has to say how to mean yes. It used to say only "cancelled".
@@ -5164,6 +5168,12 @@ if group 106 "every verb answers --help, --remove says how to confirm, and diver
   has "and points at the README row that carries the recovery" "$p106b" "Remote has diverged"
   eq "and no longer hands a git incantation to a non-developer" \
     "$(grep -c -- 'pull --rebase' <<<"$p106b" || true)" "0"
+  # Read from the suite because the message above is a POINTER: it names a
+  # README row instead of carrying the command, so a row that gets renamed or
+  # deleted leaves the user nowhere, and only an assertion that reads the file
+  # catches that. The 20-line window is the row's own length (it holds a
+  # fenced command block), narrow enough that a match cannot come from the
+  # next row down.
   grep -q '^\* \*\*Remote has diverged\*\*' "$HERE/../README.md" \
     && ok "the README row it names exists" || bad "README has no 'Remote has diverged' troubleshooting row"
   grep -A20 '^\* \*\*Remote has diverged\*\*' "$HERE/../README.md" | grep -q -- 'pull --rebase' \

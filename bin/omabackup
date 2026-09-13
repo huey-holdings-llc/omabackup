@@ -81,9 +81,10 @@ verb_row() {
 verb_rows() {
   local want=${1:-} i
   for ((i = 0; i < ${#VERB_TABLE[@]}; i += 3)); do
-    if [[ -n "$want" ]]; then
-      case " ${VERB_TABLE[i]} " in *" $want "*) ;; *) continue ;; esac
-    fi
+    # The verb is DATA. As a case pattern it was glob text, so `omabackup '*'
+    # --help` matched every row; inside [[ ]] the quoted side is a literal and
+    # only the bare wildcards are pattern.
+    if [[ -n "$want" ]] && [[ " ${VERB_TABLE[i]} " != *" $want "* ]]; then continue; fi
     verb_row "${VERB_TABLE[i+1]}" "${VERB_TABLE[i+2]}"
   done
 }
@@ -92,7 +93,9 @@ verb_rows() {
 verb_known() {
   local i
   for ((i = 0; i < ${#VERB_TABLE[@]}; i += 3)); do
-    case " ${VERB_TABLE[i]} " in *" $1 "*) return 0 ;; esac
+    # Quoted left side, so the verb is a literal and not a glob: as a case
+    # pattern, `omabackup '*' --help` matched every row and exited 0.
+    if [[ " ${VERB_TABLE[i]} " == *" $1 "* ]]; then return 0; fi
   done
   return 1
 }
