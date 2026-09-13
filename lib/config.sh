@@ -2,7 +2,7 @@
 # Config and state paths. Unknown keys are an error: a typo must not silently
 # disable a threshold.
 # shellcheck shell=bash
-# shellcheck disable=SC2034  # CFG_*, STOCK_DIR, WIDGET_DRIFT_LIMIT, NAG_DAYS: read by later libs, not this one
+# shellcheck disable=SC2034  # CFG_*, STOCK_DIR, WIDGET_DRIFT_LIMIT, UNCOMMITTED_LIMIT, NAG_DAYS: read by later libs, not this one
 
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 XDG_STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -70,6 +70,8 @@ OMABACKUP_SKIP_TIMERS="${OMABACKUP_SKIP_TIMERS:-0}"
 OMABACKUP_LOCK_WAIT="${OMABACKUP_LOCK_WAIT:-20}"
 export OMABACKUP_SKIP_ETC OMABACKUP_SKIP_TIMERS OMABACKUP_LOCK_WAIT
 WIDGET_DRIFT_LIMIT=2000
+# The most own edits status lists and the Commit button commits in one go.
+UNCOMMITTED_LIMIT=1000
 NAG_DAYS=7
 
 # Test-only floor overrides: an empty value means "unset", i.e. derive from

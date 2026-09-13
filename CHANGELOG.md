@@ -21,6 +21,20 @@ writes the marker and runs the sync.
 
 ### Fixed
 
+The popup's Commit button now commits every edit it counts. `status`
+counted every uncommitted change in the data repo outside the snapshot's own
+files, but the button staged only the four lists and `.gitignore`, so
+anything else (a skill file kept in the repo through a symlink, say) showed
+as "1 uncommitted" for good while the button ran and moved nothing. The two
+now share one list. The confirm dialog names each file by its path, where it
+used to show raw `git status` lines; the button stages exactly those paths
+and never reads a name as a pattern; the staged secret scan still gates the
+commit; and a list that changed after the dialog was drawn is shown again
+instead of committed. `omabackup push --confirm` commits the same set. Past
+1000 edits the button refuses and says how to commit by hand. status.json
+gains `uncommitted_count`, `uncommitted_truncated` and `uncommitted_sig`, and
+`uncommitted` now holds bare paths.
+
 The drift scan no longer reports the tool's own files, on any data repo:
 the five systemd units setup writes (by their exact names; a hand-written
 unit beside them, even one starting `omabackup-`, is still reported) and

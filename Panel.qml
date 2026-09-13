@@ -65,6 +65,8 @@ Panel {
   readonly property int driftCount: st && st.drift_count ? st.drift_count : 0
   readonly property var problems: st && st.problems ? st.problems : []
   readonly property var uncommitted: st && st.uncommitted ? st.uncommitted : []
+  // The true count: `uncommitted` is capped, like drift.
+  readonly property int uncommittedCount: st && typeof st.uncommitted_count === "number" ? st.uncommitted_count : uncommitted.length
   readonly property int unpushed: st && st.unpushed ? st.unpushed : 0
   // "Stay local" is a first-class answer to the wizard's remote question, so
   // the popup says so instead of claiming a push state it cannot have.
@@ -243,7 +245,18 @@ Panel {
   function confirmPush() {
     confirmOpen = false
     if (!root.svc) return
-    root.svc.pushOrConfirm(true, function(rep) { root.reportAction(rep, "push failed") })
+    root.svc.pushOrConfirm(true, function(rep) {
+      // The list changed after the dialog drew it. The engine committed
+      // nothing and the refresh brings the new list; show it again rather
+      // than painting a refusal over a reply that is only asking.
+      if (rep && rep.needs_confirm) {
+        root.actionError = ""
+        root.actionNote = "the list changed; check it and confirm again"
+        root.confirmOpen = true
+        return
+      }
+      root.reportAction(rep, "push failed")
+    }, root.st ? root.st.uncommitted_sig : "")
   }
   function openTriage() { root.close(); if (root.svc) root.svc.openTerminal() }
   // The repo's page, if there is one this tool can name. Guarded on the same
@@ -466,7 +479,7 @@ Panel {
             InfoRow {
               visible: root.uncommitted.length > 0
               width: parent.width; label: "Repo edits"
-              value: root.uncommitted.length + " uncommitted"
+              value: root.uncommittedCount + " uncommitted"
               foreground: root.foreground; dimColor: root.dim; fontFamily: root.fontFamily
             }
           }
@@ -490,6 +503,16 @@ Panel {
                 font.pixelSize: Style.font.caption
                 elide: Text.ElideMiddle
               }
+            }
+            Text {
+              visible: root.uncommittedCount > root.uncommitted.length
+              width: parent.width
+              text: "and " + (root.uncommittedCount - root.uncommitted.length) + " more: too many for the button, commit them by hand"
+              textFormat: Text.PlainText
+              wrapMode: Text.WordWrap
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
             }
             Row {
               width: parent.width

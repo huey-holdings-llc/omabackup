@@ -405,7 +405,7 @@ omabackup <verb> [args] [--json]
   status                                            health (writes status.json)
   allow PATH | ignore PATH [REASON]                 triage a drift entry
   resolve-gone PATH remove|optional                 fix a vanished entry
-  push [--confirm]                                  push commits (lists need --confirm)
+  push [--confirm [SIG]]                            push commits (repo edits need --confirm)
   lint [--no-walk]                                  list hygiene
   restore --configs|--etc|--packages|--plugins|--services|--all [--apply]
   verify                                            restore fidelity check

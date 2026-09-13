@@ -1567,14 +1567,13 @@ if group 51 "widget write verbs: allow, ignore, resolve-gone, push, timer, open"
   else
     echo "  (gitleaks not installed: skipping push --confirm assertions)"
   fi
-  # The watch list is the four lists, and only those. `.gitleaks.toml` was
-  # watched here too, which told the user an edit to it was a live rules
-  # change worth confirming; the scan has always used the plugin's own
-  # share/gitleaks.toml, so the repo copy does nothing and the confirmation
-  # was about nothing.
-  printf '\n# an edit an older version would have asked about\n' >> "$FR/.gitleaks.toml"
-  eq "push does not watch the inert .gitleaks.toml" \
-    "$(obj push | jq -r '[.files[]? | select(. == ".gitleaks.toml")] | length')" "0"
+  # `.gitleaks.toml` is inert (lib/secrets.sh scans with the plugin's own
+  # share/gitleaks.toml), and it is still a file in the repo: status counts an
+  # edit to it, so the button has to offer it. What the button asks about is
+  # exactly what status counts, not a judgement about which files matter.
+  printf '\n# an edit to the inert rules copy\n' >> "$FR/.gitleaks.toml"
+  eq "push asks about every edit status counts, the inert .gitleaks.toml included" \
+    "$(obj push | jq -r '[.files[]? | select(. == ".gitleaks.toml")] | length')" "1"
   git -C "$FR" checkout -q -- .gitleaks.toml
   # Back to the crafted report: checkout would resurrect the last COMMITTED
   # drift.txt, which never named appz, and the lock test below needs it named.
@@ -1928,9 +1927,9 @@ if group 64 "a flagless setup rerun keeps the configured data repo, remote and p
 fi
 
 if group 65 "push --confirm runs the staged secret gate"; then
-  # The push button stages the five watched list files and commits them. That
-  # path had NO content scan at all, so a token pasted into .gitleaks.toml (or
-  # any other list) was committed and then pushed by the very next line.
+  # The push button stages the repo's own edits (the lists among them) and
+  # commits them. That path had NO content scan at all, so a token pasted into
+  # a list was committed and then pushed by the very next line.
   mk_fixture g65; seed_home; commit_baseline
   git -C "$FR" push -q -u origin main 2>/dev/null || true
 
@@ -4170,6 +4169,151 @@ if group 99 "a snapshot that refuses says so at once, instead of looking healthy
   jq '.ok=false | .reason="stale leftover" | .at=1' "$rec99" > "$T/r99" && mv "$T/r99" "$rec99"
   eq "a failure older than the last good run is ignored" \
     "$(obj status | jq -r '[.problems[] | select(test("refused"))] | length')" "0"
+fi
+
+if group 52 "the Commit button commits every edit status counts, and only what it showed"; then
+  # status counted every dirty path outside the snapshot's own four, and the
+  # button staged a hardcoded five list files. Anything in the first set and
+  # not the second -- the owner's case was a Claude skill file living in the
+  # data repo through a symlink -- was an "N uncommitted" nothing could clear.
+  mk_fixture g52; seed_home; commit_baseline
+  mkdir -p "$FR/bin"; printf 'echo 1\n' > "$FR/bin/foo"; printf 'old\n' > "$FR/old-note.md"
+  git -C "$FR" add bin/foo old-note.md && git -C "$FR" commit -qm "hand-kept files"
+  git -C "$FR" push -q -u origin main 2>/dev/null || true
+
+  # The staged scan is part of what this group proves, so it must decide on a
+  # machine without gitleaks too: the same fake group 65 uses.
+  GL52=""
+  if ! command -v gitleaks >/dev/null; then
+    mkdir -p "$T/fakebin"
+    cat > "$T/fakebin/gitleaks" <<'FAKEGL'
+#!/bin/sh
+case " $* " in
+  *" --staged "*)
+    if git diff --cached 2>/dev/null | grep -q 'sk-ant-'; then
+      echo "fake gitleaks: anthropic-api-key found in a staged file"
+      exit 1
+    fi
+    ;;
+esac
+exit 0
+FAKEGL
+    chmod +x "$T/fakebin/gitleaks"
+    GL52="$T/fakebin:"
+  fi
+  pj52() { env HOME="$FH" PATH="${GL52}$PATH" "$CLI" "$@" --json 2>/dev/null; }
+
+  # Four kinds of edit outside the old watch list: a tracked edit, an untracked
+  # file inside an untracked directory, a deletion, and a name that is a glob.
+  printf 'echo 2\n' >> "$FR/bin/foo"
+  mkdir -p "$FR/.claude/skills/x"; printf 'registry\n' > "$FR/.claude/skills/x/registry.md"
+  rm "$FR/old-note.md"
+  printf 'literal\n' > "$FR/m*.txt"
+  # And two edits that are the snapshot's own turf, which the button must never
+  # sweep up. `m*.txt` read as a glob matches manifests/drift.txt, so a button
+  # that did not stage its paths literally would commit it.
+  printf '# dirty manifest line\n' >> "$FR/manifests/drift.txt"
+  printf '\n# edited in the repo copy\n' >> "$FR/home/.bashrc"
+
+  s52=$(pj52 status)
+  eq "status names every own edit by its bare path" \
+    "$(jq -c '.uncommitted | sort' <<<"$s52")" \
+    '[".claude/skills/x/registry.md","bin/foo","m*.txt","old-note.md"]'
+  sig52=$(jq -r '.uncommitted_sig // ""' <<<"$s52")
+  [[ "$sig52" =~ ^[0-9]+$ ]] && ok "status carries a signature of that list" || bad "no uncommitted_sig" "$sig52"
+  has "the login nag names the button's own verb" "$(ob health)" "omabackup push --confirm"
+
+  p52=$(pj52 push)
+  eq "push without --confirm asks about exactly the same files" \
+    "$(jq -c '[.needs_confirm, (.files | sort)]' <<<"$p52")" \
+    '[true,[".claude/skills/x/registry.md","bin/foo","m*.txt","old-note.md"]]'
+  eq "and with the same signature" "$(jq -r .sig <<<"$p52")" "$sig52"
+
+  # A file dirtied between the popup drawing the list and the click must not be
+  # committed unseen: the signature no longer matches, so the reply asks again.
+  head52=$(git -C "$FR" rev-parse HEAD)
+  printf 'late\n' > "$FR/late.txt"
+  r52=$(pj52 push --confirm "$sig52")
+  eq "a stale signature is sent back for confirmation" "$(jq -c '[.ok,.needs_confirm]' <<<"$r52")" '[false,true]'
+  has "naming the file that appeared" "$(jq -r '.files[]' <<<"$r52")" "late.txt"
+  eq "and nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$head52"
+  fails "a signature that is not a number is refused" pj52 push --confirm 'abc'
+  eq "and that commits nothing either" "$(git -C "$FR" rev-parse HEAD)" "$head52"
+
+  sig52=$(jq -r .sig <<<"$r52")
+  c52=$(pj52 push --confirm "$sig52")
+  eq "the current signature commits" "$(jq -c '[.ok,.committed]' <<<"$c52")" '[true,5]'
+  eq "the commit holds exactly the five edits, the deletion included" \
+    "$(git -C "$FR" show --name-only --format= HEAD | LC_ALL=C sort | paste -sd' ')" \
+    ".claude/skills/x/registry.md bin/foo late.txt m*.txt old-note.md"
+  eq "nothing is left for the button" "$(pj52 status | jq -c .uncommitted)" "[]"
+  has "the snapshot's manifest edit was not swept up" "$(git -C "$FR" status --porcelain -- manifests)" "drift.txt"
+  has "nor its home/ edit" "$(git -C "$FR" status --porcelain -- home)" ".bashrc"
+  eq "the commit reached the remote" "$(git -C "$FR" rev-list --count origin/main..main 2>/dev/null || echo x)" "0"
+  git -C "$FR" checkout -q -- manifests home
+
+  # A rename staged by hand carries two paths; both are the edit.
+  git -C "$FR" mv bin/foo bin/bar
+  sig52=$(pj52 status | jq -r .uncommitted_sig)
+  eq "a staged rename commits" "$(pj52 push --confirm "$sig52" | jq -r .ok)" "true"
+  eq "as a rename, with nothing left behind" \
+    "$(git -C "$FR" status --porcelain | grep -c . || true)|$(git -C "$FR" show --name-status --format= HEAD | cut -c1)" "0|R"
+
+  # The snapshot's filename gate applies here too (Codex, PR 10). An adopted
+  # repo can already track a credential-named file, .gitignore only hides
+  # untracked ones, and the content scan cannot read an encrypted vault.
+  printf 'x\n' > "$FR/vault.kdbx"
+  git -C "$FR" add -f vault.kdbx && git -C "$FR" commit -qm "a vault someone tracked by hand"
+  printf 'y\n' >> "$FR/vault.kdbx"
+  head52=$(git -C "$FR" rev-parse HEAD)
+  v52=$(pj52 push --confirm)
+  eq "an edit to a credential-named file is refused by name" "$(jq -r .ok <<<"$v52")" "false"
+  has "saying why" "$(jq -r '.problems[0]' <<<"$v52")" "credential-looking filename"
+  eq "and nothing is committed" "$(git -C "$FR" rev-parse HEAD)" "$head52"
+  eq "or left staged" "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
+  # Taking it out of the repo is the fix, not the leak.
+  rm "$FR/vault.kdbx"
+  eq "deleting it commits" "$(pj52 push --confirm | jq -r .ok)" "true"
+  eq "as a deletion" "$(git -C "$FR" show --name-status --format= HEAD)" "$(printf 'D\tvault.kdbx')"
+
+  # json_escape drops control bytes, so the dialog would show a name that is
+  # not the path the signature binds and git stages (Codex, PR 10).
+  printf 'n\n' > "$FR/notes"$'\r'".md"
+  head52=$(git -C "$FR" rev-parse HEAD)
+  n52=$(pj52 push --confirm)
+  eq "a name with a control character is refused, not shown altered" "$(jq -r .ok <<<"$n52")" "false"
+  has "saying so" "$(jq -r '.problems[0]' <<<"$n52")" "control character"
+  eq "and nothing is committed" "$(git -C "$FR" rev-parse HEAD)" "$head52"
+  rm "$FR/notes"$'\r'".md"
+  # The same for a byte that is not UTF-8: jq turns it into U+FFFD on its way
+  # into status.json, so the dialog would show a name git never stages, and
+  # two such names could show as one (Codex, PR 10, second review).
+  printf 'b\n' > "$FR/bad"$'\xff'".md"
+  b52=$(pj52 push --confirm)
+  eq "a name that is not UTF-8 is refused, not shown altered" "$(jq -r .ok <<<"$b52")" "false"
+  has "saying so" "$(jq -r '.problems[0]' <<<"$b52")" "not valid UTF-8"
+  eq "and nothing is committed" "$(git -C "$FR" rev-parse HEAD)" "$head52"
+  rm "$FR/bad"$'\xff'".md"
+
+  # Widening what the button commits must not widen what it lets through.
+  printf 'TOKEN=sk-ant-api03-%sAA\n' "$(rand_body 90)" > "$FR/bin/tok.sh"
+  head52=$(git -C "$FR" rev-parse HEAD)
+  t52=$(pj52 push --confirm)
+  eq "a secret in a file outside the lists is refused" "$(jq -r .ok <<<"$t52")" "false"
+  has "by the staged scan" "$t52" "staged secret scan"
+  eq "nothing committed" "$(git -C "$FR" rev-parse HEAD)" "$head52"
+  eq "and the staging undone" "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
+  rm "$FR/bin/tok.sh"
+
+  # A list the popup cannot show in full is not one the button may commit.
+  mkdir -p "$FR/bulk"
+  for i in $(seq 1 1001); do : > "$FR/bulk/f$i"; done
+  eq "a long list is capped, with the true count kept" \
+    "$(pj52 status | jq -c '[(.uncommitted | length), .uncommitted_truncated, .uncommitted_count]')" '[1000,true,1001]'
+  b52=$(pj52 push --confirm)
+  eq "and the button refuses it" "$(jq -r .ok <<<"$b52")" "false"
+  has "saying how many" "$(jq -r '.problems[0]' <<<"$b52")" "1001"
+  rm -r "$FR/bulk"
 fi
 
 echo; echo "passed=$pass failed=$fail"

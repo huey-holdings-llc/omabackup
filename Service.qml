@@ -99,7 +99,13 @@ QtObject {
       act(["snapshot"], function () { svc.refresh() })
     })
   }
-  function pushOrConfirm(confirm, onDone) { act(confirm ? ["push", "--confirm"] : ["push"], function (o) { svc.refresh(); if (onDone) onDone(o) }) }
+  // sig: status.json's uncommitted_sig for the list the dialog showed, so the
+  // engine commits that list or asks again, never a file nobody saw.
+  function pushOrConfirm(confirm, onDone, sig) {
+    var args = confirm ? ["push", "--confirm"] : ["push"]
+    if (confirm && sig) args.push(String(sig))
+    act(args, function (o) { svc.refresh(); if (onDone) onDone(o) })
+  }
   function timer(verb) { act(["timer", verb], function () { svc.refresh() }) }
   function allow(path, onDone) { act(["allow", path], function (o) { svc.refresh(); if (onDone) onDone(o) }) }
   function ignore(path, reason, onDone) { act(reason ? ["ignore", path, reason] : ["ignore", path], function (o) { svc.refresh(); if (onDone) onDone(o) }) }
