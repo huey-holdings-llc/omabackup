@@ -4598,13 +4598,29 @@ if group 56 "the last attempt reaches status.json, and a run that stands down on
   eq "and status carries a failed attempt" "$(obj status | jq -c .last_attempt_ok)" "false"
   rm "$ghp56"
   check "a run succeeds again" env HOME="$FH" "$CLI" snapshot --no-push
+  # Both blocks below need a lock held for the WHOLE of the run that contends
+  # with it, and a fixed sleep only guesses at that. Under
+  # OMABACKUP_TEST_REAL_MANIFESTS=1 the snapshot spends seconds in the real
+  # machine-fact generators, outlived the second holder's six-second sleep, and
+  # wrote its verdict once the lock came free: the suite failed on the box's
+  # speed rather than on anything the engine did. hold56 takes the lock and
+  # keeps it until let go; both ends of the handshake are bounded, so a holder
+  # that never starts fails the assertion instead of hanging the suite.
+  # hold56 LOCKFILE / free56, one holder at a time.
+  hold56() {
+    rm -f "$T/held56" "$T/release56"
+    ( flock -x 9; : > "$T/held56"
+      while [[ ! -e "$T/release56" ]]; do sleep 0.1; done ) 9>>"$1" &
+    _h56=$!
+    _d56=$(( $(date +%s) + 15 ))
+    while [[ ! -e "$T/held56" && $(date +%s) -lt $_d56 ]]; do sleep 0.05; done
+  }
+  free56() { : > "$T/release56"; wait "$_h56" 2>/dev/null; }
   # A run that finds the lock held stands down without starting. It cleared
   # the verdict first, so status said a run was under way with none running.
-  ( flock -x 9; sleep 3 ) 9>>"$FR/.lock" &
-  _l56=$!
-  sleep 0.3
+  hold56 "$FR/.lock"
   env HOME="$FH" OMABACKUP_LOCK_WAIT=1 "$CLI" snapshot --no-push >/dev/null 2>&1
-  wait "$_l56" 2>/dev/null
+  free56
   eq "a run that stood down on the lock leaves the last verdict alone" \
     "$(jq -c .ok "$OMABACKUP_STATE_DIR/last-run.json")" "true"
   # In flight: the record a run writes as it starts.
@@ -4615,15 +4631,13 @@ if group 56 "the last attempt reaches status.json, and a run that stands down on
   # would be the race the lock exists to stop, so the write is skipped and
   # said so; the run's own outcome is unchanged (Codex, PR 13, round two).
   jq -n '{ok:true, reason:"", at:(now|floor)}' > "$OMABACKUP_STATE_DIR/last-run.json"
-  ( flock -x 8; sleep 6 ) 8>>"$OMABACKUP_STATE_DIR/.last-run.lock" &
-  _w56=$!
-  sleep 0.3
+  hold56 "$OMABACKUP_STATE_DIR/.last-run.lock"
   printf 'x\n' > "$ghp56"
   o56=$(ob snapshot --no-push); rc56=$?
   eq "the run still refuses on its own terms" "$rc56" "1"
   has "and says the record was not written" "$o56" "last-run record"
   eq "the stalled writer's record is untouched" "$(jq -c .ok "$OMABACKUP_STATE_DIR/last-run.json")" "true"
-  rm "$ghp56"; wait "$_w56" 2>/dev/null
+  rm "$ghp56"; free56
 fi
 
 if group 57 "omabackup drift shows GONE rows, live, before the sentinel"; then
