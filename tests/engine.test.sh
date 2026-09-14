@@ -115,6 +115,31 @@ allow() { printf '%s\n' "$1" >> "$FR/allowlist.txt"; git -C "$FR" commit -qam "a
 fake_curl() {
   mkdir -p "$T/fakebin"; printf '#!/bin/sh\nprintf %%s "%s"\nexit %s\n' "$1" "${2:-0}" > "$T/fakebin/curl"; chmod +x "$T/fakebin/curl"
 }
+# with_stub_systemctl VERB...: run the CLI against a systemctl that says the
+# snapshot timer is neither enabled nor active, whatever this machine's own
+# timer is doing. `timer status` queries systemd whatever OMABACKUP_SKIP_TIMERS
+# says, deliberately: the popup has to show the timer the user actually has.
+# That is fine while the fake tier is first on PATH, and it is not fine under
+# OMABACKUP_TEST_REAL_MANIFESTS=1 (self-test --real), which takes the tier off
+# PATH entirely -- on a box whose own omabackup timer is armed, `timer status`
+# then answered enabled=true active=true and the weekly self-test failed for no
+# reason but a working install. The stub is not folded into mk_fixture's tier
+# because `systemctl list-unit-files` IS a manifest generator (systemd-user.txt
+# and its two siblings), and a --real run that kept the stub would stop
+# exercising the real tool there, which is the only thing --real is for. Its
+# own directory, so a group that also wants a systemctl saying yes to
+# everything can keep one on $T/fakebin at the same time. Call after mk_fixture.
+with_stub_systemctl() {
+  if [[ ! -x "$T/sysoff/systemctl" ]]; then
+    mkdir -p "$T/sysoff"
+    # `show` prints nothing and exits 0, the way it does for a timer with no
+    # next elapse; is-enabled and is-active exit 1, the way they do for a unit
+    # that is not installed.
+    printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = show ] && exit 0; done\nexit 1\n' > "$T/sysoff/systemctl"
+    chmod +x "$T/sysoff/systemctl"
+  fi
+  env PATH="$T/sysoff:$PATH" HOME="$FH" "$CLI" "$@"
+}
 
 # ---- fixture ----------------------------------------------------------------
 # mk_fixture NAME: fresh home + stock + data repo + bare remote + config under $ROOT/NAME.
@@ -4573,13 +4598,29 @@ if group 56 "the last attempt reaches status.json, and a run that stands down on
   eq "and status carries a failed attempt" "$(obj status | jq -c .last_attempt_ok)" "false"
   rm "$ghp56"
   check "a run succeeds again" env HOME="$FH" "$CLI" snapshot --no-push
+  # Both blocks below need a lock held for the WHOLE of the run that contends
+  # with it, and a fixed sleep only guesses at that. Under
+  # OMABACKUP_TEST_REAL_MANIFESTS=1 the snapshot spends seconds in the real
+  # machine-fact generators, outlived the second holder's six-second sleep, and
+  # wrote its verdict once the lock came free: the suite failed on the box's
+  # speed rather than on anything the engine did. hold56 takes the lock and
+  # keeps it until let go; both ends of the handshake are bounded, so a holder
+  # that never starts fails the assertion instead of hanging the suite.
+  # hold56 LOCKFILE / free56, one holder at a time.
+  hold56() {
+    rm -f "$T/held56" "$T/release56"
+    ( flock -x 9; : > "$T/held56"
+      while [[ ! -e "$T/release56" ]]; do sleep 0.1; done ) 9>>"$1" &
+    _h56=$!
+    _d56=$(( $(date +%s) + 15 ))
+    while [[ ! -e "$T/held56" && $(date +%s) -lt $_d56 ]]; do sleep 0.05; done
+  }
+  free56() { : > "$T/release56"; wait "$_h56" 2>/dev/null; }
   # A run that finds the lock held stands down without starting. It cleared
   # the verdict first, so status said a run was under way with none running.
-  ( flock -x 9; sleep 3 ) 9>>"$FR/.lock" &
-  _l56=$!
-  sleep 0.3
+  hold56 "$FR/.lock"
   env HOME="$FH" OMABACKUP_LOCK_WAIT=1 "$CLI" snapshot --no-push >/dev/null 2>&1
-  wait "$_l56" 2>/dev/null
+  free56
   eq "a run that stood down on the lock leaves the last verdict alone" \
     "$(jq -c .ok "$OMABACKUP_STATE_DIR/last-run.json")" "true"
   # In flight: the record a run writes as it starts.
@@ -4590,15 +4631,13 @@ if group 56 "the last attempt reaches status.json, and a run that stands down on
   # would be the race the lock exists to stop, so the write is skipped and
   # said so; the run's own outcome is unchanged (Codex, PR 13, round two).
   jq -n '{ok:true, reason:"", at:(now|floor)}' > "$OMABACKUP_STATE_DIR/last-run.json"
-  ( flock -x 8; sleep 6 ) 8>>"$OMABACKUP_STATE_DIR/.last-run.lock" &
-  _w56=$!
-  sleep 0.3
+  hold56 "$OMABACKUP_STATE_DIR/.last-run.lock"
   printf 'x\n' > "$ghp56"
   o56=$(ob snapshot --no-push); rc56=$?
   eq "the run still refuses on its own terms" "$rc56" "1"
   has "and says the record was not written" "$o56" "last-run record"
   eq "the stalled writer's record is untouched" "$(jq -c .ok "$OMABACKUP_STATE_DIR/last-run.json")" "true"
-  rm "$ghp56"; wait "$_w56" 2>/dev/null
+  rm "$ghp56"; free56
 fi
 
 if group 57 "omabackup drift shows GONE rows, live, before the sentinel"; then
@@ -4752,10 +4791,13 @@ if group 101 "the triage verbs honour --json: one human line without it, one obj
   eq "push --json: the confirm gate is unchanged" \
     "$(obj push | jq -c '[.ok,.needs_confirm,(.files|length>0),(.sig|length>0)]')" '[false,true,true,true]'
 
-  t101=$(obh timer status)
+  # Through the stub systemctl: the answer has to be the fixture's, not the
+  # machine's, and `timer status` asks systemd either way (see
+  # with_stub_systemctl).
+  t101=$(with_stub_systemctl timer status 2>/dev/null)
   eq "timer status: one human line" "$t101" "timer: enabled=false active=false"
   eq "timer status --json: unchanged" \
-    "$(obj timer status | jq -c '[.ok,.enabled,.active]')" '[true,false,false]'
+    "$(with_stub_systemctl timer status --json 2>/dev/null | jq -c '[.ok,.enabled,.active]')" '[true,false,false]'
   tb101=$(obh timer sideways); tb101rc=$?
   eq "timer: an unknown verb refuses in one line" "$tb101" "refused: usage: timer pause|resume|status|run"
   eq "timer: and exits 1" "$tb101rc" "1"
