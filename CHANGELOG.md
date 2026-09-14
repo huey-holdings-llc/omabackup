@@ -5,6 +5,21 @@ Keep a Changelog 1.1.0 and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+`self-test --real`, the weekly unit, no longer fails on a machine whose own
+snapshot timer is armed. Under `--real` the test suite drops the stand-in
+tools it normally uses, and `timer status` asks systemd about the real timer
+by design, because the popup has to show you the one you actually have: the
+suite read "enabled, active" from the running install and called it a failure,
+so every working box would have raised a weekly alarm about itself. That
+assertion now runs against a stub timer of its own. A second group failed the
+same way for a different reason: it held a lock for a fixed six seconds and
+expected a run to refuse inside that window, which a run driving the real
+machine-fact tools does not always manage. It now holds the lock until the run
+is done rather than betting on how fast the machine is. Nothing in the engine
+changed; both were the suite testing the box it ran on.
+
 ## [0.8.0] - 2026-09-13
 
 If you are running 0.7.0, this is the release that closes out every bug the
