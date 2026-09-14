@@ -5188,6 +5188,59 @@ if group 105 "setup check is a doctor: three line shapes, and a missing tool nam
   on105=$(env HOME="$FH" PATH="$D105" OMABACKUP_SKIP_TIMERS=0 "$CLI" setup check 2>/dev/null)
   has "an armed snapshot timer says ok" "$on105" "^ok    snapshot timer$"
   has "an armed self-test timer says ok" "$on105" "^ok    self-test timer$"
+  # The warn above came from OMABACKUP_SKIP_TIMERS, which leaves units_s false
+  # without asking systemctl anything: the disabled-timer line had never been
+  # exercised through the probe itself. A systemctl that answers "not enabled"
+  # for the snapshot timer and yes for the self-test one separates the two, so
+  # a probe that stopped answering could not hide behind the skip.
+  SC105="$T/nosnapbin"; mkdir -p "$SC105"
+  for f105 in "$D105"/*; do
+    [[ "$(basename "$f105")" == systemctl ]] || cp -P "$f105" "$SC105/"
+  done
+  cat > "$SC105/systemctl" <<'SC105EOF'
+#!/bin/sh
+for a in "$@"; do
+  [ "$a" = omabackup-snapshot.timer ] && exit 1
+done
+exit 0
+SC105EOF
+  chmod +x "$SC105/systemctl"
+  off105=$(env HOME="$FH" PATH="$SC105" OMABACKUP_SKIP_TIMERS=0 "$CLI" setup check 2>/dev/null)
+  has "a systemctl that says the snapshot timer is not enabled makes it a warn" "$off105" \
+    "^warn  snapshot timer:"
+  has "and it still names the systemctl line that arms it" "$off105" \
+    "systemctl --user enable --now omabackup-snapshot.timer"
+  has "while the self-test timer, which is enabled, still says ok" "$off105" \
+    "^ok    self-test timer$"
+
+  # THE MACHINE THE README SENDS TO --no-timers. With systemd-analyze absent
+  # the doctor FAILed for timer.calendar and timer.jitter and exited 1
+  # forever, on a box that had done exactly what it was told: the two values
+  # reach nothing without a unit to put them in, so there is no decision left
+  # for the user to make and nothing for a FAIL to mean.
+  nsa105=$(mk_path105 systemd-analyze)
+  check "setup --no-timers finishes on a PATH with no systemd-analyze" \
+    env HOME="$FH" PATH="$nsa105" "$CLI" setup --data-repo "$FR" --no-timers --yes
+  [[ -e "$FH/.config/systemd/user/omabackup-snapshot.timer" ]] \
+    && bad "--no-timers wrote a snapshot timer unit after all" \
+    || ok "and it leaves no snapshot timer unit behind"
+  nt105=$(env HOME="$FH" PATH="$nsa105" "$CLI" setup check 2>/dev/null); ntrc105=$?
+  has "with no unit installed, timer.calendar is a warn" "$nt105" \
+    "^warn  timer.calendar: no snapshot timer is installed, so this value is not used. Fix: omabackup setup$"
+  has "and timer.jitter the same" "$nt105" \
+    "^warn  timer.jitter: no snapshot timer is installed, so this value is not used. Fix: omabackup setup$"
+  eq "so the doctor exits 0 on the configuration the docs send you to" "$ntrc105" "0"
+
+  # ...and the FAIL is still there the moment a unit exists, because then the
+  # value really is in use and nothing on the machine can check it.
+  mkdir -p "$FH/.config/systemd/user"
+  printf '[Timer]\nOnCalendar=daily\n' > "$FH/.config/systemd/user/omabackup-snapshot.timer"
+  u105=$(env HOME="$FH" PATH="$nsa105" "$CLI" setup check 2>/dev/null); urc105=$?
+  has "with a unit installed, timer.calendar is a FAIL again" "$u105" \
+    "^FAIL  timer.calendar: systemd-analyze not found"
+  has "and timer.jitter too" "$u105" "^FAIL  timer.jitter: systemd-analyze not found"
+  eq "and the doctor exits 1" "$urc105" "1"
+  rm -f "$FH/.config/systemd/user/omabackup-snapshot.timer"
 
   # The --json shape is the widget's and it is additive only: the keys that
   # were there before are still there, still with the same types.
@@ -6027,6 +6080,359 @@ EOF
   eq "one git --help probe for the whole snapshot" \
     "$(grep -c '^git --help$' "$GLLOG112" || true)" "1"
 fi
+
+if group 114 "the two list commits a run signs go through the staged secret gate"; then
+  # AGENTS.md invariant 3: gitleaks over exactly what `git add` staged, before
+  # every commit that can be pushed. --accept-allowlist and the .gitignore
+  # sync each `git add` one file and commit it inside a run that then reaches
+  # remote_push_if_ahead, and neither commit was scanned at all: a token
+  # pasted onto a comment line in allowlist.txt was committed and pushed by
+  # the very next line (whole-release review, SEC-C1). Both now stage, scan
+  # and commit through one helper, and a scan that says no resets the index
+  # and refuses the run.
+  mk_fixture g114; seed_home; commit_baseline
+
+  # The PATH-shadow stand-in group 65 uses, reading the real staged diff so a
+  # planted token is still distinguished from a clean edit, plus a log of its
+  # own argv so the "one staged scan per commit" counts below are about calls
+  # that actually happened. Installed unconditionally, not only when gitleaks
+  # is absent the way group 65 does it: this group has to decide the same way
+  # on a machine with a real gitleaks and on one without.
+  GL114="$T/fakebin-gl"; mkdir -p "$GL114"
+  GLLOG114="$T/gl-calls.log"; : > "$GLLOG114"
+  cat > "$GL114/gitleaks" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$GLLOG114"
+case " \$* " in
+  *" --staged "*)
+    if [ -f "$T/gl-refuse-staged" ]; then
+      echo "fake gitleaks: refusing this staged scan"
+      exit 1
+    fi
+    if git diff --cached 2>/dev/null | grep -q 'sk-ant-'; then
+      echo "fake gitleaks: anthropic-api-key found in a staged file"
+      exit 1
+    fi
+    # The race: a clean answer, and the worktree file rewritten behind it
+    # before this scan returns. cwd is the data repo, because
+    # secrets_scan_staged cd's there to run the scan.
+    if [ -f "$T/gl-race-line" ]; then
+      cat "$T/gl-race-line" >> allowlist.txt
+    fi
+    # The other half of the race: the INDEX moving, not the worktree. A
+    # person at a terminal running git add is not serialised by the repo
+    # flock.
+    if [ -f "$T/gl-race-stage" ]; then
+      printf 'raced in\n' > racedin114.txt
+      git add racedin114.txt
+    fi
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$GL114/gitleaks"
+  ob114()  { env HOME="$FH" PATH="$GL114:$PATH" "$CLI" "$@" 2>&1; }
+  obj114() { env HOME="$FH" PATH="$GL114:$PATH" "$CLI" "$@" --json 2>/dev/null; }
+
+  # A comment line, which is the review's own failing scenario: a value a user
+  # pasted beside a path. The line is not an entry, so nothing else in the
+  # pipeline objects to it and the staged scan is the only thing standing
+  # between it and the remote.
+  cp "$FR/allowlist.txt" "$T/al114.bak"
+  before114=$(git -C "$FR" rev-parse HEAD)
+  key114="sk-ant-api03-$(rand_body 90)AA"
+  printf '# pasted by accident: %s\n' "$key114" >> "$FR/allowlist.txt"
+  a114=$(obj114 snapshot --no-push --accept-allowlist)
+  eq "--accept-allowlist refuses a secret pasted into allowlist.txt" \
+    "$(jq -r .ok <<<"$a114")" "false"
+  has "and the refusal names the staged scan" "$(jq -r .error <<<"$a114")" "staged secret scan"
+  eq "nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$before114"
+  eq "and the index is clean again" \
+    "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
+
+  # ...and a clean acceptance still commits, so the gate is not simply
+  # refusing everything. Two staged scans in that run and no more: one for
+  # the allowlist commit the flag makes, one for the snapshot's own.
+  cp "$T/al114.bak" "$FR/allowlist.txt"
+  mkdir -p "$FH/.config/t114"; printf 'setting=1\n' > "$FH/.config/t114/a.conf"
+  printf '.config/t114/a.conf\n' >> "$FR/allowlist.txt"
+  : > "$GLLOG114"
+  check "a clean acceptance still commits" \
+    env HOME="$FH" PATH="$GL114:$PATH" "$CLI" snapshot --no-push --accept-allowlist
+  eq "the accepted list is recorded in a commit of its own" \
+    "$(git -C "$FR" log --format=%s -n 3 | grep -c '^omabackup: allowlist accepted at ' || true)" "1"
+  eq "one staged scan for that commit, one for the snapshot's own, and no more" \
+    "$(grep -c -- '--staged' "$GLLOG114" || true)" "2"
+
+  # WHAT THE SCAN CLEARED IS WHAT GETS COMMITTED. The commit used to name its
+  # path (`git commit -- allowlist.txt`), and git documents that files given
+  # on the command line make it ignore their STAGED contents and record their
+  # current worktree contents instead. A file rewritten while gitleaks was
+  # running, or between its clean answer and the commit, was therefore
+  # committed unscanned and pushed by the same run: the exact hole the helper
+  # exists to close (Codex on PR #23). The stand-in plays that race, appending
+  # a matching line to the worktree file after it has answered clean.
+  printf '# appended behind the scan: sk-ant-api03-%sAA\n' "$(rand_body 90)" > "$T/gl-race-line"
+  printf '.config/t114/b.conf\n' >> "$FR/allowlist.txt"
+  printf 'setting=2\n' > "$FH/.config/t114/b.conf"
+  staged114=$(cat "$FR/allowlist.txt")
+  check "the run still finishes" \
+    env HOME="$FH" PATH="$GL114:$PATH" "$CLI" snapshot --no-push --accept-allowlist
+  eq "the commit carries what the scan cleared, not what the worktree became" \
+    "$(git -C "$FR" show HEAD:allowlist.txt)" "$staged114"
+  eq "so the line appended behind the scan is in no commit at all" \
+    "$(git -C "$FR" log -p --format= -- allowlist.txt | grep -c 'appended behind the scan' || true)" "0"
+  eq "and it is left in the worktree, as an edit for a human" \
+    "$(( $(grep -c 'appended behind the scan' "$FR/allowlist.txt" || true) >= 1 ))" "1"
+  eq "which git reports as an unstaged modification" \
+    "$(git -C "$FR" status --porcelain -- allowlist.txt)" " M allowlist.txt"
+  rm -f "$T/gl-race-line"
+  cp "$T/al114.bak" "$FR/allowlist.txt"
+  printf '.config/t114/a.conf\n.config/t114/b.conf\n' >> "$FR/allowlist.txt"
+  # Quiet: the restore above reproduces exactly what HEAD carries, so git has
+  # nothing to do and says so on stdout.
+  git -C "$FR" commit -qam "back to the list the run scanned" >/dev/null 2>&1 || true
+
+  # ...and the other half of that race: not the worktree changing behind the
+  # scan, but the INDEX. The repo flock does not stop another process running
+  # `git add`, and a commit that takes the whole index takes whatever landed
+  # there, so a path staged after the scan answered clean was committed
+  # unscanned and pushed by the same run (Codex on PR #23, round two). The
+  # tree is pinned by hash before the scan and compared again after it.
+  : > "$T/gl-race-stage"
+  printf '.config/t114/d.conf\n' >> "$FR/allowlist.txt"
+  printf 'setting=4\n' > "$FH/.config/t114/d.conf"
+  before114i=$(git -C "$FR" rev-parse HEAD)
+  i114=$(obj114 snapshot --no-push --accept-allowlist)
+  rm -f "$T/gl-race-stage"
+  eq "a path staged while the scan ran refuses the acceptance" \
+    "$(jq -r .ok <<<"$i114")" "false"
+  has "and the refusal says the index moved under the scan" \
+    "$(jq -r .error <<<"$i114")" "index changed while"
+  eq "nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$before114i"
+  eq "and the raced-in path is in no commit" \
+    "$(git -C "$FR" log --format= --name-only | grep -cx 'racedin114.txt' || true)" "0"
+  eq "the run records the refusal, so status does not read healthy" \
+    "$(obj status | jq -r .last_attempt_ok)" "false"
+  git -C "$FR" reset -q >/dev/null 2>&1 || true
+  rm -f "$FR/racedin114.txt"
+
+  # ...and the empty index the pathspec-free commit rests on is a
+  # precondition, not an assumption. With an unrelated path staged by hand the
+  # acceptance stands down rather than committing an index that holds more
+  # than it staged and scanned.
+  printf 'scratch\n' > "$FR/handstaged114.txt"
+  git -C "$FR" add handstaged114.txt
+  printf '.config/t114/c.conf\n' >> "$FR/allowlist.txt"
+  printf 'setting=3\n' > "$FH/.config/t114/c.conf"
+  n114=$(git -C "$FR" log --format=%s | grep -c '^omabackup: allowlist accepted at ' || true)
+  s114=$(ob114 snapshot --no-push --accept-allowlist)
+  has "a pre-staged path stands the acceptance down instead of riding along" \
+    "$s114" "something is already staged in the data repo"
+  eq "so no acceptance commit was made" \
+    "$(git -C "$FR" log --format=%s | grep -c '^omabackup: allowlist accepted at ' || true)" "$n114"
+  eq "and no commit carries the hand-staged path" \
+    "$(git -C "$FR" log --format= --name-only | grep -cx 'handstaged114.txt' || true)" "0"
+  git -C "$FR" reset -q -- handstaged114.txt
+  rm -f "$FR/handstaged114.txt"
+
+  # THE .gitignore SYNC IS THE SAME SHAPE. It appends the patterns this
+  # version ships to an adopted repo and commits them inside the same run.
+  # A secret cannot be planted in that block from a fixture (the block is
+  # copied from the plugin's own share/data.gitignore), so the stand-in is
+  # told to refuse the staged scan outright: what is being proved is that
+  # this commit goes through the gate at all, and that a refusal leaves HEAD
+  # and the index alone.
+  mk_fixture g114g; seed_home; commit_baseline
+  GL114g="$T/fakebin-gl"; mkdir -p "$GL114g"
+  GLLOG114g="$T/gl-calls.log"; : > "$GLLOG114g"
+  cat > "$GL114g/gitleaks" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$GLLOG114g"
+case " \$* " in
+  *" --staged "*)
+    echo "fake gitleaks: a secret in the appended block"
+    exit 1
+    ;;
+esac
+exit 0
+EOF
+  chmod +x "$GL114g/gitleaks"
+  # An adopted repo: a .gitignore missing two of the shipped patterns, and
+  # that state committed, so the sync has something to append and the file is
+  # clean before it does.
+  grep -vxF -e '.pypirc' -e 'hosts.yml' "$FR/.gitignore" > "$T/gi114" && mv "$T/gi114" "$FR/.gitignore"
+  git -C "$FR" commit -qam "an older .gitignore, two shipped patterns short"
+  before114g=$(git -C "$FR" rev-parse HEAD)
+  : > "$GLLOG114g"
+  g114=$(env HOME="$FH" PATH="$GL114g:$PATH" "$CLI" snapshot --no-push --json 2>/dev/null)
+  eq "the .gitignore sync's own commit is refused when the staged scan says no" \
+    "$(jq -r .ok <<<"$g114")" "false"
+  has "and that refusal names the staged scan too" "$(jq -r .error <<<"$g114")" "staged secret scan"
+  eq "nothing was committed" "$(git -C "$FR" rev-parse HEAD)" "$before114g"
+  eq "and the index is clean again" \
+    "$(git -C "$FR" diff --cached --name-only | grep -c . || true)" "0"
+  eq "the run stopped at the sync's own staged scan, before the snapshot's" \
+    "$(grep -c -- '--staged' "$GLLOG114g" || true)" "1"
+
+  # SETUP'S OWN FIRST COMMIT. setup_seed stages any seed list git has never
+  # seen, which on a directory the user had already put their own
+  # allowlist.txt in is a USER-PROVIDED file going into the repo's very first
+  # commit, with setup_first_snapshot pushing that history moments later. It
+  # went in with no content scan at all (Codex on PR #23, round two), and it
+  # is also the one caller whose HEAD is unborn when the helper runs.
+  mk_fixture g114s
+  GL114s="$T/fakebin-gl"; mkdir -p "$GL114s"
+  cat > "$GL114s/gitleaks" <<'FAKEGL'
+#!/bin/sh
+case " $* " in
+  *" --staged "*)
+    if git diff --cached 2>/dev/null | grep -q 'sk-ant-'; then
+      echo "fake gitleaks: anthropic-api-key found in a staged file"
+      exit 1
+    fi
+    ;;
+esac
+exit 0
+FAKEGL
+  chmod +x "$GL114s/gitleaks"
+  SD114="$T/seedrepo"; mkdir -p "$SD114"
+  git init -q -b main "$SD114"
+  git -C "$SD114" config user.email t@t; git -C "$SD114" config user.name t
+  printf '# my own list, never committed\n.bashrc\n# pasted: sk-ant-api03-%sAA\n' \
+    "$(rand_body 90)" > "$SD114/allowlist.txt"
+  s114=$(env HOME="$FH" PATH="$GL114s:$PATH" "$CLI" setup --data-repo "$SD114" --no-timers --yes --json 2>/dev/null)
+  eq "setup refuses a secret already sitting in the directory's own allowlist.txt" \
+    "$(jq -r .ok <<<"$s114")" "false"
+  has "and the refusal names the scan" "$(jq -r .error <<<"$s114")" "staged secret scan"
+  git -C "$SD114" rev-parse --verify -q HEAD >/dev/null \
+    && bad "setup committed an initial layout it had not scanned" \
+    || ok "so the repo still has no commit at all"
+
+  # ...and a directory with nothing planted in it seeds exactly as before,
+  # through the same unborn-HEAD path.
+  SD114c="$T/seedclean"; mkdir -p "$SD114c"
+  check "a clean directory still seeds" \
+    env HOME="$FH" PATH="$GL114s:$PATH" "$CLI" setup --data-repo "$SD114c" --no-timers --yes
+  eq "with the initial layout committed" \
+    "$(git -C "$SD114c" log --format=%s 2>/dev/null | grep -c '^omabackup: initial layout$' || true)" "1"
+  eq "and the seed lists in it" \
+    "$(git -C "$SD114c" ls-tree -r --name-only HEAD | grep -c '^allowlist.txt$' || true)" "1"
+  eq "the marker too" \
+    "$(git -C "$SD114c" ls-tree -r --name-only HEAD | grep -c '^.omabackup$' || true)" "1"
+  # A rerun lays nothing new down, so it must be a silent no-op rather than an
+  # empty commit: that is what the old `commit || true` was really for.
+  n114s=$(git -C "$SD114c" log --format=%s | grep -c . || true)
+  check "a flagless rerun is idempotent" \
+    env HOME="$FH" PATH="$GL114s:$PATH" "$CLI" setup --data-repo "$SD114c" --no-timers --yes
+  eq "and adds no second layout commit" \
+    "$(git -C "$SD114c" log --format=%s | grep -c . || true)" "$n114s"
+
+  # SIGNING IS NOT INHERITED BY commit-tree. `git commit` honours
+  # commit.gpgsign and `git commit-tree` does not, so building these commits
+  # by hand quietly stopped signing them for anyone who signs by default,
+  # while snapshot_commit and push --confirm carried on signing: one repo,
+  # two kinds of commit, and a remote that requires signatures rejecting the
+  # push the same run makes (Codex on PR #23, round three). ssh signing
+  # rather than gpg: no keyring, no agent, no passphrase prompt, and the key
+  # is generated inside the fixture so nothing here touches the operator's
+  # own. %G? is "N" for an unsigned commit and a letter (U for a good
+  # signature by a key no allowed-signers file vouches for) otherwise.
+  if command -v ssh-keygen >/dev/null 2>&1; then
+    mk_fixture g114k; seed_home
+    ssh-keygen -q -t ed25519 -N '' -C omabackup-suite -f "$T/signkey" </dev/null
+    git -C "$FR" config commit.gpgsign true
+    git -C "$FR" config gpg.format ssh
+    git -C "$FR" config user.signingkey "$T/signkey.pub"
+    commit_baseline
+    mkdir -p "$FH/.config/k114"; printf 'setting=1\n' > "$FH/.config/k114/a.conf"
+    printf '.config/k114/a.conf\n' >> "$FR/allowlist.txt"
+    check "a run signs its acceptance commit where the repo signs by default" \
+      env HOME="$FH" "$CLI" snapshot --no-push --accept-allowlist
+    sig114=$(git -C "$FR" log --format='%G?%x09%s' \
+      | awk -F'\t' '$2 ~ /^omabackup: allowlist accepted at/ { print $1; exit }')
+    [[ -n "$sig114" && "$sig114" != N ]] \
+      && ok "the acceptance commit carries a signature (%G?=$sig114)" \
+      || bad "the acceptance commit is unsigned in a repo that signs by default" "got %G?='$sig114'"
+    # The snapshot's own commit goes through `git commit`, so the two halves
+    # of one run's history have to agree: that is the regression, stated as
+    # the property rather than as one commit's flag.
+    snapsig114=$(git -C "$FR" log -1 --format='%G?')
+    [[ -n "$snapsig114" && "$snapsig114" != N ]] \
+      && ok "and the snapshot's own commit in the same run agrees with it" \
+      || bad "the two commits one run makes disagree about signing" \
+             "acceptance=$sig114 snapshot=$snapsig114"
+
+    # ...and a repo that does not sign still gets plain commits. Set
+    # explicitly to false, not merely left out: this machine's own global
+    # gitconfig may well turn signing on, and an assertion that passes
+    # because of the operator's settings proves nothing in CI.
+    mk_fixture g114u; seed_home
+    git -C "$FR" config commit.gpgsign false
+    commit_baseline
+    mkdir -p "$FH/.config/u114"; printf 'setting=1\n' > "$FH/.config/u114/a.conf"
+    printf '.config/u114/a.conf\n' >> "$FR/allowlist.txt"
+    check "a run commits unsigned where the repo does not sign" \
+      env HOME="$FH" "$CLI" snapshot --no-push --accept-allowlist
+    unsig114=$(git -C "$FR" log --format='%G?%x09%s' \
+      | awk -F'\t' '$2 ~ /^omabackup: allowlist accepted at/ { print $1; exit }')
+    eq "and that acceptance commit carries no signature" "$unsig114" "N"
+  else
+    ok "skipped: no ssh-keygen, so the signing assertions cannot run"
+  fi
+
+  # EVERY NON-ZERO EXIT PUTS THE INDEX BACK. The helper's own precondition is
+  # an empty index, so a commit that fails after the `git add` must not leave
+  # its paths staged for the next caller in the same process. A signing key
+  # that does not exist is the cheapest way to make commit-tree fail for a
+  # real reason: setup's layout commit returns 1, setup warns rather than
+  # dying, and --no-timers means no snapshot runs afterwards to muddy what
+  # the repo then looks like.
+  mk_fixture g114f
+  SD114f="$T/nokeyrepo"; mkdir -p "$SD114f"
+  git init -q -b main "$SD114f"
+  git -C "$SD114f" config user.email t@t; git -C "$SD114f" config user.name t
+  git -C "$SD114f" config commit.gpgsign true
+  git -C "$SD114f" config gpg.format ssh
+  git -C "$SD114f" config user.signingkey "$T/there-is-no-such-key.pub"
+  env HOME="$FH" "$CLI" setup --data-repo "$SD114f" --no-timers --yes >/dev/null 2>&1 || true
+  git -C "$SD114f" rev-parse --verify -q HEAD >/dev/null \
+    && bad "a commit whose signing failed still landed" \
+    || ok "a commit whose signing failed makes no commit"
+  git -C "$SD114f" diff --cached --quiet \
+    && ok "and leaves nothing staged, so the empty-index precondition still holds" \
+    || bad "a failed commit left its paths staged" "$(git -C "$SD114f" diff --cached --name-only | paste -sd' ')"
+fi
+
+if group 115 "a drift scan that cannot make its scratch still says so, and still prints one JSON object"; then
+  # `rep=$(drift_scan)` lost the `local` that used to mask the assignment's
+  # status, so under set -e a scan returning 1 (an unwritable or full
+  # $STATE_DIR) killed the process at that line: the "# ERROR drift: cannot
+  # create a scratch directory" row it had just produced was sitting in $rep
+  # and never printed, and --json printed no object at all, against
+  # AGENTS.md invariant 4 (whole-release review, ARCH-I1). 0.7.0 printed
+  # both.
+  mk_fixture g115; seed_home; commit_baseline
+  # Same lever group 109 uses for the vanish guard: a state directory that
+  # takes no new files.
+  chmod 500 "$OMABACKUP_STATE_DIR"
+  d115=$(env HOME="$FH" "$CLI" drift 2>/dev/null); rc115=$?
+  j115=$(env HOME="$FH" "$CLI" drift --json 2>/dev/null); rc115j=$?
+  chmod 700 "$OMABACKUP_STATE_DIR"
+  eq "drift exits 1 when it cannot make its scratch" "$rc115" "1"
+  has "and prints the ERROR row it produced, instead of nothing" "$d115" \
+    "^# ERROR drift: cannot create a scratch directory under"
+  eq "drift --json exits 1 too" "$rc115j" "1"
+  eq "and still prints exactly one JSON object" \
+    "$(jq -sc 'length' <<<"$j115" 2>/dev/null || echo 0)" "1"
+  eq "which says the scan did not complete" "$(jq -r .complete <<<"$j115")" "false"
+  # The scan works again once the directory does, so the assertions above are
+  # about the unwritable state and not about a fixture that was broken all
+  # along.
+  eq "and a scan runs again once the directory takes files" \
+    "$(obj drift | jq -r .complete)" "true"
+fi
+
 
 group_close
 if (( ${#GROUP_SECS[@]} > 1 )); then

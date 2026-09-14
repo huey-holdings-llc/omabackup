@@ -732,11 +732,16 @@ data_repo_gitignore_sync_commit() {
     warn "something is already staged in the data repo, so the $GITIGNORE_SYNC_ADDED appended .gitignore pattern(s) were not committed; commit them with the popup's Commit button, or omabackup push --confirm"
     return 0
   fi
-  git_ident_args
-  if git -C "$DATA_REPO" add -- .gitignore \
-     && git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -q -m "omabackup: .gitignore gains $GITIGNORE_SYNC_ADDED ignore pattern(s) this version ships" -- .gitignore; then
-    log "committed the .gitignore update"
-  else
-    warn "could not commit the .gitignore update; it stays an uncommitted edit (the popup's Commit button, or omabackup push --confirm)"
-  fi
+  # Staged, scanned and committed through the one helper both list-commit
+  # paths use (repo_commit_scanned, lib/secrets.sh): this commit can be pushed
+  # by the same run, so it is scanned like any other.
+  local rc=0
+  repo_commit_scanned .gitignore \
+    -m "omabackup: .gitignore gains $GITIGNORE_SYNC_ADDED ignore pattern(s) this version ships" || rc=$?
+  case $rc in
+    0|3) log "committed the .gitignore update" ;;
+    2) die "the staged secret scan refused the .gitignore update; staging undone, nothing committed" ;;
+    4) die "the data repo index changed while the .gitignore update was being scanned, so what would have been committed is not what was scanned; staging undone, nothing committed" ;;
+    *) warn "could not commit the .gitignore update; it stays an uncommitted edit (the popup's Commit button, or omabackup push --confirm)" ;;
+  esac
 }

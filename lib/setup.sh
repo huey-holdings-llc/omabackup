@@ -203,12 +203,24 @@ setup_seed() {
     case " ${laid[*]} " in *" $s "*) continue ;; esac
     git -C "$DATA_REPO" ls-files --error-unmatch -- "$s" >/dev/null 2>&1 || laid+=("$s")
   done
-  git -C "$DATA_REPO" add -- "${laid[@]}" >/dev/null
-  # `git commit -q` does not suppress "nothing to commit, working tree
-  # clean" on stdout when a rerun has nothing new to lay down; that line
+  # Through the scanned-commit helper, like every other commit this tool
+  # signs. `laid` is not all this tool's own output: the loop just above adds
+  # any seed list git has never seen, which on a directory someone had already
+  # put their own allowlist.txt in is a USER-PROVIDED file being committed
+  # into the repo's first commit, with setup_first_snapshot pushing that
+  # history moments later. It went in with no content scan at all (Codex on
+  # PR #23). The helper also answers 3 for a rerun that laid nothing new down,
+  # which is what the old `|| true` was really for: `git commit -q` does not
+  # suppress "nothing to commit, working tree clean" on stdout, and that line
   # must never leak into a --json caller's single JSON object.
-  git_ident_args
-  git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -qm "omabackup: initial layout" >/dev/null 2>&1 || true
+  local seedrc=0
+  repo_commit_scanned "${laid[@]}" -m "omabackup: initial layout" || seedrc=$?
+  case $seedrc in
+    0|3) : ;;
+    2) die "the staged secret scan refused the data repo's initial layout, so nothing was committed. Fix the finding in the list files under $DATA_REPO (or record it in $DATA_REPO/.gitleaksignore) and run omabackup setup again" ;;
+    4) die "the data repo index changed while the initial layout was being scanned, so what would have been committed is not what was scanned; nothing was committed" ;;
+    *) warn "could not commit the initial layout in $DATA_REPO; the files are there as uncommitted edits, and nothing is left staged" ;;
+  esac
   setup_phase "seeded"
 }
 
@@ -308,11 +320,23 @@ setup_import() {
   # Commit the marker. Nothing else ever does: the snapshot commits its four
   # output paths and push --confirm the four lists, so an uncommitted
   # .omabackup meant a clone of the adopted repo carried no marker at all and
-  # every verb refused it there. `|| true` for the same reason as setup_seed:
-  # a rerun with nothing new to write must be a silent no-op, not a failure.
-  git -C "$DATA_REPO" add -- "${adopted[@]}" >/dev/null || die "could not stage the adoption marker"
-  git_ident_args
-  git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} commit -qm "omabackup: adopt existing repo" >/dev/null 2>&1 || true
+  # every verb refused it there. A rerun with nothing new to write is a silent
+  # no-op rather than a failure, which is what the helper's rc 3 is for; this
+  # used to be a `|| true` on the commit itself.
+  # Through the same helper as setup_seed's layout commit. Everything in
+  # `adopted` is this tool's own output, so the scan has nothing to find; what
+  # the helper buys here is the other half of the same guarantee, that the
+  # commit records the tree it scanned rather than the whole index. An adopted
+  # repo is somebody's existing clone, so its index is exactly the one this
+  # tool has no business committing on their behalf.
+  local adoptrc=0
+  repo_commit_scanned "${adopted[@]}" -m "omabackup: adopt existing repo" || adoptrc=$?
+  case $adoptrc in
+    0|3) : ;;
+    2) die "the staged secret scan refused the adoption commit, so nothing was committed. Fix the finding in $DATA_REPO (or record it in $DATA_REPO/.gitleaksignore) and run omabackup setup --import again" ;;
+    4) die "the data repo index changed while the adoption commit was being scanned; nothing was committed" ;;
+    *) warn "could not commit the adoption marker in $DATA_REPO; it is there as an uncommitted edit, and nothing is left staged" ;;
+  esac
   # A repo from an older version lacks the ignore patterns added since. The
   # gate used to append them on the first scan and leave the edit; the sync
   # now owns its commit, and adoption is the other path that commits.
@@ -599,14 +623,32 @@ setup_check() {
   # --json can then tell "checked and fine" from "not checked at all"
   # without also reading timer.systemdAnalyze to disambiguate a bare true.
   #
-  # Missing systemd-analyze is FAIL, not warn: setup_units (below in this
-  # file) now refuses to write a unit file it cannot validate, so a machine
-  # with no systemd-analyze cannot finish a timers setup at all, and this
-  # doctor has to say so at the same severity, not shrug it off as a
-  # cosmetic gap. cal_ok/jit_ok stay null either way -- neither value was
-  # actually checked -- the FAIL comes from ok=false and the line's own
-  # level below.
-  local have_sysd_analyze=false cal_ok=null jit_ok=null
+  # Missing systemd-analyze is FAIL, not warn, WHEN A SNAPSHOT TIMER UNIT IS
+  # INSTALLED: setup_units (below in this file) refuses to write a unit file
+  # it cannot validate, so a machine with no systemd-analyze cannot finish a
+  # timers setup at all, and this doctor has to say so at the same severity,
+  # not shrug it off as a cosmetic gap.
+  #
+  # With no unit installed those two lines are a warn instead, and leave ok
+  # alone. The documented way out on a box with no systemd-analyze is
+  # `setup --no-timers` (README Requirements, README Troubleshooting, and
+  # setup_units' own refusal), and taking it used to change nothing here: the
+  # two FAIL lines still printed, the doctor still exited 1, and the widget's
+  # SetupCard stayed red forever on a machine that had done exactly what it
+  # was told (whole-release review, FP-I1). A FAIL has to be something the
+  # user can clear on the configuration the docs send them to, and with no
+  # unit to put them in these two values reach nothing at all.
+  #
+  # cal_ok/jit_ok stay null in both of those cases -- neither value was
+  # actually checked -- so the FAIL comes from ok=false and the line's own
+  # level below, and --json still tells "checked and fine" from "not
+  # checked at all".
+  #
+  # $HOME/.config/systemd/user is where setup_units writes and where
+  # lib/health.sh reads the installed calendar back from; it is the same path
+  # spelt the same way.
+  local have_sysd_analyze=false cal_ok=null jit_ok=null snap_unit=false
+  [[ -f "$HOME/.config/systemd/user/omabackup-snapshot.timer" ]] && snap_unit=true
   if config_exists; then
     cfg=true
     # "setup-check" so config_load says whether minAllowlist is doing anything
@@ -621,7 +663,7 @@ setup_check() {
         && cal_ok=true || { cal_ok=false; ok=false; }
       systemd-analyze timespan -- "$CFG_TIMER_JITTER" >/dev/null 2>&1 \
         && jit_ok=true || { jit_ok=false; ok=false; }
-    else
+    elif [[ $snap_unit == true ]]; then
       ok=false
     fi
     url=$(remote_origin_url)
@@ -674,9 +716,11 @@ setup_check() {
     # fail vs warn is not decoration. FAIL is exactly the set of checks that
     # set ok=false above (the four required tools, the marker, a
     # timer.calendar or timer.jitter systemd-analyze itself rejects, and
-    # timer.calendar/timer.jitter when systemd-analyze is missing entirely --
-    # setup_units refuses to write a unit file it cannot validate, so this
-    # is not a cosmetic gap either), so a FAIL line means this verb exits 1,
+    # timer.calendar/timer.jitter when systemd-analyze is missing entirely
+    # AND a snapshot timer is installed -- setup_units refuses to write a
+    # unit file it cannot validate, so this is not a cosmetic gap either,
+    # while with no unit installed the same two lines are a warn that leaves
+    # the exit code alone), so a FAIL line means this verb exits 1,
     # and exiting 0 means there was no FAIL line. Everything else that is
     # wrong but does not refuse is a warn.
     setup_check_line "$have_git"      fail "git"      "not installed" "pacman -S git"
@@ -705,18 +749,29 @@ setup_check() {
       # all. Both are FAIL, not warn: a warn here used to leave a machine
       # free to finish `setup` with a value nothing had actually checked,
       # and now it cannot.
+      #
+      # The third branch is the machine with no systemd-analyze and no
+      # snapshot timer installed, which is where `setup --no-timers` leaves
+      # you: two values that reach nothing, no decision left to make, and so
+      # a warn that does not touch the exit code (FP-I1). The moment a unit
+      # exists the FAIL is back.
       if [[ "$have_sysd_analyze" == true ]]; then
         setup_check_line "$cal_ok" fail "timer.calendar" \
           "not a systemd OnCalendar expression" "edit timer.calendar in $CONFIG_FILE"
         setup_check_line "$jit_ok" fail "timer.jitter" \
           "not a systemd time span" "edit timer.jitter in $CONFIG_FILE"
-      else
+      elif [[ $snap_unit == true ]]; then
         setup_check_line false fail "timer.calendar" \
           "systemd-analyze not found, so it cannot be checked, and setup now refuses to write an unvalidated unit file" \
           "pacman -S systemd, or omabackup setup --no-timers to finish setup without a timer"
         setup_check_line false fail "timer.jitter" \
           "systemd-analyze not found, so it cannot be checked, and setup now refuses to write an unvalidated unit file" \
           "pacman -S systemd, or omabackup setup --no-timers to finish setup without a timer"
+      else
+        setup_check_line false warn "timer.calendar" \
+          "no snapshot timer is installed, so this value is not used" "omabackup setup"
+        setup_check_line false warn "timer.jitter" \
+          "no snapshot timer is installed, so this value is not used" "omabackup setup"
       fi
       # Rendered from units_s/units_t, the same two values --json reports, and
       # not gated on OMABACKUP_SKIP_TIMERS: the gate belongs on the PROBE (it

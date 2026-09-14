@@ -226,7 +226,8 @@ else below is used when it is there and skipped, or reported, when it is not.
 | `fuser` | `psmisc` | proving an abandoned `.git/index.lock` really is abandoned | yes |
 | `setsid` | `util-linux` | starting a snapshot, or a terminal, detached from the widget | yes |
 | `python3` | `python` | re-parsing a normalized JSON file to prove the rule did not break it | yes |
-| `omarchy-launch-floating-terminal-with-presentation` or `xdg-terminal-exec` | Omarchy, `xdg-terminal-exec` | the popup's "open a terminal in the data repo" button (the Omarchy launcher is preferred) | yes |
+| `omarchy-launch-floating-terminal-with-presentation` or `xdg-terminal-exec` | Omarchy, `xdg-terminal-exec` | the popup's Triage button, which opens the drift report in a pager (the Omarchy launcher is preferred); `omabackup open` from a terminal is the bare shell in the data repo | yes |
+| `less` | `less` | `omabackup open --report`, and so the popup's Triage button. Without it the verb refuses with "less is not installed" and the button opens nothing | yes |
 | `wl-copy` | `wl-clipboard` | copying the gitleaks install command from the setup card | yes |
 | `omarchy-launch-browser` or `xdg-open` | Omarchy, `xdg-utils` | `open --remote`: the backup repository's page on GitHub (the Omarchy launcher is preferred) | yes |
 | `omarchy-notification-send` or `notify-send` | Omarchy, `libnotify` | desktop notifications for a failed or diverged run | yes |
@@ -255,10 +256,13 @@ shapes.
 
 A `FAIL` line is what makes the verb exit 1, so an exit of 0 means there was
 no `FAIL` line. It covers the tools in the first two tables, the config, the
-data repo (with its path) and its marker, the two timers and the remote, and
-every line that is not `ok` carries the command that fixes it, its own
-`pacman -S <package>` included. `setup check --json` prints the same answers
-as one object for the widget.
+data repo (with its path) and its marker, the two timers, the two timer
+values (`timer.calendar` and `timer.jitter`, checked against systemd's own
+grammar when `systemd-analyze` is there to ask, and reported as a `warn`
+saying the value is not used when no snapshot timer is installed) and the
+remote, and every line that is not `ok` carries the command that fixes it,
+its own `pacman -S <package>` included. `setup check --json` prints the same
+answers as one object for the widget.
 
 ## Install
 
@@ -345,11 +349,13 @@ setupPhase       setup's own resume marker, not something to edit
 
 Edits take effect on the next run, with two exceptions that only setup reads.
 `timer.*` is written into the unit files, so rerun `omabackup setup --yes`
-after changing it; no other verb validates it, so a bad value is only ever
-caught there, and by `omabackup setup check`, never by another verb along
-the way (`status` still reads `timer.calendar` back out of config to compare
-it against the installed unit, just without checking it against systemd's
-grammar).
+after changing it; no other verb checks it against systemd's grammar, so a
+value systemd cannot parse is only ever caught there, and by `omabackup setup
+check`, never by another verb along the way. Every verb still refuses a
+backslash, a newline or a `%` in either value, which is the cheap half of the
+same guard and forks nothing (`status` also reads `timer.calendar` back out
+of config to compare it against the installed unit, just without asking
+systemd about it).
 `shellNag` set to true adds the login check the next time
 setup runs; set back to false it removes nothing, so take the two lines under
 the OmaBackup comment out of `~/.bashrc` yourself (`setup --remove` does,
@@ -498,9 +504,12 @@ validated to be exactly `owner/repo`, so nothing a git remote says can
 send your browser somewhere else. `omabackup open --remote` does the same
 thing from a terminal.
 
-Right-click the bar icon to refresh without opening the popup. The bar shows
-a quiet glyph when everything is healthy, a drift count when something needs
-triage, and an alert triangle when a guard has actually fired.
+Right-click the bar icon to refresh without opening the popup. The bar has
+one glyph per state, so it tells them apart on its own: an outline before
+setup, or before the first status answers; the plain disk when everything is
+healthy; a disk with an alert mark while something waits on you, with the
+drift count beside it when there is drift to triage; and the alert triangle
+when a guard has actually fired.
 
 ## FAQ
 
@@ -647,9 +656,12 @@ actually broken.
   stands, commits it, and because the next run's floor is derived from the
   list it finds committed, the flag is not needed again. It is one run, not a
   setting: nothing in the config and nothing in the timer's unit turns the
-  floor off, and every other guard (the file floor, the vanished-entry check,
-  both secret gates) still applies to that run. It cannot be combined with
-  `--dry-run`, which commits nothing and so cannot record the trim.
+  floor off, and every other guard still applies to that run: the file floor,
+  the vanished-entry check, and the secret gates, which scan the list commit
+  the flag makes exactly as they scan the snapshot's own, so a value pasted
+  into `allowlist.txt` refuses the run instead of riding out with it. It
+  cannot be combined with `--dry-run`, which commits nothing and so cannot
+  record the trim.
   Before any run has committed a list there is nothing to compare against, and
   the message is the other shape, "below the bootstrap floor of 20
   (minAllowlist)"; that one is the config key's whole job, and setting it to
@@ -681,7 +693,11 @@ actually broken.
   matches. There is no hand edit that fixes it: rename the file, or ignore
   the folder it is in. A `[` in a name is fine and needs nothing from you:
   the entry is written as `[[]`, a one-character class holding a literal
-  bracket, which matches that file and no other.
+  bracket, which matches that file and no other. A whole *folder* whose own
+  name holds a `[` is the one exception: ignoring it as a subtree is refused,
+  because that entry's base has to be compared unquoted and doing so would
+  turn any other pattern character in the name into a glob. Ignore the files
+  inside it instead, each of which takes the escaped form above.
 * **"OMABACKUP_IN_SUITE is set outside a test run"**: the marker that lets the
   test suite weaken its own guards is set in your environment. It does
   nothing on its own (see Development below), but nothing legitimate sets it,
@@ -739,7 +755,11 @@ actually broken.
   valid, so `setup` refuses to write an unvalidated unit file and `setup
   check` reports the same gap as a FAIL, rather than assuming the value is
   fine. Install `systemd` tooling, or run `omabackup setup --no-timers` to
-  finish setup without a timer.
+  finish setup without a timer. Taking that second way out clears the FAIL:
+  with no snapshot timer installed the two values reach nothing, so the
+  doctor reports them as `warn  timer.calendar: no snapshot timer is
+  installed, so this value is not used. Fix: omabackup setup` and exits 0.
+  The FAIL is back the moment a timer unit exists again.
 
 ## Development
 

@@ -91,8 +91,10 @@ finishes; the next run's floor is derived from the list it finds committed,
 so the flag is needed once and not again. One run, not a setting: the
 shipped timer runs plain `snapshot`, and the flag is refused outright with
 `--dry-run`, which commits nothing and so cannot record the trim. Every
-other guard still applies to that run, the file-count floor, the
-vanished-entry check and both secret gates included. The refusal names it.
+other guard still applies to that run: the file-count floor, the
+vanished-entry check, and the staged secret scan, which covers the list
+commit the flag itself makes exactly as it covers the snapshot's own. The
+refusal names it.
 
 `omabackup self-test` takes a few minutes instead of twelve. Its fixture
 snapshots ran the real machine-fact tools (pacman, systemctl, npm, fprintd
@@ -125,8 +127,10 @@ committing, when you already had an uncommitted edit to `.gitignore` or
 something staged; the run says which, and the popup's Commit button or
 `push --confirm` is the way out, as before. `setup --import` does the same
 when it adopts a repo. The read-only verbs (`status`, `drift`, `lint`, the
-widget's refresh) no longer write to the data repo at all; they used to run
-this sync outside the lock. `setup --import` holds the repo lock while it
+widget's refresh) no longer write any file into the data repo; they used to
+run this sync outside the lock. They still assert the repo's own mode, so
+the repo root and `.git` are `chmod`ed back to 0700 if something has
+loosened them. `setup --import` holds the repo lock while it
 writes the marker and runs the sync.
 
 Manifests whose order carries no meaning are now sorted: group membership,
@@ -157,7 +161,13 @@ writing an unvalidated unit file anyway: neither value can be proved valid
 without it, so `setup` no longer shows a fault in the popup for a bad timer
 setting it already wrote. `setup check` reports the same thing as a doctor
 line (`ok`, or `FAIL` naming the fix, whether the value itself is bad or
-`systemd-analyze` is missing to check it with). `status` still catches the
+`systemd-analyze` is missing to check it with). The missing-`systemd-analyze`
+FAIL is asked only where the answer matters: with no snapshot timer unit
+installed, which is what `setup --no-timers` leaves you with, the two lines
+read `warn  timer.calendar: no snapshot timer is installed, so this value is
+not used. Fix: omabackup setup` and the doctor exits 0, so the documented way
+out of a box without `systemd-analyze` is not also a permanently red doctor
+and a permanently red SetupCard. `status` still catches the
 cheap, unconditional part of the same guard, the backslash, newline and
 percent sign a value must never carry, which forks nothing.
 
@@ -341,6 +351,29 @@ passed the guard entirely, and the push URL is the one a password would
 actually be used on. The warning that names a mismatched push URL redacts it
 as well. A password in a URL would otherwise sit in `.git/config`, in the
 tool's config and in the log; raised by the Codex reviews on PRs 6 and 7.
+
+Four more commits this tool makes for you are scanned before they can be
+pushed, and each one now records the exact tree the scan looked at.
+`snapshot --accept-allowlist` commits `allowlist.txt`, the `.gitignore` sync
+commits `.gitignore`, and `setup` commits the repo's initial layout and its
+adoption marker; the snapshot's own scan covers only `home/`, `etc/`,
+`manifests/` and `modes.txt`, so none of those four went through a content
+gate at all. A value pasted into a comment beside an allowlist entry, or
+already sitting in an `allowlist.txt` you had written yourself before
+pointing `setup` at the directory, could be committed and then pushed with
+nothing in front of it. All four now stage, scan and commit through one
+helper, and a scan that says no undoes the staging and refuses the run
+rather than warning.
+
+Recording the scanned tree matters as much as running the scan. The commit
+is built from the tree hash taken the moment staging finished, so a list
+rewritten in the worktree while `gitleaks` was still running cannot slip in
+behind its clean answer, and neither can a file some other process stages
+before the commit lands: if the index moves at all while the scan is
+looking, the run is refused rather than committed. Your own edit is left
+where it was, for you to commit. `setup` refusing this way means a data repo
+whose list files already hold a finding is reported before the repo has any
+history at all, rather than after it has been pushed.
 
 The filename gate refuses the run when its walk of the staging tree fails.
 The walk sat in one pipeline ending in `|| true`, put there for grep's

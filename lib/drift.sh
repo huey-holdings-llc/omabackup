@@ -798,7 +798,18 @@ X11/xorg.conf.d fonts/conf.d"
 cmd_drift() {
   data_repo_require; lists_load
   local rep g gone="" n=0 sentinel='# drift-scan-complete' body tail=""
-  rep=$(drift_scan)
+  # `|| rc=$?`, and the status is carried to the return at the end rather than
+  # being left on the assignment. In 0.7.0 this line was `local rep;
+  # rep=$(drift_scan)`, where `local`'s own exit status masked the command
+  # substitution's; once `rep` moved into the declaration above, a drift_scan
+  # returning 1 (an unwritable or full $STATE_DIR) killed the process right
+  # here under set -e, with the "# ERROR drift: cannot create a scratch
+  # directory" row it had just produced sitting unread in $rep. Nothing on
+  # stdout, nothing on stderr, and under --json no object at all, against
+  # invariant 4, which covers refusals too. Both print branches below still
+  # run; only the exit code changes.
+  local rc=0
+  rep=$(drift_scan) || rc=$?
   while IFS= read -r g; do
     [[ -n "$g" ]] || continue
     n=$((n+1))
@@ -822,6 +833,7 @@ cmd_drift() {
   else
     printf '%s\n' "$rep"
   fi
+  return $rc
 }
 
 # drift_items_json: report lines on stdin -> JSON array body (type, path, note).
