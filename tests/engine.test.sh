@@ -115,6 +115,31 @@ allow() { printf '%s\n' "$1" >> "$FR/allowlist.txt"; git -C "$FR" commit -qam "a
 fake_curl() {
   mkdir -p "$T/fakebin"; printf '#!/bin/sh\nprintf %%s "%s"\nexit %s\n' "$1" "${2:-0}" > "$T/fakebin/curl"; chmod +x "$T/fakebin/curl"
 }
+# with_stub_systemctl VERB...: run the CLI against a systemctl that says the
+# snapshot timer is neither enabled nor active, whatever this machine's own
+# timer is doing. `timer status` queries systemd whatever OMABACKUP_SKIP_TIMERS
+# says, deliberately: the popup has to show the timer the user actually has.
+# That is fine while the fake tier is first on PATH, and it is not fine under
+# OMABACKUP_TEST_REAL_MANIFESTS=1 (self-test --real), which takes the tier off
+# PATH entirely -- on a box whose own omabackup timer is armed, `timer status`
+# then answered enabled=true active=true and the weekly self-test failed for no
+# reason but a working install. The stub is not folded into mk_fixture's tier
+# because `systemctl list-unit-files` IS a manifest generator (systemd-user.txt
+# and its two siblings), and a --real run that kept the stub would stop
+# exercising the real tool there, which is the only thing --real is for. Its
+# own directory, so a group that also wants a systemctl saying yes to
+# everything can keep one on $T/fakebin at the same time. Call after mk_fixture.
+with_stub_systemctl() {
+  if [[ ! -x "$T/sysoff/systemctl" ]]; then
+    mkdir -p "$T/sysoff"
+    # `show` prints nothing and exits 0, the way it does for a timer with no
+    # next elapse; is-enabled and is-active exit 1, the way they do for a unit
+    # that is not installed.
+    printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = show ] && exit 0; done\nexit 1\n' > "$T/sysoff/systemctl"
+    chmod +x "$T/sysoff/systemctl"
+  fi
+  env PATH="$T/sysoff:$PATH" HOME="$FH" "$CLI" "$@"
+}
 
 # ---- fixture ----------------------------------------------------------------
 # mk_fixture NAME: fresh home + stock + data repo + bare remote + config under $ROOT/NAME.
@@ -4752,10 +4777,13 @@ if group 101 "the triage verbs honour --json: one human line without it, one obj
   eq "push --json: the confirm gate is unchanged" \
     "$(obj push | jq -c '[.ok,.needs_confirm,(.files|length>0),(.sig|length>0)]')" '[false,true,true,true]'
 
-  t101=$(obh timer status)
+  # Through the stub systemctl: the answer has to be the fixture's, not the
+  # machine's, and `timer status` asks systemd either way (see
+  # with_stub_systemctl).
+  t101=$(with_stub_systemctl timer status 2>/dev/null)
   eq "timer status: one human line" "$t101" "timer: enabled=false active=false"
   eq "timer status --json: unchanged" \
-    "$(obj timer status | jq -c '[.ok,.enabled,.active]')" '[true,false,false]'
+    "$(with_stub_systemctl timer status --json 2>/dev/null | jq -c '[.ok,.enabled,.active]')" '[true,false,false]'
   tb101=$(obh timer sideways); tb101rc=$?
   eq "timer: an unknown verb refuses in one line" "$tb101" "refused: usage: timer pause|resume|status|run"
   eq "timer: and exits 1" "$tb101rc" "1"
