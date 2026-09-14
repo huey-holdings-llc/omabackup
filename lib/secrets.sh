@@ -280,6 +280,16 @@ secrets_scan_staged() {
 # `update-ref` is given "" as the old value, which means "this ref must not
 # exist" and fails closed in the same way.
 #
+# commit-tree does NOT honour commit.gpgsign the way `git commit` does, so
+# this helper reads that setting itself and passes `-S`. Without it, a user
+# who signs by default got signed commits from snapshot_commit and push
+# --confirm and unsigned ones from here, and a remote that requires signed
+# commits rejects the push the same run makes.
+#
+# Every non-zero exit leaves the index as it found it: empty. That is not
+# tidiness, it is the precondition above holding for the next caller in the
+# same process.
+#
 # Returns:
 #   0  committed
 #   1  the precondition, the add, or git itself failed; nothing committed
@@ -301,16 +311,21 @@ repo_commit_scanned() {
     return 1
   fi
 
-  git -C "$DATA_REPO" add -- "${paths[@]}" || return 1
-
-  # The scanned tree, pinned by hash before anything else gets a turn.
+  # HEAD is read BEFORE the add, not after, so that the value handed to
+  # update-ref at the end covers this window too: a HEAD read after the add
+  # would already have missed a commit landing between the two, and the
+  # old-value check would then happily fast-forward over it.
   local tree old="" head_tree=""
-  tree=$(git -C "$DATA_REPO" write-tree) || { repo_commit_unstage "${paths[@]}"; return 1; }
   if old=$(git -C "$DATA_REPO" rev-parse --verify -q HEAD); then
     head_tree=$(git -C "$DATA_REPO" rev-parse --verify -q "HEAD^{tree}") || head_tree=""
   else
     old=""
   fi
+
+  git -C "$DATA_REPO" add -- "${paths[@]}" || { repo_commit_unstage "${paths[@]}"; return 1; }
+
+  # The scanned tree, pinned by hash before anything else gets a turn.
+  tree=$(git -C "$DATA_REPO" write-tree) || { repo_commit_unstage "${paths[@]}"; return 1; }
   # A rerun that laid nothing new down must be a silent no-op, not an empty
   # commit: setup_seed rewrites the marker every time and usually with the
   # same bytes.
@@ -348,17 +363,48 @@ repo_commit_scanned() {
   # set the committer AND the author for commit-tree, exactly as they do for
   # commit.
   git_ident_args
+
+  # SIGNING IS NOT INHERITED BY commit-tree. `git commit` honours
+  # commit.gpgsign; `git commit-tree` does not, so moving these commits onto
+  # commit-tree quietly stopped signing them on a machine that signs by
+  # default, while snapshot_commit and push --confirm (still `git commit`)
+  # carried on signing. That is a repo with a mixed history, and a remote
+  # configured to require signed commits rejects the push these very runs
+  # make (Codex on PR #23, round three). Asking git for the same value git
+  # itself would have read keeps the two spellings in step.
+  #
+  # `config --get --bool` exits 1 when the key is unset, so it sits on the
+  # left of `||`, and the answer is tested with an explicit `if` rather than
+  # `[[ ... ]] && arr=(-S)`, which is the errexit shape AGENTS.md warns about.
+  # The ident args cannot change what this read returns; they are passed so
+  # that every git invocation in this helper is spelled the same way.
+  local gpgsign
+  gpgsign=$(git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} \
+    config --get --bool commit.gpgsign 2>/dev/null) || gpgsign=false
+  local -a signarg=()
+  if [[ "$gpgsign" == true ]]; then signarg=(-S); fi
+
+  # A `-S` with no usable key fails here, and its reason reaches stderr
+  # untouched: the command substitution captures stdout only. That is a
+  # commit failure like any other, so the index goes back the way it was and
+  # the caller gets rc 1.
   local new
   if [[ -n "$old" ]]; then
     new=$(git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} \
-      commit-tree "$tree" -p "$old" -m "$msg") || return 1
+      commit-tree ${signarg[@]+"${signarg[@]}"} "$tree" -p "$old" -m "$msg") \
+      || { repo_commit_unstage "${paths[@]}"; return 1; }
   else
     new=$(git -C "$DATA_REPO" ${GIT_IDENT_ARGS[@]+"${GIT_IDENT_ARGS[@]}"} \
-      commit-tree "$tree" -m "$msg") || return 1
+      commit-tree ${signarg[@]+"${signarg[@]}"} "$tree" -m "$msg") \
+      || { repo_commit_unstage "${paths[@]}"; return 1; }
   fi
   # "$old" as the expected value, "" when HEAD is unborn: a HEAD that moved
-  # under us fails the update instead of being forced over.
-  git -C "$DATA_REPO" update-ref -m "$msg" HEAD "$new" "$old" || return 1
+  # under us fails the update instead of being forced over. The commit object
+  # built above is then unreferenced and git will collect it; the index goes
+  # back, so every non-zero exit from this helper leaves the empty index its
+  # own precondition asks for.
+  git -C "$DATA_REPO" update-ref -m "$msg" HEAD "$new" "$old" \
+    || { repo_commit_unstage "${paths[@]}"; return 1; }
 }
 
 # repo_commit_unstage PATHS...: undo repo_commit_scanned's own `git add`. The

@@ -6327,6 +6327,81 @@ FAKEGL
     env HOME="$FH" PATH="$GL114s:$PATH" "$CLI" setup --data-repo "$SD114c" --no-timers --yes
   eq "and adds no second layout commit" \
     "$(git -C "$SD114c" log --format=%s | grep -c . || true)" "$n114s"
+
+  # SIGNING IS NOT INHERITED BY commit-tree. `git commit` honours
+  # commit.gpgsign and `git commit-tree` does not, so building these commits
+  # by hand quietly stopped signing them for anyone who signs by default,
+  # while snapshot_commit and push --confirm carried on signing: one repo,
+  # two kinds of commit, and a remote that requires signatures rejecting the
+  # push the same run makes (Codex on PR #23, round three). ssh signing
+  # rather than gpg: no keyring, no agent, no passphrase prompt, and the key
+  # is generated inside the fixture so nothing here touches the operator's
+  # own. %G? is "N" for an unsigned commit and a letter (U for a good
+  # signature by a key no allowed-signers file vouches for) otherwise.
+  if command -v ssh-keygen >/dev/null 2>&1; then
+    mk_fixture g114k; seed_home
+    ssh-keygen -q -t ed25519 -N '' -C omabackup-suite -f "$T/signkey" </dev/null
+    git -C "$FR" config commit.gpgsign true
+    git -C "$FR" config gpg.format ssh
+    git -C "$FR" config user.signingkey "$T/signkey.pub"
+    commit_baseline
+    mkdir -p "$FH/.config/k114"; printf 'setting=1\n' > "$FH/.config/k114/a.conf"
+    printf '.config/k114/a.conf\n' >> "$FR/allowlist.txt"
+    check "a run signs its acceptance commit where the repo signs by default" \
+      env HOME="$FH" "$CLI" snapshot --no-push --accept-allowlist
+    sig114=$(git -C "$FR" log --format='%G?%x09%s' \
+      | awk -F'\t' '$2 ~ /^omabackup: allowlist accepted at/ { print $1; exit }')
+    [[ -n "$sig114" && "$sig114" != N ]] \
+      && ok "the acceptance commit carries a signature (%G?=$sig114)" \
+      || bad "the acceptance commit is unsigned in a repo that signs by default" "got %G?='$sig114'"
+    # The snapshot's own commit goes through `git commit`, so the two halves
+    # of one run's history have to agree: that is the regression, stated as
+    # the property rather than as one commit's flag.
+    snapsig114=$(git -C "$FR" log -1 --format='%G?')
+    [[ -n "$snapsig114" && "$snapsig114" != N ]] \
+      && ok "and the snapshot's own commit in the same run agrees with it" \
+      || bad "the two commits one run makes disagree about signing" \
+             "acceptance=$sig114 snapshot=$snapsig114"
+
+    # ...and a repo that does not sign still gets plain commits. Set
+    # explicitly to false, not merely left out: this machine's own global
+    # gitconfig may well turn signing on, and an assertion that passes
+    # because of the operator's settings proves nothing in CI.
+    mk_fixture g114u; seed_home
+    git -C "$FR" config commit.gpgsign false
+    commit_baseline
+    mkdir -p "$FH/.config/u114"; printf 'setting=1\n' > "$FH/.config/u114/a.conf"
+    printf '.config/u114/a.conf\n' >> "$FR/allowlist.txt"
+    check "a run commits unsigned where the repo does not sign" \
+      env HOME="$FH" "$CLI" snapshot --no-push --accept-allowlist
+    unsig114=$(git -C "$FR" log --format='%G?%x09%s' \
+      | awk -F'\t' '$2 ~ /^omabackup: allowlist accepted at/ { print $1; exit }')
+    eq "and that acceptance commit carries no signature" "$unsig114" "N"
+  else
+    ok "skipped: no ssh-keygen, so the signing assertions cannot run"
+  fi
+
+  # EVERY NON-ZERO EXIT PUTS THE INDEX BACK. The helper's own precondition is
+  # an empty index, so a commit that fails after the `git add` must not leave
+  # its paths staged for the next caller in the same process. A signing key
+  # that does not exist is the cheapest way to make commit-tree fail for a
+  # real reason: setup's layout commit returns 1, setup warns rather than
+  # dying, and --no-timers means no snapshot runs afterwards to muddy what
+  # the repo then looks like.
+  mk_fixture g114f
+  SD114f="$T/nokeyrepo"; mkdir -p "$SD114f"
+  git init -q -b main "$SD114f"
+  git -C "$SD114f" config user.email t@t; git -C "$SD114f" config user.name t
+  git -C "$SD114f" config commit.gpgsign true
+  git -C "$SD114f" config gpg.format ssh
+  git -C "$SD114f" config user.signingkey "$T/there-is-no-such-key.pub"
+  env HOME="$FH" "$CLI" setup --data-repo "$SD114f" --no-timers --yes >/dev/null 2>&1 || true
+  git -C "$SD114f" rev-parse --verify -q HEAD >/dev/null \
+    && bad "a commit whose signing failed still landed" \
+    || ok "a commit whose signing failed makes no commit"
+  git -C "$SD114f" diff --cached --quiet \
+    && ok "and leaves nothing staged, so the empty-index precondition still holds" \
+    || bad "a failed commit left its paths staged" "$(git -C "$SD114f" diff --cached --name-only | paste -sd' ')"
 fi
 
 if group 115 "a drift scan that cannot make its scratch still says so, and still prints one JSON object"; then

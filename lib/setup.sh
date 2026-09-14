@@ -219,7 +219,7 @@ setup_seed() {
     0|3) : ;;
     2) die "the staged secret scan refused the data repo's initial layout, so nothing was committed. Fix the finding in the list files under $DATA_REPO (or record it in $DATA_REPO/.gitleaksignore) and run omabackup setup again" ;;
     4) die "the data repo index changed while the initial layout was being scanned, so what would have been committed is not what was scanned; nothing was committed" ;;
-    *) warn "could not commit the initial layout in $DATA_REPO; it stays an uncommitted edit there" ;;
+    *) warn "could not commit the initial layout in $DATA_REPO; the files are there as uncommitted edits, and nothing is left staged" ;;
   esac
   setup_phase "seeded"
 }
@@ -320,8 +320,9 @@ setup_import() {
   # Commit the marker. Nothing else ever does: the snapshot commits its four
   # output paths and push --confirm the four lists, so an uncommitted
   # .omabackup meant a clone of the adopted repo carried no marker at all and
-  # every verb refused it there. `|| true` for the same reason as setup_seed:
-  # a rerun with nothing new to write must be a silent no-op, not a failure.
+  # every verb refused it there. A rerun with nothing new to write is a silent
+  # no-op rather than a failure, which is what the helper's rc 3 is for; this
+  # used to be a `|| true` on the commit itself.
   # Through the same helper as setup_seed's layout commit. Everything in
   # `adopted` is this tool's own output, so the scan has nothing to find; what
   # the helper buys here is the other half of the same guarantee, that the
@@ -334,7 +335,7 @@ setup_import() {
     0|3) : ;;
     2) die "the staged secret scan refused the adoption commit, so nothing was committed. Fix the finding in $DATA_REPO (or record it in $DATA_REPO/.gitleaksignore) and run omabackup setup --import again" ;;
     4) die "the data repo index changed while the adoption commit was being scanned; nothing was committed" ;;
-    *) warn "could not commit the adoption marker in $DATA_REPO; it stays an uncommitted edit there" ;;
+    *) warn "could not commit the adoption marker in $DATA_REPO; it is there as an uncommitted edit, and nothing is left staged" ;;
   esac
   # A repo from an older version lacks the ignore patterns added since. The
   # gate used to append them on the first scan and leave the edit; the sync
