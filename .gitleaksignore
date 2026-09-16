@@ -1,0 +1,5 @@
+# Fingerprints gitleaks reports on this repository's own history. Both are the
+# fake AWS-shaped strings tests/engine.test.sh plants to prove the filename and
+# token gates fire; they are not credentials. Format: commit:file:rule:line.
+fa2c8f65eede0616a13d3f55c72123109ebe22ab:tests/engine.test.sh:aws-access-token:390
+fa2c8f65eede0616a13d3f55c72123109ebe22ab:tests/engine.test.sh:aws-access-token:394

@@ -175,6 +175,19 @@ printf 'id_ed25519.pub\n' | grep -qE "$SECRET_KEY_PUB_RE" \
 
 step "copy"
 if grep -rn -- $'\xe2\x80\x94' README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE docs bin/omabackup share/units share/*.example *.qml ui/*.qml 2>/dev/null; then bad "em dash in user-facing text"; else ok "no em dashes"; fi
+# The data repo holds the owner's details; this repo is the program, so no
+# hostname, username or real home path may reach the shipped tree. The two
+# markers are assembled from pieces so this check never carries them itself.
+if [[ $in_git == 1 ]]; then
+  pm_host="hp-lap""top"; pm_user="corey""tyhurst"
+  if git grep -q -i -E "$pm_host|$pm_user" -- . ':!tests/lint.sh'; then
+    git grep -n -i -E "$pm_host|$pm_user" -- . ':!tests/lint.sh' | head -5
+    bad "a personal or machine marker in the shipped tree"
+  else ok "no personal or machine markers"; fi
+  pm_hits=$(git grep -n -E '/home/[a-z0-9_-]+/' -- . ':!tests/lint.sh' | grep -vE '/home/(ci|you|link)/' || true)
+  if [[ -n "$pm_hits" ]]; then printf '%s\n' "$pm_hits" | head -5; bad "a real home path in the shipped tree"
+  else ok "home paths are placeholders"; fi
+fi
 if grep -nE '\beval\b' bin/omabackup lib/*.sh; then bad "eval in the engine"; else ok "no eval"; fi
 
 step "docs"
