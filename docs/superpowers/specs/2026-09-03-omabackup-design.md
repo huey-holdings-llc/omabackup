@@ -5,7 +5,7 @@ Date: 2026-09-03. Status: approved in brainstorm, awaiting written review.
 ## Context
 
 OmaBackup is the public version of a personal Omarchy config backup engine
-(`hp-laptop-config`) and the bar widget that fronts it. The landscape
+(`source-engine`) and the bar widget that fronts it. The landscape
 assessment of the same date (`docs/landscape.md`, vault note
 `comparison-omarchy-backup-drift-landscape.md`) found that "back up your
 config to a private git repo from the bar" is already shipped by four
@@ -19,7 +19,7 @@ Decisions taken with the owner before this document:
 - Name stays **OmaBackup**; plugin id `io.github.huey-holdings-llc.omabackup`;
   CLI `omabackup`.
 - **Fork and generalise.** The engine is copied into this repo and reworked
-  here. `hp-laptop-config` keeps running its own scripts until the fork is
+  here. `source-engine` keeps running its own scripts until the fork is
   proven, then migrates (section 12).
 - **Full engine in 1.0**: scan, snapshot, push, widget, manifests, restore
   (dry run by default), verify, `/etc` reference copies.
@@ -453,17 +453,17 @@ widget: FileView sees status.json -> re-renders; buttons call verbs -> verbs wri
 ## 12. Migration of the owner's laptop
 
 Gate: 1.0 tagged, CI green, and `omabackup verify` green against a fresh
-clone of `hp-laptop-config` adopted with `setup --import` into a scratch
+clone of `source-engine` adopted with `setup --import` into a scratch
 config. Then, on the laptop:
 
-1. `omabackup setup --import ~/projects/hp-laptop-config --no-timers`
+1. `omabackup setup --import ~/projects/source-engine --no-timers`
    (writes the marker, config, symlink; the old units keep running).
 2. Run `omabackup snapshot --dry-run` and `omabackup self-test --real`
    until clean.
-3. Disable `hp-laptop-config-*.timer`, enable the OmaBackup timers.
+3. Disable `source-engine-*.timer`, enable the OmaBackup timers.
 4. After seven daily snapshots and one weekly self-test: delete `bin/`,
    `systemd/`, `.claude/skills/backup-triage` and `docs/public-plugin.md`
-   from `hp-laptop-config` in one commit; the repo is now a pure data repo.
+   from `source-engine` in one commit; the repo is now a pure data repo.
 5. Rollback at any point before step 4: re-enable the old timers.
 
 The vault app note records each step.
