@@ -19,11 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-External dependencies (not bundled): every tool the README's Requirements tables name, from the four
-hard requirements (git, rsync, jq, util-linux for flock) through the optional ones (gum, systemd, curl,
-networkmanager, psmisc, python, xdg-terminal-exec, wl-clipboard, libnotify, github-cli) to the manifest
-generators, ships with Omarchy or is an Arch package; none of them is bundled here. gum is optional:
-without it the wizard's text prompts take their default and its yes/no gates answer no. gitleaks
-(MIT, https://github.com/gitleaks/gitleaks) is optional too and gates pushes only.

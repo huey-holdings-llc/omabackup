@@ -825,4 +825,5 @@ No pressure, no perks, no tiers.
 
 ## License
 
-MIT, see `LICENSE`.
+MIT, see `LICENSE`. The tools it calls and their licenses are in
+`THIRD-PARTY.md`; none of them is bundled.

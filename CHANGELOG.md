@@ -20,6 +20,12 @@ machine-fact tools does not always manage. It now holds the lock until the run
 is done rather than betting on how fast the machine is. Nothing in the engine
 changed; both were the suite testing the box it ran on.
 
+GitHub now shows the license as MIT. `LICENSE` ended with a paragraph about
+the tools OmaBackup calls, and that was enough for GitHub's detector to give
+up and label the repo "Other". The paragraph moved to `THIRD-PARTY.md`,
+`LICENSE` is the plain MIT text, and lint fails if anything is appended to it
+again. The license itself did not change.
+
 ## [0.8.0] - 2026-09-13
 
 If you are running 0.7.0, this is the release that closes out every bug the
