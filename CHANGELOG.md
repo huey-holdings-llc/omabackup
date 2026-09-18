@@ -5,6 +5,13 @@ Keep a Changelog 1.1.0 and the project uses Semantic Versioning.
 
 ## [Unreleased]
 
+### Changed
+
+The plugin's display name is now Backstop, and the repository moves to
+`huey-holdings-llc/backstop`. Another plugin published the name OmaBackup
+first. The command (`omabackup`), the plugin id, the units and every path stay
+as they were, so an existing install is unaffected.
+
 ### Fixed
 
 `self-test --real`, the weekly unit, no longer fails on a machine whose own
