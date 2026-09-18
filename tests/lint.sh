@@ -174,7 +174,7 @@ printf 'id_ed25519.pub\n' | grep -qE "$SECRET_KEY_PUB_RE" \
   && ok "the documented id_*.pub exemption still applies" || bad "id_*.pub is no longer exempt"
 
 step "copy"
-if grep -rn -- $'\xe2\x80\x94' README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE docs bin/omabackup share/units share/*.example *.qml ui/*.qml 2>/dev/null; then bad "em dash in user-facing text"; else ok "no em dashes"; fi
+if grep -rn -- $'\xe2\x80\x94' README.md CHANGELOG.md CONTRIBUTING.md SECURITY.md LICENSE THIRD-PARTY.md docs bin/omabackup share/units share/*.example *.qml ui/*.qml 2>/dev/null; then bad "em dash in user-facing text"; else ok "no em dashes"; fi
 # The data repo holds the owner's details; this repo is the program, so no
 # hostname, username or real home path may reach the shipped tree. The two
 # markers are assembled from pieces so this check never carries them itself.
@@ -220,5 +220,6 @@ grep -q '## Remove' README.md && ok "README has a Remove section" || bad "README
 grep -q '## Update' README.md && ok "README has an Update section" || bad "README lacks Update"
 grep -q 'omarchy plugin add' README.md && ok "README has the install command" || bad "README lacks install command"
 [[ -f LICENSE && -f preview.png ]] && ok "LICENSE and preview.png present" || bad "LICENSE/preview.png"
+[[ "$(tail -n1 LICENSE)" == "SOFTWARE." && -f THIRD-PARTY.md ]] && ok "LICENSE is the bare MIT text, so GitHub reads it as MIT" || bad "LICENSE has text after the MIT body; dependency notes belong in THIRD-PARTY.md"
 
 echo; [[ $fail == 0 ]] && echo "lint: ok" || { echo "lint: FAILED"; exit 1; }
