@@ -817,6 +817,12 @@ after 0.8.0.
 Not planned: syncing two machines, and sending anything anywhere but the
 remote you configured. It is also not designed or tested to run as root.
 
+## Say thanks
+
+OmaBackup is free and always will be. If it saved you some time and you feel
+like it, you can [buy us a coffee](https://buymeacoffee.com/hueyholdings).
+No pressure, no perks, no tiers.
+
 ## License
 
 MIT, see `LICENSE`.
