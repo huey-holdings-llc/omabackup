@@ -1,4 +1,15 @@
-# OmaBackup
+# Backstop
+
+> **Heads up (September 2026):** this project used to be called OmaBackup.
+> Breno Perucchi published a plugin with that name first
+> ([brenoperucchi/omabackup](https://github.com/brenoperucchi/omabackup)), so
+> this one now goes by Backstop. I'm contributing the safety checks from here
+> (the private-remote check, the credential filename gate) to his plugin
+> rather than keeping two similar tools going. This repo stays up and keeps
+> working, but new work is happening over there. The command is still
+> `omabackup`, the plugin id has not changed, and nothing about an existing
+> install changes. The rest of this README still says OmaBackup for that
+> reason.
 
 OmaBackup snapshots your allowlisted Omarchy config into a private git repo
 every day and tells you what it is not backing up. A daily scan reports
@@ -267,7 +278,7 @@ answers as one object for the widget.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/huey-holdings-llc/omabackup --enable
+omarchy plugin add https://github.com/huey-holdings-llc/backstop --enable
 ```
 
 Then open the bar widget and press "Set up OmaBackup", or run
@@ -764,7 +775,7 @@ actually broken.
 ## Development
 
 ```bash
-git clone https://github.com/huey-holdings-llc/omabackup ~/projects/omabackup
+git clone https://github.com/huey-holdings-llc/backstop ~/projects/omabackup
 cd ~/projects/omabackup
 scripts/dev-install.sh --enable   # rsync into the plugin dir, symlink the CLI, rescan plugins
 bash tests/lint.sh                # shellcheck, manifest schema, QML hygiene, README sections

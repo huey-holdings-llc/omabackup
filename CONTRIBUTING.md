@@ -129,7 +129,7 @@ most needs someone who knows more than its author:
 
 ## Ideas that fit
 
-Anything on the [issue tracker](https://github.com/huey-holdings-llc/omabackup/issues),
+Anything on the [issue tracker](https://github.com/huey-holdings-llc/backstop/issues),
 better remote-visibility coverage, more drift categories, accessibility, and
 anything that makes the code simpler without changing what it does. Ideas
 that do not fit: cloud services other than the user's own git remote,
